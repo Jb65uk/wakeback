@@ -73,5 +73,17 @@ club pucks ─► dock Pi at the club ──────────────
    Cloudflare-fronted server HTTPS-only, back-ups encrypted, and the SQLite/data folder off any shared NAS
    share. No third-party analytics or trackers, so nothing to consent to beyond the account itself.
 
+9. **Make it fun / useful — picked 27 Sep, in this order** — TO DO
+   1. **Personal bests**: when a session lands, a toast + card — "Fastest average this year", "Longest sail
+      ever", "New top speed". Stats already has the numbers; keep a small `bests.json` per person.
+   2. **Offline maps**: cache map tiles for your venues (a few zoom levels round each) so the tablet works
+      with no signal at the club; "Download this venue" in Setup.
+   3. **Share card**: a PNG of the track on the map + date/venue/miles/top speed/average, straight to WhatsApp
+      via the Android share sheet.
+   4. **Streaks & badges**: sailed N weekends running, 100 nm month, first 6 kn, dawn sail, most miles at a
+      new venue, first capsize (heel > 80° for 10 s — the IMU knows). All from data already logged.
+   5. **Wind vs speed**: best average by wind strength, upwind vs downwind speed, best VMG, heel vs speed —
+      from the day's weather (meta.weather), the wind direction set in the viewer, and the puck's heel.
+
 Also still on you: add the GitHub signing secrets; scope Cloudflare Access to `/admin` only so the app can
 create accounts.
