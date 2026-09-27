@@ -1,0 +1,23 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run dock server",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/server/app.py",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "env": {
+        "WAKEBACK_FLEET": "6"
+      }
+    },
+    {
+      "name": "Regenerate fake data",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/tools/gen_fake_data.py",
+      "console": "integratedTerminal"
+    }
+  ]
+}

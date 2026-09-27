@@ -1,0 +1,1762 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>WakeBack – track overlay</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+:root{
+  --panel:#13293A; --panel-2:#1C3A4F; --ink:#EAF2F5; --muted:#8FAAB8;
+  --signal:#FFC72C; --line:rgba(234,242,245,.13); --danger:#FF6B6B;
+  --num:'Barlow Condensed', 'Arial Narrow', sans-serif;
+  --body:'Barlow', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+}
+*,*::before,*::after{box-sizing:inherit}
+html,body{height:100%;margin:0;background:var(--panel);color:var(--ink);font-family:var(--body);font-size:15px}
+button,select,input{font:inherit;color:inherit}
+#app{height:100%;display:grid;grid-template-columns:340px 1fr;grid-template-rows:1fr auto}
+#panel{grid-row:1/3;grid-column:1;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;overflow:auto;padding:20px 18px;gap:18px;z-index:500}
+#map{grid-row:1;grid-column:2;min-height:0}
+#replay{grid-row:2;grid-column:2;background:var(--panel);border-top:1px solid var(--line);padding:10px 14px 12px;display:flex;flex-direction:column;gap:8px}
+h1{font-family:var(--num);font-weight:700;font-size:34px;line-height:1;margin:0;letter-spacing:.01em}
+h1 span{color:var(--signal)}
+.sub{margin:6px 0 0;color:var(--muted);line-height:1.4}
+.actions{display:flex;gap:8px;flex-wrap:wrap}
+.btn{background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:8px 12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-weight:500}
+.btn:hover{border-color:var(--muted)}
+.btn.primary{background:var(--signal);color:#13293A;border-color:var(--signal);font-weight:600}
+.btn input[type=file]{display:none}
+.btn:focus-visible,select:focus-visible,input:focus-visible,.seg button:focus-visible{outline:2px solid var(--signal);outline-offset:2px}
+#boats{display:flex;flex-direction:column;gap:2px}
+.empty{color:var(--muted);line-height:1.45;border:1px dashed var(--line);border-radius:6px;padding:14px}
+.pb{display:inline-flex;align-items:center;justify-content:center;min-width:34px;height:22px;padding:0 6px;border-radius:5px;background:var(--c);color:#13293A;font-family:var(--num);font-weight:700;font-size:15px;line-height:1;flex:0 0 auto}
+.pb.none{background:transparent;color:var(--muted);border:1px solid var(--line);font-size:12px;font-weight:600}
+.nmrow{display:flex;align-items:center;gap:8px;min-width:0}
+.boat{display:grid;grid-template-columns:18px 1fr auto;gap:4px 10px;align-items:center;padding:10px 4px;border-bottom:1px solid var(--line)}
+.boat.off{opacity:.45}
+.sw{width:18px;height:18px;border-radius:4px;border:2px solid var(--c);background:var(--c);cursor:pointer;padding:0}
+.boat.off .sw{background:transparent}
+.boat input.name{background:transparent;border:0;border-bottom:1px solid transparent;font-family:var(--num);font-weight:600;font-size:20px;padding:0;width:100%;min-width:0}
+.boat input.name:hover,.boat input.name:focus{border-bottom-color:var(--line);outline:none}
+.live{font-family:var(--num);font-weight:700;font-size:30px;line-height:1;text-align:right;color:var(--c);font-variant-numeric:tabular-nums;min-width:74px}
+.live small{font-size:14px;font-weight:500;color:var(--muted);margin-left:2px}
+.meta{grid-column:2/4;display:flex;flex-wrap:wrap;gap:4px 12px;color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums}
+.meta b{color:var(--ink);font-weight:600}
+.lnk{background:none;border:0;color:var(--signal);cursor:pointer;padding:0;font-size:13px;font-weight:600}
+.lnk:hover{text-decoration:underline}
+.rm{background:none;border:0;color:var(--muted);cursor:pointer;margin-left:auto;padding:0 2px;font-size:13px}
+.rm:hover{color:var(--danger)}
+.opt{display:flex;flex-direction:column;gap:6px}
+.opt>span{color:var(--muted);font-size:13px}
+.seg{display:flex;background:var(--panel-2);border-radius:6px;padding:3px;border:1px solid var(--line)}
+.seg button{flex:1;background:none;border:0;border-radius:4px;padding:6px 8px;cursor:pointer;color:var(--muted);font-weight:500}
+.seg button.on{background:var(--ink);color:var(--panel)}
+.legend{height:8px;border-radius:4px;background:linear-gradient(90deg,hsl(240 85% 55%),hsl(180 85% 50%),hsl(120 80% 45%),hsl(60 90% 50%),hsl(0 85% 55%))}
+.legend-l{display:flex;justify-content:space-between;color:var(--muted);font-size:12px;margin-top:3px}
+#speedLegend{display:none}
+#tackLegend{display:none;gap:14px;font-size:13px;color:var(--muted)}
+#tackLegend i,.sw2{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-1px;margin-right:5px}
+.tp{display:inline-block;font-size:11px;font-weight:700;border-radius:4px;padding:1px 5px;color:#fff;margin-left:4px;vertical-align:1px}
+.tp.port{background:#E63946}.tp.stbd{background:#2DC653;color:#08260f}
+.tp.warn{background:#FFC72C;color:#13293A}
+.fx{font-size:10px;color:var(--signal);margin-left:4px}
+.tk .tkfix{background:var(--panel);border:1px solid var(--line);border-radius:4px;font-size:12px;padding:2px 2px;color:var(--muted);max-width:74px}
+.course{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--line);padding-top:14px}
+.lrow .lx{grid-column:2/-1;display:flex;gap:14px;font-size:12px;color:var(--muted);align-items:center}
+.lrow{display:grid;grid-template-columns:22px 1fr;row-gap:4px;gap:8px;align-items:center;background:var(--panel-2);border-radius:6px;padding:6px 8px}
+.lrow select{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:3px 4px}
+.lsw{width:22px;height:4px;border-radius:2px;background:repeating-linear-gradient(90deg,var(--k) 0 5px,transparent 5px 8px)}
+.gunrow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:var(--muted);font-size:13px}
+.gunrow input{background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:5px 6px;font-family:var(--num);font-size:16px;color-scheme:dark}
+.sft{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums}
+.sft th{text-align:left;color:var(--muted);font-weight:500;padding:4px 4px;border-bottom:1px solid var(--line)}
+.sft td{padding:6px 4px;border-bottom:1px solid var(--line);vertical-align:top}
+.sft tr[data-sf]{cursor:pointer}
+.sft tr[data-sf]:hover td{background:rgba(234,242,245,.05)}
+.sft .pos{font-family:var(--num);font-weight:700;font-size:17px}
+.sft small{display:block;color:var(--muted)}
+.ocs{color:#13293A;background:#FFC72C;border-radius:3px;padding:0 4px;font-weight:700}
+.end-ico{background:none;border:0}
+.end-ico .eb{width:14px;height:14px;border:2px solid #13293A;box-shadow:0 0 0 1px #fff}
+.end-ico .eb.rc{background:var(--k)}
+.end-ico .eb.pin{background:var(--k);border-radius:50%}
+.end-ico .elabel{display:none;position:absolute;left:18px;top:-2px;white-space:nowrap;font-family:var(--num);font-weight:600;font-size:13px;color:#fff;text-shadow:0 0 3px #000,0 0 3px #000}
+.linetip{background:rgba(19,41,58,.85);border:0;color:#fff;font-family:var(--num);font-weight:700;font-size:13px;box-shadow:none;padding:1px 6px}
+.linetip::before{display:none}
+.course h2{font-family:var(--num);font-weight:600;font-size:16px;margin:0;color:var(--muted);letter-spacing:.04em;text-transform:uppercase}
+.mrow{display:grid;grid-template-columns:16px 1fr auto auto;gap:8px;align-items:center;background:var(--panel-2);border-radius:6px;padding:6px 8px}
+.mrow input{background:transparent;border:0;border-bottom:1px solid var(--line);font-family:var(--num);font-size:17px;padding:2px 0;min-width:0}
+.mrow .seg{padding:2px}.mrow .seg button{padding:3px 8px;font-size:12px}
+.mrow .seg button.on.port{background:#E63946;color:#fff}.mrow .seg button.on.stbd{background:#2DC653;color:#08260f}
+.buoy{width:18px;height:18px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 2px rgba(0,0,0,.45)}
+.buoy.port{background:#E63946}.buoy.stbd{background:#2DC653}
+.mrow .buoy{width:14px;height:14px;border-width:1.5px}
+.mark-ico{background:none;border:0}
+.mark-ico .blabel{position:absolute;left:22px;top:0;white-space:nowrap;font-family:var(--num);font-weight:700;font-size:14px;color:#fff;text-shadow:0 0 3px #000,0 0 3px #000}
+.mark-ico.sel .buoy{box-shadow:0 0 0 3px #FFC72C}
+body.addmark #map{cursor:crosshair}
+.hint{font-size:12px;color:var(--muted);line-height:1.4}
+.mpop{display:flex;flex-direction:column;gap:6px;min-width:170px;font-family:var(--body)}
+.mpop input{font:inherit;font-size:15px;padding:4px 6px;border:1px solid #bbb;border-radius:4px}
+.mpop .row2{display:flex;gap:6px}
+.mpop button{font:inherit;font-size:13px;padding:5px 8px;border-radius:4px;border:1px solid #bbb;background:#f3f3f3;cursor:pointer;flex:1}
+.mpop button.on.port{background:#E63946;color:#fff;border-color:#E63946}.mpop button.on.stbd{background:#2DC653;color:#fff;border-color:#2DC653}
+.mpop .del{color:#c00;background:#fff}
+.dock{display:none;flex-direction:column;gap:6px}
+.dock.on{display:flex}
+.dock h2{font-family:var(--num);font-weight:600;font-size:16px;margin:0;color:var(--muted);letter-spacing:.04em;text-transform:uppercase}
+.sess{display:flex;align-items:center;gap:8px;background:var(--panel-2);border:1px solid transparent;border-radius:6px;padding:7px 10px;cursor:pointer;text-align:left}
+.sess:hover{border-color:var(--muted)}
+.sess .d{font-family:var(--num);font-weight:600;font-size:18px}
+.sess .n{color:var(--muted);font-size:12px;margin-left:auto}
+.races{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--line);padding-top:14px}
+.races h2{font-family:var(--num);font-weight:600;font-size:16px;margin:0;color:var(--muted);letter-spacing:.04em;text-transform:uppercase}
+.rrow{display:grid;grid-template-columns:1fr 1fr auto;gap:6px;align-items:center;background:var(--panel-2);border-radius:6px;padding:6px}
+.rrow input[type=text]{grid-column:1/-1;background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:6px 8px;min-width:0;font-family:var(--num);font-size:16px}
+.rrow input[type=time]{min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:5px 6px;font-family:var(--num);font-size:15px;color-scheme:dark}
+#fieldBox summary{cursor:pointer;color:var(--muted);font-size:13px}
+#raceTitle{display:none;font-family:var(--num);font-weight:700;font-size:26px;line-height:1;color:var(--signal)}
+body.big #raceTitle{display:block}
+.train{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--line);padding-top:14px}
+.train label{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px}
+.train input[type=number]{width:74px;background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-family:var(--num);font-size:18px}
+.tsum{font-size:13px;color:var(--muted)}
+.tsum b{color:var(--ink);font-family:var(--num);font-size:16px}
+#tackList{display:flex;flex-direction:column;gap:2px;max-height:300px;overflow:auto}
+#tkFilter button{line-height:1.15;padding:5px 4px}
+#tkFilter button b{font-family:var(--num);font-size:17px}
+#tkFilter button:disabled{opacity:.35;cursor:not-allowed}
+.tsum2{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+.tsum2 b{color:var(--ink);font-family:var(--num);font-size:16px}
+.tsum2 .kk{font-family:var(--num);font-weight:600;font-size:15px;color:var(--ink)}
+.tk.sel{border-color:var(--signal);background:#26485f}
+.tk .dot{width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:6px;vertical-align:middle}
+.tkrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.tk .g{grid-column:1/-1}
+.tk .k{display:flex;align-items:center;gap:2px;min-width:0}
+.tk{display:grid;grid-template-columns:1fr auto auto;row-gap:2px;gap:8px;align-items:center;background:var(--panel-2);border:1px solid transparent;border-radius:6px;padding:6px 8px;text-align:left;cursor:pointer;font-variant-numeric:tabular-nums}
+.tk:hover{border-color:var(--muted)}
+.tk .k{font-family:var(--num);font-weight:600;font-size:15px}
+.tk .g{color:var(--muted);font-size:12px}
+.tk .m{font-family:var(--num);font-weight:600;font-size:16px;color:var(--signal)}
+.windctl{background:var(--panel);color:var(--ink);border-radius:8px;padding:6px 10px;display:flex;align-items:center;gap:8px;font-family:var(--num);font-weight:600;font-size:16px;border:1px solid var(--line)}
+.windctl svg{width:22px;height:22px;fill:var(--signal)}
+.foot summary{cursor:pointer;color:var(--ink);font-weight:600;font-size:14px}
+.foot p{margin:8px 0 0}
+.foot{margin-top:auto;color:var(--muted);font-size:12px;line-height:1.5}
+.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+#play{min-width:78px;justify-content:center}
+#clock{font-family:var(--num);font-weight:600;font-size:24px;font-variant-numeric:tabular-nums;min-width:96px}
+select{background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:7px 8px}
+#chart{width:100%;height:92px;display:block;cursor:crosshair;border-radius:4px;background:rgba(0,0,0,.18)}
+#scrub{width:100%;accent-color:var(--signal)}
+#togglePanel{display:none}
+#sheetBar{display:none}
+.savest[hidden]{display:none}
+.savest{margin:8px 0 0;font-size:13px;color:var(--muted);display:flex;align-items:center;gap:6px}
+.savest::before{content:'';width:8px;height:8px;border-radius:50%;background:var(--muted);flex:0 0 auto}
+.savest.ok::before{background:var(--ink)}
+.savest.busy::before{background:var(--signal)}
+.savest.err{color:var(--signal);font-weight:600}.savest.err::before{background:var(--danger)}
+.savest button{margin-left:auto}
+#tabs{display:flex;gap:4px;background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:3px;margin-bottom:14px}
+#tabs[hidden]{display:none}
+#tabs a{flex:1;text-align:center;padding:5px 10px;border-radius:6px;color:var(--muted);text-decoration:none;font-weight:600}
+#tabs a.on{background:var(--ink);color:var(--panel)}
+#dockWarn:not(:empty){display:inline-block;margin-left:6px;min-width:18px;padding:0 5px;border-radius:9px;background:var(--signal);color:var(--panel);font-size:12px;line-height:18px}
+#qrBig{display:none;margin-top:auto;background:var(--panel-2);border-radius:10px;padding:10px 12px;gap:10px;align-items:center}
+body.big.dockon #qrBig{display:flex}
+#qrBig img{width:92px;height:92px;border-radius:6px;background:#fff}
+#qrBig .t{font-family:var(--num);font-weight:700;font-size:20px;line-height:1.05}
+#qrBig .t small{display:block;font-family:var(--body);font-weight:400;font-size:12px;color:var(--muted);margin-top:4px}
+#qrBtn{display:none}
+body.dockon #qrBtn{display:inline-flex}
+#qrModal{position:fixed;inset:0;background:rgba(10,24,34,.92);z-index:3000;display:flex;align-items:center;justify-content:center;padding:20px}
+#qrModal[hidden]{display:none}
+#qrModal .box{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px;max-width:760px;width:100%;display:flex;flex-direction:column;gap:16px}
+#qrModal h2{font-family:var(--num);font-size:34px;margin:0;line-height:1}
+#qrModal .two{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+#qrModal .q{display:flex;flex-direction:column;gap:8px;align-items:center;text-align:center}
+#qrModal .q img{width:100%;max-width:260px;aspect-ratio:1;background:#fff;border-radius:10px}
+#qrModal .q b{font-family:var(--num);font-size:24px}
+#qrModal .q span{color:var(--muted);font-size:15px;word-break:break-all}
+@media (max-width:560px){#qrModal .two{grid-template-columns:1fr}}
+#cards{display:none}
+body.big #panel{display:none}
+body.big #app{grid-template-columns:1fr 300px}
+body.big #map,body.big #replay{grid-column:1}
+body.big #cards{display:flex;grid-row:1/3;grid-column:2;flex-direction:column;gap:10px;padding:14px;border-left:1px solid var(--line);overflow:auto;background:var(--panel)}
+body.big #togglePanel,body.big #trailOnlyWrap{display:none}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{border:1px solid var(--line);border-radius:999px;padding:4px 10px;font-size:13px;color:var(--muted);cursor:pointer;background:var(--panel-2)}
+.chip.on{background:var(--signal);color:var(--panel);border-color:var(--signal);font-weight:600}
+.card{border-left:8px solid var(--c);background:var(--panel-2);padding:10px 12px 12px;border-radius:0 8px 8px 0}
+.card.off{opacity:.4}
+.card input.nm{font-family:var(--num);font-weight:700;font-size:30px;line-height:1;background:transparent;border:0;border-bottom:1px solid transparent;width:100%;padding:0;color:var(--ink)}
+.card input.nm:hover,.card input.nm:focus{border-bottom-color:var(--line);outline:none}
+.card .top{display:flex;align-items:center;gap:8px}
+.card .pb{height:30px;min-width:44px;font-size:20px}
+.card .vals{display:grid;grid-template-columns:1fr 1fr;gap:8px 10px;margin-top:8px}
+.card .v{font-family:var(--num);font-weight:600;font-size:36px;line-height:1;color:var(--c);font-variant-numeric:tabular-nums;white-space:nowrap}
+.card .v small{font-size:14px;font-weight:500;color:var(--muted);margin-left:2px}
+.card .l{color:var(--muted);font-size:12px;margin-top:2px}
+.spacer{flex:1}
+#replay.disabled canvas,#replay.disabled #scrub,#replay.disabled .row>*:not(#togglePanel):not(.spacer){opacity:.45;pointer-events:none}
+/* boat markers */
+.boat-ico{background:none;border:0}
+.hull{width:24px;height:24px;display:flex;align-items:center;justify-content:center;transition:none}
+.hull svg{width:20px;height:20px;fill:var(--c);stroke:#13293A;stroke-width:1.4;filter:drop-shadow(0 1px 2px rgba(0,0,0,.6))}
+.tag b{background:var(--c);color:#13293A;border-radius:3px;padding:0 3px;margin-right:4px;text-shadow:none}
+.tag{position:absolute;left:24px;top:3px;white-space:nowrap;font-family:var(--num);font-weight:600;font-size:14px;color:#fff;text-shadow:0 0 3px #000,0 0 3px #000}
+#drop{position:fixed;inset:0;background:rgba(19,41,58,.85);border:3px dashed var(--signal);display:none;align-items:center;justify-content:center;font-family:var(--num);font-size:34px;font-weight:600;z-index:2000;pointer-events:none}
+#drop.show{display:flex}
+#toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--panel);padding:10px 14px;border-radius:6px;font-weight:500;z-index:2100;display:none;max-width:90vw}
+.leaflet-container{background:#0d2231;font-family:var(--body)}
+@media (max-width:760px){
+  #app{grid-template-columns:1fr;grid-template-rows:1fr auto}
+  body.big #app{grid-template-columns:1fr;grid-template-rows:1fr auto auto}
+  body.big #cards{grid-row:2;grid-column:1;flex-direction:row;overflow-x:auto;border-left:0;border-top:1px solid var(--line);max-height:44%}
+  body.big #cards .chips{flex:0 0 auto;flex-direction:column;justify-content:flex-start}
+  body.big #cards .card{flex:0 0 200px}
+  body.big #replay{grid-row:3}
+  #map{grid-column:1}
+  #replay{grid-column:1}
+  #panel{position:fixed;left:0;right:0;bottom:0;max-height:78%;border-right:0;border-top:1px solid var(--line);border-radius:14px 14px 0 0;transform:translateY(105%);transition:transform .25s ease;padding-bottom:calc(20px + env(safe-area-inset-bottom,0px));z-index:1500}
+  #panel.open{transform:none}
+  #togglePanel{display:inline-flex}
+  #sheetBar{display:flex;position:sticky;top:-20px;margin:-20px -18px 0;padding:10px 18px;background:var(--panel);z-index:5;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line)}
+  #sheetBar span{width:40px;height:4px;border-radius:2px;background:var(--line)}
+}
+@media (prefers-reduced-motion:reduce){#panel{transition:none}}
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="panel" aria-label="Boats and settings">
+    <div id="sheetBar"><span></span><button class="btn primary" id="closePanel">Done</button></div>
+    <header>
+      <nav id="tabs" hidden aria-label="Sections"><a href="/" class="on" aria-current="page">Replay</a><a href="/dock">Dock<span id="dockWarn"></span></a></nav>
+      <h1>Wake<span>Back</span></h1>
+      <p class="sub">Overlay everyone's tracks from pucks, phones or watches, then replay the race side by side.</p>
+      <p id="saveState" class="savest" role="status" aria-live="polite" hidden></p>
+    </header>
+    <div class="actions">
+      <label class="btn primary">Add tracks<input id="file" type="file" multiple accept=".gpx,.csv,.txt"></label>
+      <button class="btn" id="demo">Load demo</button>
+    </div>
+    <div class="dock" id="dock">
+      <h2>Sessions on dock</h2>
+      <div id="sessList"></div>
+    </div>
+    <div id="boats"></div>
+    <div class="opt"><span>Track colour</span>
+      <div class="seg" data-opt="colour"><button data-v="boat" class="on">By boat</button><button data-v="speed">By speed</button><button data-v="tack">By tack</button></div>
+      <div id="tackLegend"><span><i style="background:#E63946"></i>Port tack</span><span><i style="background:#2DC653"></i>Starboard tack</span></div>
+      <div id="speedLegend"><div class="legend"></div><div class="legend-l"><span>0 kn</span><span id="legMax">8 kn</span></div></div>
+    </div>
+    <div class="opt"><span>Timing</span>
+      <div class="seg" data-opt="timing"><button data-v="real" class="on">Real time</button><button data-v="align">Align starts</button></div>
+    </div>
+    <div class="opt"><span>Map</span>
+      <div class="seg" data-opt="base"><button data-v="sat" class="on">Satellite</button><button data-v="chart">Chart</button></div>
+    </div>
+    <div class="races">
+      <h2>Races</h2>
+      <div class="chips" id="raceChips"></div>
+      <div id="raceEdit" style="display:flex;flex-direction:column;gap:6px"></div>
+      <div class="actions"><button class="btn" id="raceAdd">Add race</button><button class="btn" id="raceAuto">Auto split</button></div>
+    </div>
+    <div class="course" id="courseBox">
+      <h2>Course marks</h2>
+      <div class="hint" id="courseHint"></div>
+      <div id="markList" style="display:flex;flex-direction:column;gap:6px"></div>
+      <div class="actions"><button class="btn" id="markAdd">Add mark</button><button class="btn" id="markCopy">Copy to all races</button></div>
+      <div id="lineList" style="display:flex;flex-direction:column;gap:6px"></div>
+      <div class="actions"><button class="btn" id="lineStart">Add start line</button><button class="btn" id="lineFinish">Add finish line</button></div>
+      <div class="gunrow" id="gunRow" hidden><label for="gun">Start gun</label><input type="time" step="1" id="gun"><span id="gunNote"></span><button class="lnk" id="gunJump">Go to start</button></div>
+      <div id="sfBox" hidden>
+        <h2 style="margin-top:6px">Start &amp; finish</h2>
+        <div style="overflow-x:auto"><table class="sft" id="sfTable"></table></div>
+      </div>
+    </div>
+    <div class="train">
+      <label>Wind from <input type="number" id="wind" min="0" max="359" step="1" placeholder="°" aria-label="Wind direction, degrees from"> ° <button class="btn" id="windEst" style="padding:4px 8px;font-size:12px">Estimate</button></label>
+      <label>Analyse <select id="focus" style="flex:1"><option value="">Pick a boat…</option></select></label>
+      <div class="seg" id="tkFilter"><button data-v="all" class="on">All</button><button data-v="Tack">Tacks</button><button data-v="Gybe">Gybes</button><button data-v="Mark">Marks</button></div>
+      <label>Sort <select id="tkSort" style="flex:1"><option value="time">In order</option><option value="loss">Worst first</option><option value="best">Best first</option></select></label>
+      <div class="tsum" id="tackSum">Pick a boat to see its tacks and gybes.</div>
+      <div id="tackList"></div>
+    </div>
+    <div class="actions">
+      <button class="btn" id="export">Download all as GPX</button>
+      <button class="btn" id="clear">Clear all</button>
+    </div>
+    <details class="foot"><summary>How to use</summary>
+      <p><b>Saving:</b> every change (names, races, marks, lines, gun time, corrections) saves the moment you make it. The line under the title says when it last saved, and warns you if the dock couldn't be reached. It keeps trying until it gets through.</p>
+      <p><b>Load</b> a session from the dock, or drop GPX/CSV files anywhere on the map.</p>
+      <p><b>Names:</b> puck numbers never change (P3 is always P3, always the same colour). Tap a name to say who had that puck today. It's saved for this session only.</p>
+      <p><b>Races:</b> Auto split finds the breaks between races, or add them by hand with start and end times. Everything follows the race you pick.</p>
+      <p><b>Wind:</b> type the direction it blows from, or press Estimate. You then get VMG, and tacks, gybes and mark roundings told apart.</p>
+      <p><b>Tacks & gybes:</b> tap it under a boat, filter, sort Worst first, tap one to jump the replay there. Loss is metres of VMG lost until the boat's back to 95% of its speed before.</p>
+      <p><b>Course marks:</b> Add mark, tap the map where it was laid, drag to adjust. Tap a mark to rename it or set the side: red = leave to port, green = leave to starboard. Marks are per race; new races copy the last race's marks.</p>
+      <p><b>Start and finish lines:</b> Add start line, tap the committee boat end, then the pin end. Drag either end to adjust. A line can be start, finish or both. Put in the gun time (or use the estimate) to get seconds late, distance back at the gun and OCS. The finish gives order and elapsed time. Tap a boat in the results to watch its start.</p>
+      <p><b>Colours:</b> "By tack" colours tracks red on port tack, green on starboard. In the list, →Stbd / →Port is the tack a boat ended up on.</p>
+      <p><b>Wrong call?</b> Use the drop-down on any tack, gybe or mark to change it, or pick "Not one". Your corrections are saved with the session.</p>
+      <p><b>Phone tracks:</b> on the dock, "Phone upload" shows QR codes: one joins the WiFi, one opens the upload page. On the big screen the upload code sits in the corner. New tracks appear by themselves.</p>
+      <p><b>Projector:</b> B for big screen, F for full screen, Loop to keep replaying. Space plays and pauses.</p>
+      <p><b>Align starts</b> lines everyone up from when they first go over 1.5 kn, to race a mate from a different day or yourself from last week.</p>
+    </details>
+  </aside>
+
+  <datalist id="sailors"></datalist>
+  <main id="map"></main>
+
+  <aside id="cards" aria-label="Boat data">
+    <div id="raceTitle"></div>
+    <div class="chips" id="raceChipsBig"></div>
+    <details id="fieldBox"><summary>Choose data</summary><div class="chips" id="fieldChips" style="margin-top:8px"></div></details>
+    <div id="cardList" style="display:contents"></div>
+    <div id="qrBig"><img src="" alt="QR code to open the upload page" id="qrBigImg"><div class="t">Sailed with your phone?<small>Scan to add your track. Join the <b id="qrBigWifi">wakeback</b> WiFi first.</small></div></div>
+  </aside>
+  <div id="qrModal" hidden role="dialog" aria-modal="true" aria-labelledby="qrTitle">
+    <div class="box">
+      <div class="row"><h2 id="qrTitle">Add your phone track</h2><span class="spacer"></span><button class="btn" id="qrClose">Close</button></div>
+      <div class="two">
+        <div class="q"><img id="qrWifiImg" alt="QR code to join the dock WiFi"><b>1. Join the WiFi</b><span id="qrWifiTxt"></span></div>
+        <div class="q"><img id="qrUpImg" alt="QR code to open the upload page"><b>2. Open the upload page</b><span id="qrUpTxt"></span></div>
+      </div>
+      <p class="hint" style="font-size:14px">Scan with the phone camera. Type your name, choose your GPX file, tap Upload. Your boat appears here within a few seconds.</p>
+    </div>
+  </div>
+
+  <section id="replay" class="disabled" aria-label="Replay">
+    <div class="row">
+      <button class="btn primary" id="play">Play</button>
+      <span id="clock">--:--:--</span>
+      <select id="rate" aria-label="Replay speed">
+        <option value="1">1×</option><option value="5">5×</option><option value="10" selected>10×</option><option value="30">30×</option><option value="60">60×</option>
+      </select>
+      <select id="metric" aria-label="Chart data"><option value="sog">Chart: speed</option><option value="heel">Chart: heel</option><option value="pitch">Chart: pitch</option><option value="twa">Chart: wind angle</option><option value="vmg">Chart: VMG</option></select>
+      <label class="row" style="gap:6px;color:var(--muted)" id="trailOnlyWrap"><input type="checkbox" id="trailOnly"> Trails only</label>
+      <label class="row" style="gap:6px;color:var(--muted)"><input type="checkbox" id="loop"> Loop</label>
+      <span class="spacer"></span>
+      <button class="btn" id="fit">Fit</button>
+      <button class="btn" id="qrBtn">Phone upload</button>
+      <button class="btn" id="big">Big screen</button>
+      <button class="btn" id="fs">Full screen</button>
+      <button class="btn" id="togglePanel">Boats</button>
+    </div>
+    <canvas id="chart" aria-label="Speed over time, click to jump"></canvas>
+    <input type="range" id="scrub" min="0" max="10000" value="0" aria-label="Replay position">
+  </section>
+</div>
+<div id="drop">Drop GPX or CSV files</div>
+<div id="toast" role="status"></div>
+
+<script>
+(() => {
+// puck colours deliberately avoid red and green: those mean port and starboard
+const COLORS = ['#FFC72C','#4CC9F0','#F72585','#FF9F1C','#9B5DE5','#FFFFFF','#A0C4FF','#F15BB5'];
+const PORT = '#E63946', STBD = '#2DC653';
+const tackOf = twa => twa > 0 ? 'port' : 'stbd';            // TWA = heading - wind; positive = wind over the port side
+const SIDE_COL = { port: PORT, stbd: STBD }, SIDE_LBL = { port: 'Port', stbd: 'Stbd' };
+const KN = 1.943844;          // m/s -> knots
+const TRAIL_MS = 60000;       // bright trail length
+const MAX_DRAW = 4000;        // max points per drawn track
+let boats = [], T = 0, tMin = 0, tMax = 0, playing = false, lastFrame = 0;
+let colourMode = 'boat', timing = 'real', speedMax = 8, colourIdx = 0;
+let wind = null, focusId = '';
+let races = [], raceIdx = -1;      // raceIdx -1 = whole session
+let crew = {};                      // who had which puck this session: { puck3: 'Dave', 'Steve_phone.gpx': 'Steve' }
+let tkFilter = 'all', tkSort = 'time', tkSel = null;
+let meta = { marks: [], fixes: [], lines: [] };  // per session: whole-session marks, and your corrections to tacks/gybes/marks
+let addingMark = false, selMark = null;
+const activeCourse = () => raceIdx >= 0 && races[raceIdx] ? races[raceIdx] : meta;   // marks, lines and gun live on the race (or the session)
+const activeMarks = () => { const c = activeCourse(); return (c.marks = c.marks || []); };
+const activeLines = () => { const c = activeCourse(); return (c.lines = c.lines || []); };
+let addingLine = null, sfState = null;
+const LINE_COL = { start: '#FFC72C', finish: '#FFFFFF', both: '#FFC72C' };
+const LINE_LBL = { start: 'Start line', finish: 'Finish line', both: 'Start & finish line' };
+const copyLines = ls => (ls || []).map(l => ({ ...l, id: newId(), a: { ...l.a }, b: { ...l.b } }));
+const newId = () => Math.random().toString(36).slice(2, 9);
+const copyMarks = ms => (ms || []).map(m => ({ ...m, id: newId() }));
+const puckNum = b => b.puck ? +b.puck.replace(/\D/g, '') : null;
+const crewKey = b => b.puck || b.file || b.id;
+const badge = b => puckNum(b) ? `<span class="pb" style="--c:${b.color}">P${puckNum(b)}</span>` : `<span class="pb none">${b.file && /\.gpx$/i.test(b.file) ? 'GPX' : '—'}</span>`;
+const label = b => (puckNum(b) ? 'P' + puckNum(b) + ' ' : '') + b.name;
+try { const w = localStorage.getItem('wakeback-wind'); if (w !== null && w !== '') wind = +w; } catch {}
+
+// ---------- map ----------
+const map = L.map('map', { zoomControl: true }).setView([53.6503, -3.0102], 15);
+const renderer = L.canvas({ padding: 0.5 });
+const sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Imagery © Esri' });
+const osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap contributors' });
+const seamarks = L.tileLayer('https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '© OpenSeaMap' });
+sat.addTo(map);
+
+// ---------- helpers ----------
+const $ = s => document.querySelector(s);
+const rad = d => d * Math.PI / 180;
+function hav(la1, lo1, la2, lo2) {
+  const dLa = rad(la2 - la1), dLo = rad(lo2 - lo1);
+  const a = Math.sin(dLa/2)**2 + Math.cos(rad(la1)) * Math.cos(rad(la2)) * Math.sin(dLo/2)**2;
+  return 12742000 * Math.asin(Math.sqrt(a));
+}
+function bearing(la1, lo1, la2, lo2) {
+  const y = Math.sin(rad(lo2-lo1)) * Math.cos(rad(la2));
+  const x = Math.cos(rad(la1))*Math.sin(rad(la2)) - Math.sin(rad(la1))*Math.cos(rad(la2))*Math.cos(rad(lo2-lo1));
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+function toast(msg, ms = 3500) {
+  const t = $('#toast'); t.textContent = msg; t.style.display = 'block';
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.style.display = 'none', ms);
+}
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function speedColour(v) { const f = Math.max(0, Math.min(1, v / speedMax)); return `hsl(${240 - 240*f} 85% 52%)`; }
+
+// ---------- parsing ----------
+function parseTime(v) {
+  v = String(v).trim();
+  if (/^-?\d+(\.\d+)?$/.test(v)) {
+    const n = +v;
+    if (n > 1e12) return n;          // epoch ms
+    if (n > 1e9) return n * 1000;    // epoch s
+    return n * 1000;                 // relative seconds
+  }
+  return Date.parse(v);
+}
+function parseGPX(text) {
+  const doc = new DOMParser().parseFromString(text, 'application/xml');
+  if (doc.getElementsByTagName('parsererror').length) throw new Error('not valid GPX');
+  const trk = doc.getElementsByTagName('trk')[0];
+  let name = '';
+  if (trk) { const n = [...trk.children].find(c => c.localName === 'name'); if (n) name = n.textContent.trim(); }
+  let nodes = doc.getElementsByTagName('trkpt');
+  if (!nodes.length) nodes = doc.getElementsByTagName('rtept');
+  const pts = [];
+  for (const p of nodes) {
+    const te = p.getElementsByTagName('time')[0];
+    if (!te) continue;
+    const t = Date.parse(te.textContent.trim());
+    const lat = +p.getAttribute('lat'), lon = +p.getAttribute('lon');
+    if (!isFinite(t) || !isFinite(lat) || !isFinite(lon)) continue;
+    let sog = null;
+    const sp = p.getElementsByTagName('speed')[0] || p.getElementsByTagName('gpxtpx:speed')[0];
+    if (sp && isFinite(+sp.textContent)) sog = +sp.textContent * KN;
+    pts.push({ t, lat, lon, sog, heel: null, pitch: null, hdg: null });
+  }
+  if (nodes.length && !pts.length) throw new Error('track has no timestamps');
+  return { name, pts };
+}
+function parseCSV(text) {
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  if (lines.length < 3) throw new Error('not enough rows');
+  const sep = lines[0].includes(',') ? ',' : lines[0].includes(';') ? ';' : '\t';
+  const head = lines[0].toLowerCase().split(sep).map(s => s.trim().replace(/"/g, ''));
+  const ti = head.findIndex(h => /^(t$|t_|time|timestamp|utc|date)/.test(h));
+  const la = head.findIndex(h => /^lat/.test(h));
+  const lo = head.findIndex(h => /^(lon|lng|long)/.test(h));
+  const si = head.findIndex(h => /(sog|knot|_kn|^kn)/.test(h));
+  const hi = head.findIndex(h => /^(heel|roll)/.test(h));
+  const pi = head.findIndex(h => /^pitch/.test(h));
+  const di = head.findIndex(h => /^(hdg|heading|cog|course)/.test(h));
+  if (ti < 0 || la < 0 || lo < 0) throw new Error('CSV needs time, lat and lon columns');
+  const num = (c, k) => k >= 0 && c[k] !== '' && isFinite(+c[k]) ? +c[k] : null;
+  const pts = [];
+  for (let i = 1; i < lines.length; i++) {
+    const c = lines[i].split(sep).map(s => s.trim().replace(/"/g, ''));
+    const t = parseTime(c[ti]), lat = +c[la], lon = +c[lo];
+    if (!isFinite(t) || !isFinite(lat) || !isFinite(lon) || (lat === 0 && lon === 0)) continue;
+    pts.push({ t, lat, lon, sog: num(c, si), heel: num(c, hi), pitch: num(c, pi), hdg: num(c, di) });
+  }
+  return { name: '', pts };
+}
+
+// ---------- track prep ----------
+function prepare(name, raw) {
+  const pts = raw.slice().sort((a, b) => a.t - b.t).filter((p, i, a) => i === 0 || p.t > a[i-1].t);
+  if (pts.length < 10) throw new Error('fewer than 10 timed points');
+  const n = pts.length;
+  const t = new Float64Array(n), lat = new Float64Array(n), lon = new Float64Array(n);
+  const rawSog = new Float32Array(n), sog = new Float32Array(n), cog = new Float32Array(n);
+  const hasSog = pts.filter(p => p.sog != null).length > n * 0.8;
+  const optional = k => pts.filter(p => p[k] != null).length > n * 0.8 ? Float32Array.from(pts, p => p[k] ?? 0) : null;
+  const heel = optional('heel'), pitch = optional('pitch'), hdgIn = optional('hdg');
+  pts.forEach((p, i) => { t[i] = p.t; lat[i] = p.lat; lon[i] = p.lon; });
+  for (let i = 0; i < n; i++) {
+    if (hasSog && pts[i].sog != null) rawSog[i] = pts[i].sog;
+    else if (i > 0) rawSog[i] = hav(lat[i-1], lon[i-1], lat[i], lon[i]) / ((t[i] - t[i-1]) / 1000) * KN;
+    else rawSog[i] = 0;
+  }
+  if (!hasSog) rawSog[0] = rawSog[1];
+  // time-window smoothing (±1 s, at least neighbours)
+  const pre = new Float64Array(n + 1);
+  for (let i = 0; i < n; i++) pre[i+1] = pre[i] + rawSog[i];
+  let a = 0, b = 0;
+  for (let i = 0; i < n; i++) {
+    while (t[i] - t[a] > 1000 && a < i - 1) a++;
+    if (b < i) b = i;
+    while (b + 1 < n && (t[b+1] - t[i] <= 1000 || b < i + 1)) b++;
+    sog[i] = (pre[b+1] - pre[a]) / (b - a + 1);
+  }
+  // course over ground: centred difference over a baseline long enough to swamp GPS jitter.
+  // 10 Hz pucks: ±1.5 s. Phones/watches at ~1 Hz: ±3 s.
+  const dtMed = n > 2 ? (t[n-1] - t[0]) / (n - 1) : 1000;
+  const half = dtMed >= 500 ? 3000 : 1500;
+  let ca = 0, cz = 0;
+  for (let i = 0; i < n; i++) {
+    while (t[i] - t[ca] > half && ca < i) ca++;
+    if (cz < i) cz = i;
+    while (cz + 1 < n && t[cz + 1] - t[i] <= half) cz++;
+    cog[i] = cz > ca ? bearing(lat[ca], lon[ca], lat[cz], lon[cz]) : (i ? cog[i-1] : 0);
+  }
+  const sorted = Array.from(sog).sort((x, y) => x - y);
+  const p98 = sorted[Math.floor(n * 0.98)] || 0;
+  const absMax = a => a ? Math.max(5, Math.ceil(Math.max(...Array.from(a, Math.abs)) / 5) * 5) : 0;
+  return {
+    id: Math.random().toString(36).slice(2), name, t, lat, lon, sog, cog, n, heel, pitch, hdg: hdgIn || cog,
+    heelMax: absMax(heel), pitchMax: absMax(pitch), puck: null,
+    start: t[0], end: t[n-1], startMove: t[0], p98, wStart: t[0], wEnd: t[n-1], i0: 0, i1: n - 1, inRace: true,
+    stats: { dist: 0, max: 0, avg: 0, dur: 0 },
+    color: COLORS[colourIdx++ % COLORS.length], visible: true, layers: []
+  };
+}
+function idxAt(b, bt) {
+  let lo = 0, hi = b.n - 1;
+  if (bt <= b.t[0]) return 0;
+  if (bt >= b.t[hi]) return hi;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (b.t[m] <= bt) lo = m; else hi = m; }
+  return lo;
+}
+const shift = b => timing === 'align' ? -b.startMove : 0;
+
+// ---------- wind-derived data and manoeuvres ----------
+const angDiff = (a, b) => ((a - b + 540) % 360) - 180;   // signed, -180..180
+function setWindow(b) {
+  const r = raceIdx >= 0 ? races[raceIdx] : null;
+  if (r && (r.end <= b.start || r.start >= b.end)) { b.inRace = false; b.i0 = 0; b.i1 = -1; b.wStart = b.wEnd = b.start; return; }
+  b.inRace = true;
+  b.i0 = r ? Math.min(b.n - 1, idxAt(b, r.start) + (b.t[idxAt(b, r.start)] < r.start ? 1 : 0)) : 0;
+  b.i1 = r ? idxAt(b, r.end) : b.n - 1;
+  b.wStart = b.t[b.i0]; b.wEnd = b.t[b.i1];
+}
+function computeDerived(b) {
+  setWindow(b);
+  const { t, sog, lat, lon, n, i0, i1 } = b;
+  let dist = 0, sum = 0, cnt = 0, startMove = null; const vals = [];
+  for (let i = Math.max(1, i0); i <= i1; i++) {
+    if (sog[i] > 0.5) dist += hav(lat[i-1], lon[i-1], lat[i], lon[i]);
+    if (sog[i] > 1) { sum += sog[i]; cnt++; }
+    if (startMove === null && sog[i] > 1.5) startMove = t[i];
+    vals.push(sog[i]);
+  }
+  vals.sort((x, y) => x - y);
+  b.startMove = startMove ?? b.wStart;
+  b.stats = { dist: dist / 1852, max: vals[Math.floor(vals.length * 0.995)] || 0, avg: cnt ? sum / cnt : 0, dur: b.inRace ? (b.wEnd - b.wStart) / 1000 : 0, up: null, down: null, tacks: null, loss: null };
+  b.twa = null; b.vmg = null;
+  if (wind != null) {
+    b.twa = new Float32Array(n); b.vmg = new Float32Array(n);
+    let us = 0, uc = 0, ds = 0, dc = 0;
+    for (let i = 0; i < n; i++) {
+      const a = angDiff(b.hdg[i], wind); b.twa[i] = a;
+      b.vmg[i] = sog[i] * Math.cos(rad(a));
+      if (i >= i0 && i <= i1 && sog[i] > 1) { if (Math.abs(a) < 60) { us += sog[i]; uc++; } else if (Math.abs(a) > 120) { ds += sog[i]; dc++; } }
+    }
+    b.stats.up = uc ? us / uc : null; b.stats.down = dc ? ds / dc : null;
+  }
+  detectTacks(b);
+}
+function detectTacks(b) {
+  const ev = [], t = b.t, n = b.n, i0 = b.i0, i1 = b.i1;
+  let lastEv = -1e12;
+  if (i1 < i0) { b.tacks = []; b.stats.tacks = 0; b.stats.gybes = 0; b.stats.marks = 0; b.stats.loss = b.stats.gloss = b.stats.mloss = null; return; }
+  // circular mean heading over any window, from prefix sums of sin/cos
+  const HS = new Float64Array(n + 1), HC = new Float64Array(n + 1);
+  for (let k = 0; k < n; k++) { HS[k + 1] = HS[k] + Math.sin(rad(b.hdg[k])); HC[k + 1] = HC[k] + Math.cos(rad(b.hdg[k])); }
+  const meanHdg = (ta, tb) => { const a = idxAt(b, ta), z = idxAt(b, tb); return (Math.atan2(HS[z + 1] - HS[a], HC[z + 1] - HC[a]) * 180 / Math.PI + 360) % 360; };
+  if (b.twa) {
+    // prefix sums of |TWA| so we can average any time window quickly
+    const P = new Float64Array(n + 1);
+    const Q = new Float64Array(n + 1);   // signed, to check the boat really is on the other tack/gybe afterwards
+    for (let k = 0; k < n; k++) { P[k + 1] = P[k] + Math.abs(b.twa[k]); Q[k + 1] = Q[k] + Math.sign(b.twa[k]); }
+    const meanSide = (ta, tb) => { const a = idxAt(b, ta), z = idxAt(b, tb); return z > a ? (Q[z + 1] - Q[a]) / (z - a + 1) : Math.sign(b.twa[a]); };
+    const meanAbs = (ta, tb) => { const a = idxAt(b, ta), z = idxAt(b, tb); return z > a ? (P[z + 1] - P[a]) / (z - a + 1) : Math.abs(b.twa[a]); };
+    const classify = tc => {
+      const A = meanAbs(tc - 20000, tc - 6000), B = meanAbs(tc + 6000, tc + 20000);
+      if (A < 80 && B < 80) return 'Tack';
+      if (A > 100 && B > 100) return 'Gybe';
+      if ((A < 75 && B > 105) || (A > 105 && B < 75)) return 'Mark';
+      return A < 90 && B < 90 ? 'Tack' : 'Gybe';
+    };
+    // 1) side changes (the bow or stern went through the wind)
+    let side = 0, sideT = 0;
+    for (let i = i0; i <= i1; i++) {
+      if (b.sog[i] < 1.5) continue;
+      const a = b.twa[i], s = Math.abs(a) > 15 && Math.abs(a) < 165 ? Math.sign(a) : 0;
+      if (!s) continue;
+      if (side && s !== side && t[i] - sideT > 4000 && t[i] - lastEv > 10000) {
+        // mostly on the old side 6-20 s before, mostly on the new side 6-20 s after: ignores GPS wobble through dead downwind
+        const before = meanSide(t[i] - 20000, t[i] - 6000), after = meanSide(t[i] + 6000, t[i] + 20000);
+        if (before * side > 0.5 && after * s > 0.5) { ev.push({ i, kind: classify(t[i]) }); lastEv = t[i]; }
+      }
+      if (s !== side) sideT = t[i];
+      side = s;
+    }
+    ev.sort((x, y) => x.i - y.i);
+  } else {
+    for (let i = i0; i <= i1; i++) {
+      if (b.sog[i] < 1.5 || t[i] - lastEv < 12000) continue;
+      const j = idxAt(b, t[i] + 6000); if (j <= i) continue;
+      if (Math.abs(angDiff(b.hdg[j], b.hdg[i])) > 70) { ev.push({ i: idxAt(b, t[i] + 3000), kind: 'Turn' }); lastEv = t[i]; }
+    }
+  }
+  // mark roundings
+  const marks = activeMarks();
+  if (marks.length) {
+    // at the marks you've placed: closest approach within 35 m with a real turn, direction from the turn
+    const cosL = Math.cos(rad(b.lat[i0])), R = 35, rounds = [];
+    for (const m of marks) {
+      let inside = false, best = 1e9, bi = -1;
+      const consider = k => {
+        if (k < 0) return;
+        const tc = t[k], turn = angDiff(meanHdg(tc + 4000, tc + 15000), meanHdg(tc - 15000, tc - 4000));
+        if (Math.abs(turn) < 30 || rounds.some(o => Math.abs(t[o.i] - tc) < 20000)) return;
+        // sailing both before and after (not drifting around before the start or after finishing)
+        const sailing = (ta, tb) => { let sv = 0, sc = 0; for (let q = idxAt(b, ta); q <= idxAt(b, tb); q++) { sv += b.sog[q]; sc++; } return sc && sv / sc >= 1.5; };
+        if (!sailing(tc - 15000, tc - 4000) || !sailing(tc + 4000, tc + 15000)) return;
+        const dir = turn < 0 ? 'port' : 'stbd';
+        rounds.push({ i: k, kind: 'Mark', markName: m.name, dir, wrong: dir !== m.side });
+      };
+      for (let i = i0; i <= i1; i++) {
+        const d = Math.hypot((b.lon[i] - m.lon) * 111320 * cosL, (b.lat[i] - m.lat) * 111320);
+        if (d < R) { if (!inside) { inside = true; best = 1e9; bi = -1; } if (d < best) { best = d; bi = i; } }
+        else if (inside && d > R * 1.5) { inside = false; consider(bi); }
+      }
+      if (inside) consider(bi);
+    }
+    for (let k = ev.length - 1; k >= 0; k--) if (rounds.some(r => Math.abs(t[r.i] - t[ev[k].i]) < 20000)) ev.splice(k, 1);
+    ev.push(...rounds);
+  } else {
+    // no marks placed: any big sustained change of course that isn't a tack or gybe (works for reaching courses too)
+    for (const e of ev) if (e.kind === 'Mark') e.dir = angDiff(meanHdg(t[e.i] + 4000, t[e.i] + 15000), meanHdg(t[e.i] - 15000, t[e.i] - 4000)) < 0 ? 'port' : 'stbd';
+    let lastM = -1e12;
+    for (let i = i0; i <= i1; i += 5) {
+      if (b.sog[i] < 1.5 || t[i] - lastM < 30000) continue;
+      const before = meanHdg(t[i] - 20000, t[i] - 6000), after = meanHdg(t[i] + 6000, t[i] + 20000), turn = angDiff(after, before);
+      if (Math.abs(turn) < 55 || ev.some(e => Math.abs(t[e.i] - t[i]) < 20000)) continue;
+      // centre it where the boat has turned half way
+      let c = i;
+      for (let k = idxAt(b, t[i] - 12000); k <= idxAt(b, t[i] + 12000); k++) if (Math.abs(angDiff(b.hdg[k], before)) >= Math.abs(turn) / 2) { c = k; break; }
+      ev.push({ i: c, kind: 'Mark', dir: turn < 0 ? 'port' : 'stbd' }); lastM = t[i];
+    }
+  }
+  ev.sort((x, y) => x.i - y.i);
+  // your corrections win
+  for (const f of meta.fixes) {
+    if (f.k !== crewKey(b)) continue;
+    let best = null, bd = 8000;
+    for (const e of ev) { const d = Math.abs(t[e.i] - f.t); if (d < bd) { bd = d; best = e; } }
+    if (best) { if (f.kind === 'none') best.removed = true; else { best.kind = f.kind; best.fixed = true; } }
+  }
+  for (let k = ev.length - 1; k >= 0; k--) if (ev[k].removed) ev.splice(k, 1);
+  const vmgAbs = b.vmg ? Array.from(b.vmg, Math.abs) : null;
+  b.tacks = ev.map(e => {
+    const metric = vmgAbs && e.kind !== 'Mark' ? vmgAbs : b.sog;
+    const tk = t[e.i];
+    let sum = 0, c = 0;
+    for (let k = idxAt(b, tk - 14000); k <= e.i && t[k] <= tk - 4000; k++) { sum += metric[k]; c++; }
+    let before = c ? sum / c : metric[e.i];
+    if (e.kind === 'Mark') {
+      // a rounding changes the point of sail, so judge it against the speed the boat settles to on the new leg
+      let s2 = 0, c2 = 0;
+      for (let k = idxAt(b, tk + 20000); k <= idxAt(b, tk + 40000) && k < n; k++) { s2 += metric[k]; c2++; }
+      if (c2) before = s2 / c2;
+    }
+    let min = 99, recov = null, loss = 0;
+    const k0 = idxAt(b, tk - 4000), kEnd = idxAt(b, tk + 40000);
+    for (let k = k0; k <= kEnd && k < n - 1; k++) {
+      const dt = (t[k + 1] - t[k]) / 1000;
+      if (t[k] >= tk && metric[k] < min) min = metric[k];
+      if (recov === null && t[k] > tk + 2000 && metric[k] >= before * 0.95) recov = (t[k] - tk) / 1000;
+      if (recov === null) loss += Math.max(0, before - metric[k]) / KN * dt;
+    }
+    const onto = b.twa ? tackOf(b.twa[idxAt(b, tk + 10000)]) : null;
+    return { i: e.i, t: tk, kind: e.kind, before, min: min === 99 ? metric[e.i] : min, recov, loss, lat: b.lat[e.i], lon: b.lon[e.i],
+      onto, dir: e.dir, markName: e.markName, wrong: e.wrong, fixed: e.fixed };
+  });
+  const cnt = { Tack: 0, Gybe: 0, Mark: 0, Turn: 0 };
+  b.tacks.forEach(x => { x.n = ++cnt[x.kind]; });
+  b.stats.gybes = cnt.Gybe; b.stats.marks = cnt.Mark;
+  const real = b.tacks.filter(x => x.kind === 'Tack' || x.kind === 'Turn');
+  const avgLoss = arr => arr.length ? arr.reduce((a, x) => a + x.loss, 0) / arr.length : null;
+  b.stats.tacks = real.length;
+  b.stats.loss = avgLoss(real);
+  b.stats.gloss = avgLoss(b.tacks.filter(x => x.kind === 'Gybe'));
+  b.stats.mloss = avgLoss(b.tacks.filter(x => x.kind === 'Mark'));
+  b.stats.wrong = b.tacks.filter(x => x.wrong).length;
+}
+function estimateWind() {
+  // Beating headings are the two dominant headings a tacking angle either side of the wind. Score each
+  // candidate wind and tacking angle by time spent on BOTH tacks (product, so a single reach can't win),
+  // with a centre-weighted window so the true centre beats a neighbour that merely overlaps the peak.
+  // Heel, when logged, weights the histogram towards the beat.
+  const H = new Float64Array(360);
+  let any = false;
+  for (const b of boats) {
+    if (!b.visible || !b.inRace) continue;
+    for (let i = Math.max(1, b.i0); i <= b.i1; i++) if (b.sog[i] > 2) {
+      const w = (b.t[i] - b.t[i-1]) * (b.heel ? Math.min(1, Math.abs(b.heel[i]) / 10) : 1);
+      H[Math.round(b.hdg[i]) % 360] += w; any = true;
+    }
+  }
+  if (!any) return null;
+  const win = (d, h) => { let s = 0; for (let k = -h; k <= h; k++) s += H[((Math.round(d) + k) % 360 + 360) % 360] * (1 - Math.abs(k) / (h + 1)); return s; };
+  let best = 0, bw = 0, ba = 42;
+  for (let w = 0; w < 360; w++) for (let a = 36; a <= 50; a++) { const sc = win(w + a, 8) * win(w - a, 8); if (sc > best) { best = sc; bw = w; ba = a; } }
+  return { wind: bw, angle: ba };
+}
+$('#windEst').addEventListener('click', () => {
+  const e = estimateWind();
+  if (!e) return toast('Load some tracks first');
+  wind = e.wind; $('#wind').value = wind;
+  try { localStorage.setItem('wakeback-wind', wind); } catch {}
+  windCtl.update(); recomputeAll(); toast(`Wind estimated at ${String(wind).padStart(3, '0')}°, tacking through ${2 * e.angle}°. Adjust if it looks wrong.`, 5000);
+});
+// ---------- start & finish lines ----------
+// A = committee boat end, B = pin end. Work in metres around A.
+function lineGeom(l) {
+  const cosL = Math.cos(rad(l.a.lat)), xy = (lat, lon) => [(lon - l.a.lon) * 111320 * cosL, (lat - l.a.lat) * 111320];
+  const [dx, dy] = xy(l.b.lat, l.b.lon), len = Math.hypot(dx, dy) || 1;
+  return { len, at(lat, lon) { const [x, y] = xy(lat, lon); return { d: (dx * y - dy * x) / len, along: (x * dx + y * dy) / (len * len) }; } };
+}
+function lineCrossings(b, l, t0, t1) {
+  const g = lineGeom(l), out = [];
+  const k0 = idxAt(b, t0), k1 = idxAt(b, t1);
+  if (k1 <= k0) return out;
+  let prev = g.at(b.lat[k0], b.lon[k0]);
+  for (let k = k0 + 1; k <= k1; k++) {
+    const cur = g.at(b.lat[k], b.lon[k]);
+    if (prev.d && cur.d && Math.sign(prev.d) !== Math.sign(cur.d)) {
+      const f = prev.d / (prev.d - cur.d), along = prev.along + f * (cur.along - prev.along);
+      if (along > -0.1 && along < 1.1) out.push({ t: b.t[k - 1] + f * (b.t[k] - b.t[k - 1]), dir: Math.sign(cur.d), along, sog: b.sog[k], k });
+    }
+    if (cur.d) prev = cur;
+  }
+  return out;
+}
+function sideAt(b, l, t) { const i = idxAt(b, t); return lineGeom(l).at(b.lat[i], b.lon[i]); }
+function computeStartFinish() {
+  boats.forEach(b => b.sf = null); sfState = null;
+  const c = activeCourse(), lines = activeLines();
+  const startL = lines.find(l => l.kind === 'start') || lines.find(l => l.kind === 'both');
+  const finL = lines.find(l => l.kind === 'finish') || lines.find(l => l.kind === 'both');
+  if (!startL && !finL) return;
+  const fleet = boats.filter(b => b.inRace);
+  // look a few minutes either side of the race window: the gun can be just before it, the finish just after
+  const from = b => b.wStart - 600000, to = b => b.wEnd + 120000;
+  for (const b of fleet) { b._xs = startL ? lineCrossings(b, startL, from(b), to(b)) : []; b._xf = finL ? (finL === startL ? b._xs : lineCrossings(b, finL, from(b), to(b))) : []; }
+  let gun = c.gun || null, gunEst = false;
+  if (!gun && startL) {
+    // no gun time given: the first boat over the line going the way most of the fleet goes, back to the whole minute
+    const firsts = fleet.map(b => b._xs.find(x => x.sog > 1.5 && x.t >= b.wStart - 60000)).filter(Boolean);
+    if (firsts.length) { const dirs = firsts.reduce((a, x) => a + x.dir, 0) || 1; const t0 = Math.min(...firsts.filter(x => x.dir === Math.sign(dirs)).map(x => x.t)); gun = Math.floor(t0 / 60000) * 60000; gunEst = true; }
+  }
+  // course side: where most boats are two minutes after the gun
+  let course = 0;
+  if (startL && gun) { for (const b of fleet) if (gun + 120000 <= b.end) course += Math.sign(sideAt(b, startL, gun + 120000).d); course = Math.sign(course) || 1; }
+  const fin = [];
+  for (const b of fleet) {
+    const r = { start: null, fin: null };
+    if (startL && gun && b.start <= gun && b.end > gun) {
+      const atGun = sideAt(b, startL, gun), ocs = Math.sign(atGun.d) === course;
+      // over early: has to come back behind the line within 3 minutes, then start properly
+      let from = gun;
+      if (ocs) { const back = b._xs.find(x => x.t >= gun && x.t <= gun + 180000 && x.dir === -course); from = back ? back.t : Infinity; }
+      const go = b._xs.find(x => x.t >= from && x.t <= gun + 600000 && x.dir === course);
+      const i = idxAt(b, gun);
+      r.start = go
+        ? { t: go.t, late: (go.t - gun) / 1000, ocs, back: ocs, dist: ocs ? 0 : Math.abs(atGun.d), sogGun: b.sog[i], along: go.along, sogOver: go.sog }
+        : { t: null, ocs, dns: !ocs, dist: Math.abs(atGun.d), sogGun: b.sog[i] };
+    }
+    if (finL) {
+      const after = (r.start && r.start.t) || gun || b.wStart;
+      const xs = b._xf.filter(x => x.t > after + 120000 && x.t <= b.wEnd + 120000 && x.sog > 1.5);
+      const last = xs[xs.length - 1];
+      if (last) { r.fin = { t: last.t, elapsed: gun ? (last.t - gun) / 1000 : null }; fin.push({ b, t: last.t }); }
+    }
+    if (startL && gun && !r.start) r.start = { nodata: true };
+    b.sf = r;
+  }
+  fin.sort((x, y) => x.t - y.t).forEach((f, i) => { f.b.sf.fin.pos = i + 1; f.b.sf.fin.behind = (f.t - fin[0].t) / 1000; });
+  sfState = { gun, gunEst, startL, finL, course };
+}
+const mmss = s => { s = Math.round(s); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), ss = String(s % 60).padStart(2, '0'); return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`; };
+const ord = n => n + (['th', 'st', 'nd', 'rd'][(n % 100 - 20) % 10] || ['th', 'st', 'nd', 'rd'][n % 100] || 'th');
+const endName = a => a < 0.33 ? 'Boat end' : a > 0.67 ? 'Pin end' : 'Middle';
+function startText(r) {
+  if (!r) return '–';
+  if (r.nodata) return '<span class="hint">No track at the gun</span>';
+  if (r.ocs && !r.t) return '<span class="ocs">OCS</span> <small>didn\'t go back</small>';
+  if (r.dns) return 'Didn\'t start';
+  if (r.ocs) return `<span class="ocs">OCS</span> went back, +${r.late.toFixed(0)}s`;
+  return r.late < 0.5 ? 'On the gun' : `+${r.late.toFixed(0)}s`;
+}
+function recomputeAll() { tkSel = null; boats.forEach(computeDerived); computeStartFinish(); renderList(); renderCards(); renderTacks(); rebuildAll(); drawChartBase(); }
+
+// ---------- layers ----------
+function clearLayers(b) { b.layers.forEach(l => map.removeLayer(l)); b.layers = []; b.trail = b.marker = null; }
+function boatIcon(b) {
+  return L.divIcon({ className: 'boat-ico', iconSize: [24, 24], iconAnchor: [12, 12],
+    html: `<div class="hull" style="--c:${b.color}"><svg viewBox="0 0 20 20"><path d="M10 1 L16.5 18 L10 14.5 L3.5 18 Z"/></svg></div><span class="tag" style="--c:${b.color}">${puckNum(b) ? `<b>P${puckNum(b)}</b>` : ''}${esc(b.name)}</span>` });
+}
+function buildBoat(b) {
+  clearLayers(b);
+  if (!b.visible) return;
+  if (!b.inRace) return;
+  const step = Math.max(1, Math.ceil((b.i1 - b.i0 + 1) / MAX_DRAW));
+  const trailOnly = $('#trailOnly').checked;
+  if (!trailOnly) {
+    if (colourMode === 'boat') {
+      const ll = []; for (let i = b.i0; i <= b.i1; i += step) ll.push([b.lat[i], b.lon[i]]);
+      b.layers.push(L.polyline(ll, { renderer, color: b.color, weight: 2.5, opacity: 0.55, interactive: false }).addTo(map));
+    } else if (colourMode === 'tack') {
+      if (!b.twa) { const ll = []; for (let i = b.i0; i <= b.i1; i += step) ll.push([b.lat[i], b.lon[i]]); b.layers.push(L.polyline(ll, { renderer, color: b.color, weight: 2.5, opacity: 0.55, interactive: false }).addTo(map)); }
+      else {
+        let run = [], sd = null;
+        const flush = () => { if (run.length > 1) b.layers.push(L.polyline(run, { renderer, color: SIDE_COL[sd], weight: 3.5, opacity: 0.9, interactive: false }).addTo(map)); };
+        for (let i = b.i0; i <= b.i1; i += step) {
+          const cur = tackOf(b.twa[i]), p = [b.lat[i], b.lon[i]];
+          if (cur !== sd && run.length) { run.push(p); flush(); run = []; }
+          sd = cur; run.push(p);
+        }
+        flush();
+      }
+    } else {
+      const bins = 14; let run = [], bin = -1;
+      for (let i = b.i0; i <= b.i1; i += step) {
+        const bi = Math.min(bins - 1, Math.floor(Math.max(0, b.sog[i]) / speedMax * bins));
+        const p = [b.lat[i], b.lon[i]];
+        if (bi !== bin && run.length) {
+          run.push(p);
+          b.layers.push(L.polyline(run, { renderer, color: speedColour((bin + 0.5) / bins * speedMax), weight: 3.5, opacity: 0.9, interactive: false }).addTo(map));
+          run = [];
+        }
+        bin = bi; run.push(p);
+      }
+      if (run.length > 1) b.layers.push(L.polyline(run, { renderer, color: speedColour((bin + 0.5) / bins * speedMax), weight: 3.5, opacity: 0.9, interactive: false }).addTo(map));
+    }
+  }
+  const faded = focusId && focusId !== b.id;
+  if (faded) b.layers.forEach(l => l.setStyle && l.setStyle({ opacity: 0.18 }));
+  b.trail = L.polyline([], { renderer, color: colourMode === 'boat' ? b.color : '#fff', weight: 4.5, opacity: faded ? 0.3 : 1, interactive: false }).addTo(map);
+  b.marker = L.marker([b.lat[b.i0], b.lon[b.i0]], { icon: boatIcon(b), interactive: false, keyboard: false, opacity: faded ? 0.35 : 1 }).addTo(map);
+  b.layers.push(b.trail, b.marker);
+  if (focusId === b.id && b.tacks) for (const tk of b.tacks) {
+    if (tkFilter !== 'all' && tk.kind !== tkFilter) continue;
+    const sel = tkSel === tk.t;
+    const m = L.circleMarker([tk.lat, tk.lon], { renderer, radius: sel ? 9 : 6, color: sel ? '#FFC72C' : '#fff', weight: sel ? 3 : 1.5, fillColor: KIND_COL[tk.kind], fillOpacity: 1 })
+      .bindTooltip(`${KIND_ONE[tk.kind]} ${tk.n}: ${tk.before.toFixed(1)}→${tk.min.toFixed(1)} kn, ${tk.loss.toFixed(0)} m lost`)
+      .on('click', () => jumpToTack(b, tk));
+    m.addTo(map); b.layers.push(m);
+  }
+}
+function rebuildAll() { boats.forEach(buildBoat); render(); }
+
+// ---------- timeline ----------
+function recomputeTimeline() {
+  const vis = boats.filter(b => b.visible && b.inRace);
+  const src = vis.length ? vis : boats.filter(b => b.inRace);
+  if (!src.length) { tMin = tMax = T = 0; $('#replay').classList.add('disabled'); drawChartBase(); return; }
+  tMin = Math.min(...src.map(b => b.wStart + shift(b)));
+  tMax = Math.max(...src.map(b => b.wEnd + shift(b)));
+  T = Math.max(tMin, Math.min(tMax, T));
+  speedMax = Math.max(4, Math.ceil(Math.max(...boats.map(b => b.p98)) + 0.5));
+  $('#legMax').textContent = speedMax + ' kn';
+  $('#replay').classList.toggle('disabled', !boats.length);
+  drawChartBase();
+}
+function fmtClock(t) {
+  if (!boats.length) return '--:--:--';
+  if (timing === 'real') return new Date(t).toLocaleTimeString('en-GB');
+  const s = Math.round(t / 1000), a = Math.abs(s);
+  return (s < 0 ? '−' : '+') + Math.floor(a / 60) + ':' + String(a % 60).padStart(2, '0');
+}
+
+// ---------- render ----------
+const FIELDS = [['sog', 'Speed'], ['vmg', 'VMG'], ['twa', 'Wind angle'], ['heel', 'Heel'], ['pitch', 'Pitch'], ['hdg', 'Heading'], ['max', 'Max speed'], ['avg', 'Avg speed'], ['up', 'Upwind avg'], ['down', 'Downwind avg'], ['dist', 'Distance'], ['tacks', 'Tacks'], ['gybes', 'Gybes'], ['loss', 'Avg tack loss'], ['gloss', 'Avg gybe loss'], ['start', 'Start'], ['finish', 'Finish'], ['mloss', 'Avg mark loss'], ['tack', 'Tack']];
+let fields = new Set(['sog', 'heel', 'max']);
+try { const f = JSON.parse(localStorage.getItem('wakeback-fields')); if (Array.isArray(f) && f.length) fields = new Set(f); } catch {}
+function fmtField(b, f, i) {
+  const deg = (v, pos, neg) => Math.abs(v).toFixed(0) + '°<small>' + (Math.abs(v) < 0.5 ? '' : v > 0 ? pos : neg) + '</small>';
+  switch (f) {
+    case 'sog': return i == null ? '–' : b.sog[i].toFixed(1) + '<small>kn</small>';
+    case 'heel': return !b.heel ? '<small>no data</small>' : i == null ? '–' : deg(b.heel[i], 'stbd', 'port');
+    case 'pitch': return !b.pitch ? '<small>no data</small>' : i == null ? '–' : deg(b.pitch[i], 'bow up', 'bow dn');
+    case 'hdg': return i == null ? '–' : Math.round(b.hdg[i]).toString().padStart(3, '0') + '°';
+    case 'vmg': return !b.vmg ? '<small>set wind</small>' : i == null ? '–' : b.vmg[i].toFixed(1) + '<small>kn</small>';
+    case 'twa': return !b.twa ? '<small>set wind</small>' : i == null ? '–' : `<span style="color:${SIDE_COL[tackOf(b.twa[i])]}">${Math.abs(b.twa[i]).toFixed(0)}°</span><small>${SIDE_LBL[tackOf(b.twa[i])].toLowerCase()}</small>`;
+    case 'tack': return !b.twa ? '<small>set wind</small>' : i == null ? '–' : `<span style="color:${SIDE_COL[tackOf(b.twa[i])]}">${SIDE_LBL[tackOf(b.twa[i])]}</span>`;
+    case 'start': return !b.sf || !b.sf.start ? '<small>no start line</small>' : startText(b.sf.start);
+    case 'finish': return !b.sf || !b.sf.fin ? '<small>' + (b.sf && sfState && sfState.finL ? 'not finished' : 'no finish line') + '</small>' : `${ord(b.sf.fin.pos)}<small>${b.sf.fin.elapsed != null ? mmss(b.sf.fin.elapsed) : ''}</small>`;
+    case 'gloss': return b.stats.gloss == null ? '–' : b.stats.gloss.toFixed(0) + '<small>m</small>';
+    case 'mloss': return b.stats.mloss == null ? '–' : b.stats.mloss.toFixed(0) + '<small>m</small>';
+    case 'up': return b.stats.up == null ? '<small>set wind</small>' : b.stats.up.toFixed(1) + '<small>kn</small>';
+    case 'down': return b.stats.down == null ? '<small>set wind</small>' : b.stats.down.toFixed(1) + '<small>kn</small>';
+    case 'tacks': return b.stats.tacks == null ? '–' : b.stats.tacks + '<small>' + (b.twa ? '' : 'turns') + '</small>';
+    case 'gybes': return b.stats.gybes == null || wind == null ? '<small>set wind</small>' : String(b.stats.gybes);
+    case 'loss': return b.stats.loss == null ? '–' : b.stats.loss.toFixed(0) + '<small>m</small>';
+    case 'max': return b.stats.max.toFixed(1) + '<small>kn</small>';
+    case 'avg': return b.stats.avg.toFixed(1) + '<small>kn</small>';
+    case 'dist': return b.stats.dist.toFixed(2) + '<small>nm</small>';
+  }
+}
+function setCardVals(b, i) {
+  for (const f of fields) { const el = document.querySelector(`[data-cv="${b.id}:${f}"]`); if (el) el.innerHTML = fmtField(b, f, i); }
+}
+function render() {
+  for (const b of boats) {
+    const live = document.querySelector(`[data-live="${b.id}"]`);
+    if (!b.visible || !b.marker || !b.inRace) { if (live) live.innerHTML = '–'; setCardVals(b, null); continue; }
+    const bt = T - shift(b);
+    if (bt < b.wStart) {
+      b.marker.setOpacity(0); b.trail.setLatLngs([]);
+      if (live) live.innerHTML = '–'; setCardVals(b, null); continue;
+    }
+    b.marker.setOpacity((bt > b.wEnd ? 0.55 : 1) * (focusId && focusId !== b.id ? 0.35 : 1));
+    const c = Math.min(bt, b.wEnd);
+    const i = idxAt(b, c), j = Math.min(i + 1, b.n - 1);
+    const f = j > i ? (c - b.t[i]) / (b.t[j] - b.t[i]) : 0;
+    const pos = [b.lat[i] + (b.lat[j] - b.lat[i]) * f, b.lon[i] + (b.lon[j] - b.lon[i]) * f];
+    b.marker.setLatLng(pos);
+    const el = b.marker.getElement(); if (el) el.firstChild.style.transform = `rotate(${b.cog[i]}deg)`;
+    const i0 = Math.max(b.i0, idxAt(b, c - TRAIL_MS)), st = Math.max(1, Math.ceil((i - i0) / 300));
+    const tr = []; for (let k = i0; k <= i; k += st) tr.push([b.lat[k], b.lon[k]]); tr.push(pos);
+    b.trail.setLatLngs(tr);
+    if (live) live.innerHTML = bt > b.wEnd ? 'fin' : b.sog[i].toFixed(1) + '<small>kn</small>';
+    setCardVals(b, i);
+  }
+  $('#clock').textContent = fmtClock(T);
+  $('#scrub').value = tMax > tMin ? Math.round((T - tMin) / (tMax - tMin) * 10000) : 0;
+  drawChart();
+}
+function loop(now) {
+  if (!playing) return;
+  const dt = lastFrame ? now - lastFrame : 0; lastFrame = now;
+  T += dt * +$('#rate').value;
+  if (T >= tMax) { if ($('#loop').checked) T = tMin; else { T = tMax; setPlaying(false); } }
+  render();
+  requestAnimationFrame(loop);
+}
+function setPlaying(p) {
+  playing = p; $('#play').textContent = p ? 'Pause' : 'Play';
+  if (p) { if (T >= tMax) T = tMin; lastFrame = 0; requestAnimationFrame(loop); }
+}
+
+// ---------- speed chart ----------
+const cv = $('#chart'), base = document.createElement('canvas');
+function drawChartBase() {
+  const dpr = window.devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
+  cv.width = base.width = Math.max(1, w * dpr); cv.height = base.height = Math.max(1, h * dpr);
+  const g = base.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
+  if (!boats.length || tMax <= tMin) { drawChart(); return; }
+  const m = $('#metric').value;
+  const lim = m === 'sog' || m === 'vmg' ? speedMax : m === 'twa' ? 180 : Math.max(5, ...boats.map(b => m === 'heel' ? b.heelMax : b.pitchMax));
+  const lo = m === 'sog' ? 0 : -lim, unit = m === 'sog' || m === 'vmg' ? ' kn' : '°', step = m === 'sog' || m === 'vmg' ? 2 : m === 'twa' ? 90 : (lim > 20 ? 10 : 5);
+  if (m === 'twa') { g.fillStyle = 'rgba(230,57,70,.10)'; g.fillRect(0, 0, w, h / 2); g.fillStyle = 'rgba(45,198,83,.10)'; g.fillRect(0, h / 2, w, h / 2);
+    g.font = '11px Barlow, sans-serif'; g.fillStyle = '#E63946'; g.fillText('port', w - 34, 12); g.fillStyle = '#2DC653'; g.fillText('stbd', w - 34, h - 10); }
+  const pad = 4, y = v => h - pad - ((v - lo) / (lim - lo)) * (h - pad * 2);
+  g.font = '11px Barlow, sans-serif'; g.textBaseline = 'middle';
+  for (let v = lo + step; v < lim; v += step) {
+    g.strokeStyle = v === 0 ? 'rgba(234,242,245,.35)' : 'rgba(234,242,245,.1)'; g.beginPath(); g.moveTo(0, y(v)); g.lineTo(w, y(v)); g.stroke();
+    g.fillStyle = 'rgba(143,170,184,.9)'; g.fillText(v + unit, 4, y(v) - 7);
+  }
+  for (const b of boats) {
+    if (!b.visible || !b.inRace) continue;
+    const arr = m === 'sog' ? b.sog : b[m];
+    if (!arr) continue;
+    g.strokeStyle = b.color; g.lineWidth = focusId && focusId !== b.id ? 0.6 : 1.6; g.beginPath(); let on = false;
+    for (let x = 0; x <= w; x++) {
+      const bt = tMin + (tMax - tMin) * x / w - shift(b);
+      if (bt < b.wStart || bt > b.wEnd) { on = false; continue; }
+      const v = arr[idxAt(b, bt)];
+      on ? g.lineTo(x, y(v)) : g.moveTo(x, y(v)); on = true;
+    }
+    g.stroke();
+  }
+  drawChart();
+}
+function drawChart() {
+  const g = cv.getContext('2d'); g.setTransform(1, 0, 0, 1, 0, 0);
+  g.clearRect(0, 0, cv.width, cv.height); g.drawImage(base, 0, 0);
+  if (tMax > tMin) {
+    const x = (T - tMin) / (tMax - tMin) * cv.width;
+    g.fillStyle = '#FFC72C'; g.fillRect(x - 1, 0, 2 * (window.devicePixelRatio || 1), cv.height);
+  }
+}
+function seekFromChart(e) {
+  const r = cv.getBoundingClientRect();
+  T = tMin + (tMax - tMin) * Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)); render();
+}
+let dragging = false;
+cv.addEventListener('pointerdown', e => { dragging = true; cv.setPointerCapture(e.pointerId); seekFromChart(e); });
+cv.addEventListener('pointermove', e => dragging && seekFromChart(e));
+cv.addEventListener('pointerup', () => dragging = false);
+new ResizeObserver(() => drawChartBase()).observe(cv);
+
+// ---------- crew: who sailed with which puck, saved per session ----------
+function defaultName(b) { return puckNum(b) ? 'Puck ' + puckNum(b) : (b.fileName || b.name); }
+async function loadCrew() {
+  crew = {};
+  const k = sessionKey(); if (!k) return;
+  if (dock.on && dock.session) { try { const r = await fetch(`/api/sessions/${dock.session}/crew`); if (r.ok) crew = await r.json() || {}; } catch {} }
+  if (!Object.keys(crew).length) { try { crew = JSON.parse(localStorage.getItem('wakeback-crew-' + k)) || {}; } catch {} }
+}
+function saveCrew() {
+  const k = sessionKey(); if (!k) return;
+  try { localStorage.setItem('wakeback-crew-' + k, JSON.stringify(crew)); } catch {}
+  saveToDock('crew', crew, loadSailors);
+  rememberSailors(Object.values(crew));
+}
+function rememberSailors(list) {
+  try { const s = new Set(JSON.parse(localStorage.getItem('wakeback-sailors')) || []); list.forEach(n => n && !/^Puck \d+$/.test(n) && s.add(n)); localStorage.setItem('wakeback-sailors', JSON.stringify([...s].slice(-200))); } catch {}
+  loadSailors();
+}
+async function loadSailors() {
+  let s = new Set();
+  try { (JSON.parse(localStorage.getItem('wakeback-sailors')) || []).forEach(n => s.add(n)); } catch {}
+  if (dock.on) { try { (await (await fetch('/api/sailors')).json()).forEach(n => s.add(n)); } catch {} }
+  $('#sailors').innerHTML = [...s].sort((a, b) => a.localeCompare(b)).map(n => `<option value="${esc(n)}">`).join('');
+}
+function renameBoat(id, name) {
+  const b = boats.find(x => x.id === id); if (!b) return;
+  const v = name.trim();
+  b.name = v || defaultName(b);
+  if (v && v !== defaultName(b)) crew[crewKey(b)] = v; else delete crew[crewKey(b)];
+  saveCrew();
+  if (b.marker) b.marker.setIcon(boatIcon(b));
+  document.querySelectorAll(`[data-name="${b.id}"],[data-cname="${b.id}"]`).forEach(el => { if (el.value !== b.name) el.value = b.name; });
+  renderTacks(); drawChartBase(); render();
+}
+
+// ---------- big screen cards ----------
+function renderChips() {
+  $('#fieldChips').innerHTML = FIELDS.map(([k, l]) => `<button class="chip${fields.has(k) ? ' on' : ''}" data-field="${k}">${l}</button>`).join('');
+}
+function renderCards() {
+  $('#cardList').innerHTML = boats.map(b => `
+    <div class="card${b.visible && b.inRace ? '' : ' off'}" style="--c:${b.color}">
+      <div class="top">${badge(b)}<input class="nm" data-cname="${b.id}" value="${esc(b.name)}" list="sailors" aria-label="Who sailed ${puckNum(b) ? 'puck ' + puckNum(b) : 'this track'}"></div>
+      <div class="vals">${[...fields].map(f => `<div><div class="v" data-cv="${b.id}:${f}">–</div><div class="l">${FIELDS.find(x => x[0] === f)[1]}</div></div>`).join('')}</div>
+    </div>`).join('');
+}
+$('#fieldChips').addEventListener('click', e => {
+  const c = e.target.closest('[data-field]'); if (!c) return;
+  const k = c.dataset.field;
+  if (fields.has(k)) { if (fields.size > 1) fields.delete(k); } else fields.add(k);
+  try { localStorage.setItem('wakeback-fields', JSON.stringify([...fields])); } catch {}
+  renderChips(); renderCards(); render();
+});
+$('#cardList').addEventListener('change', e => { const n = e.target.closest('[data-cname]'); if (n) renameBoat(n.dataset.cname, n.value); });
+function setBig(on) {
+  document.body.classList.toggle('big', on);
+  $('#big').textContent = on ? 'Normal view' : 'Big screen';
+  if (on) { renderChips(); renderCards(); render(); }
+  setTimeout(() => map.invalidateSize(), 50);
+}
+$('#big').addEventListener('click', () => setBig(!document.body.classList.contains('big')));
+$('#fs').addEventListener('click', () => {
+  if (window.WakeBackApp) {   // inside the WakeBack phone/tablet app: it hides its own bars
+    const on = !document.body.classList.contains('appfs'); document.body.classList.toggle('appfs', on);
+    WakeBackApp.postMessage(JSON.stringify({ type: 'fullscreen', on })); setTimeout(() => map.invalidateSize(), 350); return;
+  }
+  if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen().catch(() => toast('Full screen not allowed here, try F11')); });
+
+// ---------- races ----------
+function sessionDate() { return boats.length ? new Date(Math.min(...boats.map(b => b.start))) : null; }
+function sessionKey() { const d = sessionDate(); return d ? d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') : null; }
+const hhmm = ms => { const d = new Date(ms); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+function msFromHHMM(v) { const d = sessionDate(); if (!d || !/^\d\d:\d\d$/.test(v)) return null; const [h, m] = v.split(':').map(Number); return new Date(d.getFullYear(), d.getMonth(), d.getDate(), h, m).getTime(); }
+function saveRaces() {
+  const k = sessionKey(); if (!k) return;
+  try { localStorage.setItem('wakeback-races-' + k, JSON.stringify(races)); } catch {}
+  saveToDock('races', races);
+}
+async function loadRaces() {
+  races = []; raceIdx = -1;
+  const k = sessionKey(); if (!k) return;
+  if (dock.on && dock.session) { try { const r = await fetch(`/api/sessions/${dock.session}/races`); if (r.ok) { const j = await r.json(); if (Array.isArray(j) && j.length) races = j; } } catch {} }
+  if (!races.length) { try { const j = JSON.parse(localStorage.getItem('wakeback-races-' + k)); if (Array.isArray(j)) races = j; } catch {} }
+  races = races.filter(r => r && isFinite(r.start) && isFinite(r.end) && r.end > r.start).sort((a, b) => a.start - b.start);
+  races.forEach(r => { r.marks = Array.isArray(r.marks) ? r.marks : []; r.lines = Array.isArray(r.lines) ? r.lines : []; });
+}
+function selectRace(i) {
+  raceIdx = i; T = -Infinity;
+  selMark = null; map.closePopup();
+  recomputeAll(); recomputeTimeline(); T = tMin; renderRaces(); renderMarks(); render(); fit();
+}
+function renderRaces() {
+  const chips = `<button class="chip${raceIdx < 0 ? ' on' : ''}" data-race="-1">Whole session</button>`
+    + races.map((r, i) => `<button class="chip${i === raceIdx ? ' on' : ''}" data-race="${i}">${esc(r.name)}</button>`).join('');
+  $('#raceChips').innerHTML = boats.length ? chips : '';
+  $('#raceChipsBig').innerHTML = races.length ? chips : '';
+  $('#raceTitle').textContent = raceIdx >= 0 ? `${races[raceIdx].name}  ${hhmm(races[raceIdx].start)}–${hhmm(races[raceIdx].end)}` : (boats.length ? 'Whole session' : '');
+  $('#raceEdit').innerHTML = races.map((r, i) => `<div class="rrow"><input type="text" data-rn="${i}" value="${esc(r.name)}" aria-label="Race name"><input type="time" data-rs="${i}" value="${hhmm(r.start)}" aria-label="${esc(r.name)} start"><input type="time" data-re="${i}" value="${hhmm(r.end)}" aria-label="${esc(r.name)} end"><button class="rm" data-rr="${i}">Delete</button></div>`).join('');
+  $('#raceAdd').style.display = $('#raceAuto').style.display = boats.length ? '' : 'none';
+}
+document.addEventListener('click', e => {
+  const c = e.target.closest('[data-race]'); if (c) { selectRace(+c.dataset.race); return; }
+  const r = e.target.closest('[data-rr]'); if (r) { const i = +r.dataset.rr; if (!confirm(`Delete ${races[i].name}? The tracks aren't affected.`)) return; races.splice(i, 1); if (raceIdx === i) raceIdx = -1; else if (raceIdx > i) raceIdx--; saveRaces(); selectRace(raceIdx); }
+});
+$('#raceEdit').addEventListener('change', e => {
+  const t = e.target, i = +(t.dataset.rn ?? t.dataset.rs ?? t.dataset.re); const r = races[i]; if (!r) return;
+  if (t.dataset.rn != null) r.name = t.value.trim() || r.name;
+  if (t.dataset.rs != null) { const v = msFromHHMM(t.value); if (v != null && v < r.end) r.start = v; }
+  if (t.dataset.re != null) { const v = msFromHHMM(t.value); if (v != null && v > r.start) r.end = v; }
+  saveRaces(); selectRace(raceIdx);
+});
+$('#raceAdd').addEventListener('click', () => {
+  const s0 = Math.min(...boats.map(b => b.start)), e0 = Math.max(...boats.map(b => b.end));
+  const last = races[races.length - 1];
+  const start = last ? Math.min(last.end, e0 - 60000) : s0;
+  races.push({ name: 'Race ' + (races.length + 1), start, end: e0, marks: copyMarks(last ? last.marks : meta.marks), lines: copyLines(last ? last.lines : meta.lines) });
+  saveRaces(); selectRace(races.length - 1);
+});
+$('#raceAuto').addEventListener('click', () => {
+  // any boat moving (>1.5 kn) per 30 s bin; races are moving stretches separated by >= 5 min of nobody moving
+  const s0 = Math.min(...boats.map(b => b.start)), e0 = Math.max(...boats.map(b => b.end));
+  const bin = 30000, nb = Math.ceil((e0 - s0) / bin) + 1, moving = new Uint8Array(nb);
+  for (const b of boats) {
+    let k0 = 0;
+    for (let i = 0; i < b.n; i++) {
+      while (b.t[i] - b.t[k0] > bin) k0++;
+      const dt = (b.t[i] - b.t[k0]) / 1000;
+      if (dt > bin / 2000 && hav(b.lat[k0], b.lon[k0], b.lat[i], b.lon[i]) / dt * KN > 1.5) moving[Math.floor((b.t[i] - s0) / bin)] = 1;
+    }
+  }
+  const found = []; let run = null, gap = 0;
+  for (let k = 0; k < nb; k++) {
+    if (moving[k]) { if (!run) run = { a: k, b: k }; run.b = k; gap = 0; }
+    else if (run && ++gap >= 10) { found.push(run); run = null; gap = 0; }
+  }
+  if (run) found.push(run);
+  const good = found.filter(r => (r.b - r.a + 1) * bin >= 10 * 60000);
+  if (!good.length) return toast('No obvious gaps found. Add races by hand.');
+  const carry = meta.marks.length ? meta.marks : (races[0] && races[0].marks) || [];
+  const carryL = (meta.lines || []).length ? meta.lines : (races[0] && races[0].lines) || [];
+  races = good.map((r, i) => ({ name: 'Race ' + (i + 1), start: s0 + r.a * bin, end: s0 + (r.b + 1) * bin, marks: copyMarks(carry), lines: copyLines(carryL) }));
+  saveRaces(); selectRace(0);
+  toast(`Split into ${races.length} race${races.length > 1 ? 's' : ''}. Adjust the times if the gaps were short.`);
+});
+
+// ---------- course marks ----------
+const markLayer = L.layerGroup().addTo(map);
+function markIcon(m) {
+  return L.divIcon({ className: 'mark-ico' + (selMark === m.id ? ' sel' : ''), iconSize: [22, 22], iconAnchor: [11, 11],
+    html: `<div class="buoy ${m.side}"></div><span class="blabel">${esc(m.name)}</span>` });
+}
+function markPopup(m) {
+  return `<div class="mpop"><input data-mpn="${m.id}" value="${esc(m.name)}" aria-label="Mark name">
+    <div class="row2"><button data-mps="${m.id}" data-side="port" class="${m.side === 'port' ? 'on port' : ''}">Port (red)</button><button data-mps="${m.id}" data-side="stbd" class="${m.side === 'stbd' ? 'on stbd' : ''}">Stbd (green)</button></div>
+    <button class="del" data-mpd="${m.id}">Delete mark</button></div>`;
+}
+const lineLayer = L.layerGroup().addTo(map);
+function endIcon(l, which) {
+  return L.divIcon({ className: 'end-ico', iconSize: [18, 18], iconAnchor: [9, 9],
+    html: `<div class="eb ${which === 'a' ? 'rc' : 'pin'}" style="--k:${LINE_COL[l.kind]}"></div><span class="elabel">${which === 'a' ? 'Committee boat' : 'Pin'}</span>` });
+}
+function renderLines() {
+  lineLayer.clearLayers();
+  const ls = activeLines();
+  for (const l of ls) {
+    const pl = L.polyline([[l.a.lat, l.a.lon], [l.b.lat, l.b.lon]], { color: LINE_COL[l.kind], weight: 3, dashArray: l.kind === 'finish' ? '2 6' : '8 6', interactive: false })
+      .bindTooltip(LINE_LBL[l.kind].replace(' line', ''), { permanent: true, direction: 'center', className: 'linetip' }).addTo(lineLayer);
+    for (const w of ['a', 'b']) {
+      const mk = L.marker([l[w].lat, l[w].lon], { icon: endIcon(l, w), draggable: true, keyboard: false, zIndexOffset: 600, title: `${w === 'a' ? 'Committee boat' : 'Pin'} end. Drag to move.` });
+      mk.on('drag', () => { const p = mk.getLatLng(); l[w] = { lat: p.lat, lon: p.lng }; pl.setLatLngs([[l.a.lat, l.a.lon], [l.b.lat, l.b.lon]]); });
+      mk.on('dragend', courseChanged);
+      mk.addTo(lineLayer);
+    }
+  }
+  $('#lineList').innerHTML = ls.map(l => `<div class="lrow"><span class="lsw" style="--k:${LINE_COL[l.kind]}"></span>
+    <select data-lk="${l.id}" aria-label="Line type">${Object.entries(LINE_LBL).map(([k, v]) => `<option value="${k}"${k === l.kind ? ' selected' : ''}>${v}</option>`).join('')}</select>
+    <div class="lx"><span>${lineGeom(l).len.toFixed(0)} m long</span><button class="lnk" data-lsw="${l.id}" title="On the map the square is the committee boat end, the circle is the pin">Swap ends</button><button class="rm" data-ld="${l.id}" style="margin-left:auto">Delete</button></div></div>`).join('');
+  const hasStart = ls.some(l => l.kind !== 'finish');
+  $('#lineStart').style.display = hasStart ? 'none' : '';
+  $('#lineFinish').style.display = ls.some(l => l.kind !== 'start') ? 'none' : '';
+  $('#lineStart').textContent = addingLine && addingLine.kind === 'start' ? 'Cancel' : 'Add start line';
+  $('#lineFinish').textContent = addingLine && addingLine.kind === 'finish' ? 'Cancel' : 'Add finish line';
+  $('#lineStart').disabled = $('#lineFinish').disabled = !boats.length;
+  $('#gunRow').hidden = !hasStart;
+  const c = activeCourse();
+  if (sfState && sfState.gun) $('#gun').value = new Date(sfState.gun).toTimeString().slice(0, 8);
+  else $('#gun').value = '';
+  $('#gunNote').textContent = c.gun ? '' : sfState && sfState.gunEst ? '(estimated, type the real time if you know it)' : '';
+  $('#gunJump').style.display = sfState && sfState.gun ? '' : 'none';
+  renderSF();
+}
+function renderSF() {
+  const box = $('#sfBox');
+  if (!sfState || !boats.some(b => b.sf && (b.sf.start || b.sf.fin))) { box.hidden = true; return; }
+  box.hidden = false;
+  const rows = boats.filter(b => b.inRace && b.sf).sort((x, y) => (x.sf.fin?.pos ?? 999) - (y.sf.fin?.pos ?? 999) || (x.sf.start?.late ?? 1e9) - (y.sf.start?.late ?? 1e9));
+  const hasS = !!sfState.startL && !!sfState.gun, hasF = !!sfState.finL;
+  $('#sfTable').innerHTML = `<tr><th>Boat</th>${hasS ? '<th>Start</th>' : ''}${hasF ? '<th>Finish</th>' : ''}</tr>` + rows.map(b => {
+    const st = b.sf.start, fi = b.sf.fin;
+    const atGun = st && !st.nodata ? (st.ocs ? `over at the gun, ${st.sogGun.toFixed(1)} kn` : `${st.dist.toFixed(0)} m back at ${st.sogGun.toFixed(1)} kn`) : '';
+    return `<tr data-sf="${b.id}" title="Tap to watch ${esc(b.name)}'s start"><td>${badge(b)}<small>${esc(b.name)}</small></td>
+      ${hasS ? `<td>${startText(st)}${atGun ? `<small>${atGun}${st.t ? '<br>' + endName(st.along).toLowerCase() : ''}</small>` : ''}</td>` : ''}
+      ${hasF ? `<td>${fi ? `<span class="pos">${ord(fi.pos)}</span> ${fi.elapsed != null ? mmss(fi.elapsed) : hhmm(fi.t)}<small>${fi.pos > 1 ? '+' + mmss(fi.behind) : 'first home'}</small>` : '<span class="hint">No finish</span>'}</td>` : ''}</tr>`;
+  }).join('');
+}
+function setAddingLine(kind) {
+  addingLine = kind && !(addingLine && addingLine.kind === kind) ? { kind, a: null } : null;
+  if (addingLine) { if (addingMark) setAdding(false); document.body.classList.add('addmark'); $('#panel').classList.remove('open'); toast('Tap the committee boat end of the line. Esc to cancel.', 5000); }
+  else document.body.classList.remove('addmark');
+  renderLines();
+}
+$('#lineStart').addEventListener('click', () => setAddingLine('start'));
+$('#lineFinish').addEventListener('click', () => setAddingLine('finish'));
+$('#lineList').addEventListener('change', e => { const s = e.target.closest('[data-lk]'); if (!s) return; const l = activeLines().find(x => x.id === s.dataset.lk); if (l) { l.kind = s.value; courseChanged(); } });
+$('#lineList').addEventListener('click', e => {
+  const sw = e.target.closest('[data-lsw]'); if (sw) { const l = activeLines().find(x => x.id === sw.dataset.lsw); if (l) { [l.a, l.b] = [l.b, l.a]; courseChanged(); } return; }
+  const d = e.target.closest('[data-ld]'); if (!d) return;
+  const ls = activeLines(), i = ls.findIndex(x => x.id === d.dataset.ld); if (i < 0) return;
+  if (!confirm(`Delete the ${LINE_LBL[ls[i].kind].toLowerCase()}?`)) return;
+  ls.splice(i, 1); courseChanged();
+});
+$('#gun').addEventListener('change', e => {
+  const c = activeCourse(), v = e.target.value;
+  if (!v) { delete c.gun; courseChanged(); return; }
+  const d = sessionDate(), [h, m, sec] = v.split(':').map(Number);
+  c.gun = new Date(d.getFullYear(), d.getMonth(), d.getDate(), h, m, sec || 0).getTime();
+  courseChanged();
+});
+$('#gunJump').addEventListener('click', () => { if (sfState && sfState.gun) { T = Math.max(tMin, sfState.gun - 60000); setPlaying(false); render(); } });
+$('#sfTable').addEventListener('click', e => {
+  const r = e.target.closest('[data-sf]'); if (!r) return;
+  const b = boats.find(x => x.id === r.dataset.sf); if (!b) return;
+  focusBoat(b.id);
+  const t = b.sf.start && b.sf.start.t ? b.sf.start.t - 15000 : sfState.gun ? sfState.gun - 30000 : null;
+  if (t) { T = Math.max(tMin, t + shift(b)); setPlaying(false); render(); const i = idxAt(b, t); map.panTo([b.lat[i], b.lon[i]]); }
+});
+function renderMarks() {
+  renderLines();
+  markLayer.clearLayers();
+  const ms = activeMarks();
+  for (const m of ms) {
+    const mk = L.marker([m.lat, m.lon], { icon: markIcon(m), draggable: true, keyboard: false, zIndexOffset: 500, title: `${m.name}: leave to ${m.side === 'port' ? 'port' : 'starboard'}. Drag to move.` });
+    mk.on('dragend', () => { const p = mk.getLatLng(); m.lat = p.lat; m.lon = p.lng; courseChanged(); });
+    mk.bindPopup(() => markPopup(m), { minWidth: 180 });
+    mk.addTo(markLayer);
+  }
+  const where = raceIdx >= 0 && races[raceIdx] ? races[raceIdx].name : (races.length ? 'the whole session (new races start with these)' : 'this session');
+  $('#courseHint').innerHTML = !boats.length ? 'Load a session first.'
+    : ms.length || activeLines().length ? `Course for <b>${esc(where)}</b>. Drag anything on the map to move it. Red = leave to port, green = leave to starboard. Lines: square = committee boat, circle = pin.`
+    : `Optional. Drop the marks where they were laid, and the start and finish lines (square = committee boat end, circle = pin) and roundings are detected at the real marks, with a warning if someone went the wrong way round. Marks are set per race, so if the course changes between races, just move them.`;
+  $('#markList').innerHTML = ms.map(m => `<div class="mrow"><span class="buoy ${m.side}"></span><input data-mn="${m.id}" value="${esc(m.name)}" aria-label="Mark name">
+    <div class="seg"><button data-ms="${m.id}" data-side="port" class="${m.side === 'port' ? 'on port' : ''}">Port</button><button data-ms="${m.id}" data-side="stbd" class="${m.side === 'stbd' ? 'on stbd' : ''}">Stbd</button></div>
+    <button class="rm" data-md="${m.id}">Delete</button></div>`).join('');
+  $('#markAdd').textContent = addingMark ? 'Cancel' : 'Add mark';
+  $('#markAdd').disabled = !boats.length;
+  $('#markCopy').style.display = races.length && (ms.length || activeLines().length) ? '' : 'none';
+}
+function courseChanged() { saveCourse(); recomputeAll(); renderMarks(); }
+function saveCourse() { if (raceIdx >= 0) saveRaces(); else saveMeta(); }
+function findMark(id) { return activeMarks().find(m => m.id === id); }
+function setMarkSide(id, side) { const m = findMark(id); if (m) { m.side = side; map.closePopup(); courseChanged(); } }
+function renameMark(id, name) { const m = findMark(id); if (m && name.trim()) { m.name = name.trim().slice(0, 30); courseChanged(); } }
+function deleteMark(id) {
+  const ms = activeMarks(), i = ms.findIndex(m => m.id === id); if (i < 0) return;
+  if (!confirm(`Delete ${ms[i].name}?`)) return;
+  ms.splice(i, 1); map.closePopup(); courseChanged();
+}
+function setAdding(on) {
+  addingMark = on; document.body.classList.toggle('addmark', on);
+  if (on) { $('#panel').classList.remove('open'); toast('Tap the map where the mark is. Esc to cancel.', 4000); }
+  renderMarks();
+}
+$('#markAdd').addEventListener('click', () => setAdding(!addingMark));
+$('#markCopy').addEventListener('click', () => {
+  const src = activeMarks();
+  if (!confirm(`Copy these marks and lines to every race? Marks and lines already set on other races will be replaced.`)) return;
+  const srcL = activeLines();
+  races.forEach((r, i) => { if (i !== raceIdx) { r.marks = copyMarks(src); r.lines = copyLines(srcL); } });
+  if (raceIdx >= 0) { meta.marks = copyMarks(src); meta.lines = copyLines(srcL); }
+  saveRaces(); saveMeta(); toast('Copied to all races.');
+});
+map.on('click', e => {
+  if (addingLine) {
+    if (!addingLine.a) { addingLine.a = { lat: e.latlng.lat, lon: e.latlng.lng }; toast('Now tap the pin end.', 4000);
+      L.marker(e.latlng, { icon: endIcon({ kind: addingLine.kind }, 'a'), interactive: false }).addTo(lineLayer); return; }
+    const kind = addingLine.kind, ls = activeLines();
+    ls.push({ id: newId(), kind, a: addingLine.a, b: { lat: e.latlng.lat, lon: e.latlng.lng } });
+    addingLine = null; document.body.classList.remove('addmark'); courseChanged();
+    toast(`${LINE_LBL[kind]} added. Drag either end to adjust.` + (kind === 'start' && !activeCourse().gun ? ' Set the gun time for exact start results.' : ''), 5000);
+    return;
+  }
+  if (!addingMark) return;
+  const ms = activeMarks();
+  const guess = ['Windward', 'Leeward', 'Wing', 'Gybe', 'Start pin', 'Finish'];
+  const name = ms.length < 2 ? guess[ms.length] : 'Mark ' + (ms.length + 1);
+  ms.push({ id: newId(), name, lat: e.latlng.lat, lon: e.latlng.lng, side: 'port' });
+  setAdding(false); courseChanged();
+  toast(`${name} added, leave to port. Tap it to rename or switch to starboard.`, 4500);
+});
+$('#markList').addEventListener('click', e => {
+  const s = e.target.closest('[data-ms]'); if (s) return setMarkSide(s.dataset.ms, s.dataset.side);
+  const d = e.target.closest('[data-md]'); if (d) return deleteMark(d.dataset.md);
+});
+$('#markList').addEventListener('change', e => { const n = e.target.closest('[data-mn]'); if (n) renameMark(n.dataset.mn, n.value); });
+map.getContainer().addEventListener('click', e => {
+  const s = e.target.closest('[data-mps]'); if (s) { L.DomEvent.stop(e); return setMarkSide(s.dataset.mps, s.dataset.side); }
+  const d = e.target.closest('[data-mpd]'); if (d) { L.DomEvent.stop(e); return deleteMark(d.dataset.mpd); }
+});
+map.getContainer().addEventListener('change', e => { const n = e.target.closest('[data-mpn]'); if (n) renameMark(n.dataset.mpn, n.value); });
+map.getContainer().addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.matches('[data-mpn]')) { renameMark(e.target.dataset.mpn, e.target.value); map.closePopup(); } });
+
+// ---------- session meta (whole-session marks, corrections) ----------
+async function loadMeta() {
+  meta = { marks: [], fixes: [], lines: [] };
+  const k = sessionKey(); if (!k) return;
+  let got = null;
+  if (dock.on && dock.session) { try { const r = await fetch(`/api/sessions/${dock.session}/meta`); if (r.ok) got = await r.json(); } catch {} }
+  if (!got || !Object.keys(got).length) { try { got = JSON.parse(localStorage.getItem('wakeback-meta-' + k)); } catch {} }
+  if (got) meta = { marks: Array.isArray(got.marks) ? got.marks : [], fixes: Array.isArray(got.fixes) ? got.fixes : [], lines: Array.isArray(got.lines) ? got.lines : [], ...(got.gun ? { gun: got.gun } : {}) };
+}
+function saveMeta() {
+  const k = sessionKey(); if (!k) return;
+  try { localStorage.setItem('wakeback-meta-' + k, JSON.stringify(meta)); } catch {}
+  saveToDock('meta', meta);
+}
+
+// ---------- saving: every change saves straight away; this shows it happened, and keeps trying if the dock can't be reached ----------
+const unsaved = new Map();   // "day/what" -> { day, what, body, after }
+let saveBusy = false, saveRetry = null, lastSaved = null;
+function saveToDock(what, data, after) {
+  if (!(dock.on && dock.session)) { showSave('local'); return; }
+  unsaved.set(dock.session + '/' + what, { day: dock.session, what, body: JSON.stringify(data), after });
+  flushSaves();
+}
+async function flushSaves() {
+  if (saveBusy) return;
+  saveBusy = true; clearTimeout(saveRetry); showSave('busy');
+  for (const [key, job] of [...unsaved]) {
+    try {
+      const r = await fetch(`/api/sessions/${job.day}/${job.what}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: job.body });
+      if (!r.ok) throw new Error(r.status);
+      if (unsaved.get(key) === job) unsaved.delete(key);    // a newer change may have arrived meanwhile; keep that one
+      job.after && job.after();
+    } catch { break; }
+  }
+  saveBusy = false;
+  if (unsaved.size) { showSave('err'); saveRetry = setTimeout(flushSaves, 5000); }
+  else { lastSaved = Date.now(); showSave('ok'); }
+}
+function showSave(state) {
+  const el = $('#saveState'); el.hidden = false;
+  el.className = 'savest ' + (state === 'local' ? '' : state);
+  el.innerHTML = state === 'busy' ? 'Saving…'
+    : state === 'ok' ? `All changes saved to the dock · ${new Date(lastSaved).toTimeString().slice(0, 5)}`
+    : state === 'err' ? `${unsaved.size} change${unsaved.size > 1 ? 's' : ''} not saved yet: can't reach the dock. Trying again… <button class="lnk" id="saveNow">Try now</button>`
+    : 'Changes are saved on this computer only. Open the session from the dock to share them.';
+}
+document.addEventListener('click', e => { if (e.target.id === 'saveNow') flushSaves(); });
+window.addEventListener('beforeunload', e => { if (unsaved.size) { e.preventDefault(); e.returnValue = ''; } });
+window.addEventListener('online', () => unsaved.size && flushSaves());
+
+// ---------- training panel ----------
+const KIND_COL = { Tack: '#FFC72C', Gybe: '#4CC9F0', Mark: '#F72585', Turn: '#EAF2F5' };
+const KIND_LBL = { all: 'All', Tack: 'Tacks', Gybe: 'Gybes', Mark: 'Marks' };
+const KIND_ONE = { Tack: 'Tack', Gybe: 'Gybe', Mark: 'Mark', Turn: 'Turn' };
+function jumpToTack(b, tk) {
+  tkSel = tk.t;
+  T = tk.t + shift(b) - 8000; setPlaying(false);
+  map.panTo([tk.lat, tk.lon]);
+  renderTacks(); buildBoat(b); render();
+}
+function renderTacks() {
+  const sel = $('#focus');
+  if (focusId && !boats.some(b => b.id === focusId)) focusId = '';
+  sel.innerHTML = `<option value="">${boats.length ? 'Pick a boat…' : 'No boats loaded'}</option>` + boats.map(b => `<option value="${b.id}"${b.id === focusId ? ' selected' : ''}>${esc(label(b))}</option>`).join('');
+  const b = boats.find(x => x.id === focusId);
+  const list = $('#tackList'), sum = $('#tackSum');
+  const fbtns = [...document.querySelectorAll('#tkFilter button')];
+  if (!b) {
+    list.innerHTML = ''; fbtns.forEach(x => x.disabled = true);
+    sum.textContent = boats.length ? 'Pick a boat above (or tap "Tacks & gybes" under a boat) to list its manoeuvres.' : 'Load a session to analyse tacks and gybes.';
+    return;
+  }
+  if (!b.inRace) { list.innerHTML = ''; sum.textContent = `${label(b)} wasn't on the water during this race.`; return; }
+  const tk = b.tacks || [];
+  const hasWind = wind != null;
+  const by = k => tk.filter(x => x.kind === k);
+  const tacks = by('Tack'), gybes = by('Gybe'), marks = by('Mark');
+  if (!hasWind) tkFilter = 'all';
+  fbtns.forEach(x => {
+    const v = x.dataset.v;
+    x.disabled = !hasWind && v !== 'all';
+    x.innerHTML = `${KIND_LBL[v]}<br><b>${v === 'all' ? tk.length : by(v).length}</b>`;
+    x.classList.toggle('on', v === tkFilter);
+  });
+  const avg = (arr, k) => { const v = arr.filter(x => x[k] != null); return v.length ? v.reduce((a, x) => a + x[k], 0) / v.length : null; };
+  const f0 = v => v == null ? '–' : v.toFixed(0);
+  if (!hasWind) {
+    sum.innerHTML = `<b>${tk.length}</b> turns found. Set the wind (or press Estimate) to tell tacks from gybes and measure what each one cost.`;
+  } else {
+    const row = (lbl, arr, col) => arr.length
+      ? `<span class="kk"><span class="dot" style="background:${col}"></span>${lbl} ${arr.length}</span><span>avg <b>${f0(avg(arr, 'loss'))}</b> m lost, <b>${f0(avg(arr, 'recov'))}</b> s to rebuild</span>`
+      : `<span class="kk"><span class="dot" style="background:${col}"></span>${lbl}</span><span>none</span>`;
+    const nfix = meta.fixes.filter(f => f.k === crewKey(b)).length;
+    const wrong = marks.filter(x => x.wrong).length;
+    sum.innerHTML = `<div class="tsum2">${row('Tacks', tacks, KIND_COL.Tack)}${row('Gybes', gybes, KIND_COL.Gybe)}${row('Marks', marks, KIND_COL.Mark)}</div>`
+      + (wrong ? `<div style="margin-top:4px"><span class="tp warn">!</span> ${wrong} mark${wrong > 1 ? 's' : ''} rounded the wrong way. Check the mark's side is set right.</div>` : '')
+      + (nfix ? `<div style="margin-top:4px">${nfix} correction${nfix > 1 ? 's' : ''} by you · <button class="lnk" id="fixReset">undo all</button></div>` : '')
+      + (b.stats.up != null ? `<div style="margin-top:4px">Upwind <b>${b.stats.up.toFixed(1)}</b> kn, downwind <b>${b.stats.down == null ? '–' : b.stats.down.toFixed(1)}</b> kn</div>` : '');
+  }
+  let rows = tk.filter(x => tkFilter === 'all' || x.kind === tkFilter);
+  if (tkSort === 'loss') rows = rows.slice().sort((x, y) => y.loss - x.loss);
+  if (tkSort === 'best') rows = rows.slice().sort((x, y) => x.loss - y.loss);
+  list.innerHTML = rows.length
+    ? rows.map(x => {
+        const pill = x.kind === 'Mark'
+          ? (x.dir ? `<span class="tp ${x.dir}" title="Rounded to ${x.dir === 'port' ? 'port' : 'starboard'}">${SIDE_LBL[x.dir]}</span>` : '') + (x.wrong ? '<span class="tp warn" title="Wrong way round">!</span>' : '')
+          : x.onto ? `<span class="tp ${x.onto}" title="Onto ${x.onto === 'port' ? 'port' : 'starboard'} tack">→${SIDE_LBL[x.onto]}</span>` : '';
+        const what = x.kind === 'Mark' && x.markName ? esc(x.markName) : KIND_ONE[x.kind] + ' ' + x.n;
+        return `<div class="tk${tkSel === x.t ? ' sel' : ''}" data-seek="${x.t}" role="button" tabindex="0">
+          <span class="k"><span class="dot" style="background:${KIND_COL[x.kind]}"></span>${what}${pill}${x.fixed ? '<span class="fx">edited</span>' : ''}</span>
+          <span class="m">${x.loss.toFixed(0)} m</span>
+          <select class="tkfix" data-fix="${x.t}" aria-label="Correct this" title="Wrong? Change it here">${['Tack', 'Gybe', 'Mark'].map(k => `<option value="${k}"${k === x.kind ? ' selected' : ''}>${k}</option>`).join('')}<option value="none">Not one</option></select>
+          <span class="g">${hhmm(x.t)} · ${x.before.toFixed(1)} → ${x.min.toFixed(1)} kn${x.recov == null ? '' : ' · back up to speed in ' + x.recov.toFixed(0) + 's'}</span>
+        </div>`;
+      }).join('')
+    : `<div class="empty">No ${tkFilter === 'all' ? 'manoeuvres' : KIND_LBL[tkFilter].toLowerCase()} found${raceIdx >= 0 ? ' in this race' : ''}.</div>`;
+  const s = list.querySelector('.tk.sel'); if (s) s.scrollIntoView({ block: 'nearest' });
+}
+function focusBoat(id) {
+  focusId = id; tkSel = null;
+  renderTacks(); rebuildAll(); drawChartBase();
+}
+$('#tackList').addEventListener('change', e => {
+  const sel = e.target.closest('[data-fix]'); if (!sel) return;
+  const b = boats.find(x => x.id === focusId); if (!b) return;
+  const tt = +sel.dataset.fix, k = crewKey(b);
+  meta.fixes = meta.fixes.filter(f => !(f.k === k && Math.abs(f.t - tt) < 8000));
+  meta.fixes.push({ k, t: tt, kind: sel.value });
+  saveMeta(); computeDerived(b); renderList(); renderCards(); renderTacks(); buildBoat(b); render();
+  toast(sel.value === 'none' ? 'Removed. Undo it from the summary above.' : `Marked as a ${sel.value.toLowerCase()}.`);
+});
+$('#tackSum').addEventListener('click', e => {
+  if (!e.target.closest('#fixReset')) return;
+  const b = boats.find(x => x.id === focusId); if (!b) return;
+  meta.fixes = meta.fixes.filter(f => f.k !== crewKey(b));
+  saveMeta(); computeDerived(b); renderList(); renderCards(); renderTacks(); buildBoat(b); render();
+});
+$('#tackList').addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.tk')) { e.preventDefault(); e.target.click(); } });
+$('#tackList').addEventListener('click', e => {
+  if (e.target.closest('.tkfix')) return;
+  const r = e.target.closest('[data-seek]'); if (!r) return;
+  const b = boats.find(x => x.id === focusId); if (!b) return;
+  const tk = b.tacks.find(x => x.t === +r.dataset.seek); if (tk) jumpToTack(b, tk);
+});
+$('#tkFilter').addEventListener('click', e => {
+  const x = e.target.closest('button'); if (!x || x.disabled) return;
+  tkFilter = x.dataset.v; tkSel = null;
+  renderTacks(); const b = boats.find(y => y.id === focusId); if (b) { buildBoat(b); render(); }
+});
+$('#tkSort').addEventListener('change', e => { tkSort = e.target.value; renderTacks(); });
+$('#wind').addEventListener('change', e => {
+  const v = e.target.value.trim();
+  wind = v === '' ? null : ((+v % 360) + 360) % 360;
+  if (wind != null) e.target.value = wind;
+  try { localStorage.setItem('wakeback-wind', wind == null ? '' : wind); } catch {}
+  windCtl.update(); recomputeAll();
+});
+$('#focus').addEventListener('change', e => focusBoat(e.target.value));
+const windCtl = L.control({ position: 'topright' });
+windCtl.onAdd = () => { windCtl.el = L.DomUtil.create('div', 'windctl'); windCtl.update(); return windCtl.el; };
+windCtl.update = () => {
+  if (!windCtl.el) return;
+  if (wind == null) { windCtl.el.style.display = 'none'; return; }
+  windCtl.el.style.display = 'flex';
+  windCtl.el.innerHTML = `<svg viewBox="0 0 20 20" style="transform:rotate(${wind + 180}deg)"><path d="M10 1 L15 12 L10 9.5 L5 12 Z"/></svg>Wind ${String(wind).padStart(3, '0')}°`;
+};
+windCtl.addTo(map);
+if (wind != null) $('#wind').value = wind;
+
+// ---------- dock server (optional: only when served by server/app.py) ----------
+const dock = { on: false, session: null };
+async function dockInit() {
+  try {
+    const r = await fetch('/api/sessions', { cache: 'no-store' });
+    if (!r.ok) return;
+    dock.on = true;
+    $('#dock').classList.add('on'); document.body.classList.add('dockon'); $('#tabs').hidden = false;
+    const dockBadge = async () => {
+      try {
+        const pk = (await (await fetch('/api/pucks', { cache: 'no-store' })).json()).pucks;
+        const n = pk.filter(p => (p.docked && p.charging === 'not') || (p.battery_pct != null && p.battery_pct < 30 && p.charging !== 'full')).length;
+        $('#dockWarn').textContent = n ? n : ''; $('#dockWarn').title = n ? `${n} puck${n > 1 ? 's' : ''} need attention` : '';
+      } catch {}
+    };
+    dockBadge(); setInterval(dockBadge, 30000);
+    try {
+      const info = await (await fetch('/api/dockinfo')).json();
+      $('#qrBigImg').src = $('#qrUpImg').src = '/api/qr/upload.svg';
+      $('#qrWifiImg').src = '/api/qr/wifi.svg';
+      $('#qrBigWifi').textContent = info.wifi;
+      $('#qrWifiTxt').textContent = `WiFi: ${info.wifi}` + (info.password ? `, password ${info.password}` : '');
+      $('#qrUpTxt').textContent = info.upload_url;
+    } catch {}
+    loadSailors();
+    renderSessions(await r.json());
+    setInterval(async () => {
+      try { const list = await (await fetch('/api/sessions', { cache: 'no-store' })).json(); renderSessions(list); pickUpNewTracks(list); } catch {}
+    }, 5000);
+  } catch {}
+}
+function renderSessions(list) {
+  const key = JSON.stringify(list); if (key === renderSessions.last) return; renderSessions.last = key;
+  $('#sessList').innerHTML = list.length
+    ? list.map(sx => `<button class="sess" data-sess="${esc(sx.id)}"><span class="d">${esc(sx.id)}</span><span class="n">${sx.count} track${sx.count === 1 ? '' : 's'}</span></button>`).join('')
+    : '<div class="empty">No sessions yet. Drop a puck on the pad, or run tools/fake_puck_upload.py.</div>';
+}
+$('#sessList').addEventListener('click', async e => {
+  const b = e.target.closest('[data-sess]'); if (!b) return;
+  const id = b.dataset.sess;
+  try {
+    const list = await (await fetch('/api/sessions', { cache: 'no-store' })).json();
+    const sx = list.find(x => x.id === id); if (!sx) return;
+    $('#clear').click(); dock.session = id; if (!unsaved.size) $('#saveState').hidden = true;
+    const files = await Promise.all(sx.files.map(async f => new File([await (await fetch(`/api/sessions/${id}/${f}`)).blob()], f)));
+    await loadFiles(files);
+    $('#panel').classList.remove('open');
+  } catch (err) { toast('Could not load session: ' + err.message); }
+});
+// a phone upload (or a puck landing on the pad) for the session on screen: add it without a reload
+let pulling = false;
+async function pickUpNewTracks(list) {
+  if (!dock.session || pulling) return;
+  const sx = list.find(x => x.id === dock.session); if (!sx) return;
+  const have = new Set(boats.map(b => b.file));
+  const fresh = sx.files.filter(f => !have.has(f)); if (!fresh.length) return;
+  pulling = true;
+  try {
+    const keepT = T, keepRace = raceIdx;
+    const files = await Promise.all(fresh.map(async f => new File([await (await fetch(`/api/sessions/${dock.session}/${f}`)).blob()], f)));
+    const before = boats.length;
+    await loadFiles(files, true);
+    if (keepRace >= 0 && races[keepRace]) selectRace(keepRace);
+    T = Math.max(tMin, Math.min(tMax, keepT)); render();
+    const added = boats.slice(before).map(b => b.name).join(', ');
+    if (added) toast(`New track: ${added}`, 5000);
+  } catch {} finally { pulling = false; }
+}
+async function dockUpload(file) {
+  if (!dock.on) return;
+  try {
+    const fd = new FormData(); fd.append('file', file);
+    const r = await fetch('/api/upload', { method: 'POST', body: fd });
+    if (!r.ok) throw new Error(await r.text());
+    const j = await r.json(); toast(`Saved to dock: ${j.session}/${j.file}`);
+    renderSessions(await (await fetch('/api/sessions', { cache: 'no-store' })).json());
+  } catch (err) { toast('Upload to dock failed: ' + err.message, 5000); }
+}
+
+// ---------- boat list ----------
+function fmtDur(s) { const m = Math.round(s / 60); return m >= 60 ? Math.floor(m / 60) + 'h ' + (m % 60) + 'm' : m + 'm'; }
+function renderList() {
+  const el = $('#boats');
+  if (!boats.length) { el.innerHTML = '<div class="empty">No tracks yet. Add GPX or CSV files, or drop them anywhere on the map. Try the demo to see how it works.</div>'; return; }
+  el.innerHTML = boats.map(b => `
+    <div class="boat${b.visible && b.inRace ? '' : ' off'}" style="--c:${b.color}" title="${b.inRace ? '' : 'Not on the water during this race'}">
+      <button class="sw" data-vis="${b.id}" aria-label="Show or hide ${esc(b.name)}"></button>
+      <div class="nmrow">${badge(b)}<input class="name" data-name="${b.id}" value="${esc(b.name)}" list="sailors" placeholder="Who's sailing?" aria-label="Who sailed ${puckNum(b) ? 'puck ' + puckNum(b) : 'this track'}"></div>
+      <div class="live" data-live="${b.id}">–</div>
+      <div class="meta"><span>Max <b>${b.stats.max.toFixed(1)}</b></span><span>Avg <b>${b.stats.avg.toFixed(1)}</b></span><span><b>${b.stats.dist.toFixed(2)}</b> nm</span><span>${fmtDur(b.stats.dur)}</span>${b.stats.up != null ? `<span>Up <b>${b.stats.up.toFixed(1)}</b></span>` : ''}${wind != null && b.stats.loss != null ? `<span>Tack loss <b>${b.stats.loss.toFixed(0)}</b> m</span>` : ''}${wind != null && b.stats.gloss != null ? `<span>Gybe loss <b>${b.stats.gloss.toFixed(0)}</b> m</span>` : ''}<button class="lnk" data-an="${b.id}">${wind != null ? `${b.stats.tacks || 0} tacks, ${b.stats.gybes || 0} gybes` : 'Tacks & gybes'}</button><button class="rm" data-rm="${b.id}">Remove</button></div>
+    </div>`).join('');
+}
+$('#boats').addEventListener('click', e => {
+  const v = e.target.closest('[data-vis]'), r = e.target.closest('[data-rm]'), an = e.target.closest('[data-an]');
+  if (an) { focusBoat(an.dataset.an); $('.train').scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
+  if (v) { const b = boats.find(x => x.id === v.dataset.vis); b.visible = !b.visible; buildBoat(b); recomputeTimeline(); renderList(); renderCards(); render(); }
+  if (r) { const b = boats.find(x => x.id === r.dataset.rm); if (!confirm(`Remove ${label(b)} from the view? (The file stays on the dock.)`)) return; clearLayers(b); boats = boats.filter(x => x !== b); recomputeTimeline(); renderList(); renderCards(); renderTacks(); render(); }
+});
+$('#boats').addEventListener('change', e => { const n = e.target.closest('[data-name]'); if (n) renameBoat(n.dataset.name, n.value); });
+
+// ---------- loading ----------
+async function addBoats(list) {
+  list.forEach(b => { if (puckNum(b)) b.color = COLORS[(puckNum(b) - 1) % COLORS.length]; boats.push(b); });
+  // pucks in number order, phone/watch tracks after
+  boats.sort((x, y) => (puckNum(x) ?? 1e9) - (puckNum(y) ?? 1e9) || x.start - y.start);
+  // non-puck tracks get colours not used by a puck in this session
+  const used = new Set(boats.filter(puckNum).map(x => x.color)); let ci = 0;
+  boats.filter(x => !puckNum(x)).forEach(x => { while (used.has(COLORS[ci % COLORS.length]) && ci < 64) ci++; x.color = COLORS[ci++ % COLORS.length]; });
+  await loadCrew();
+  boats.forEach(b => { if (crew[crewKey(b)]) b.name = crew[crewKey(b)]; });
+  rememberSailors(boats.map(b => b.name));
+  await loadRaces();
+  await loadMeta();
+  boats.forEach(computeDerived);
+  computeStartFinish();
+  renderMarks();
+  recomputeTimeline(); T = tMin; renderList(); renderCards(); renderTacks(); renderRaces(); rebuildAll(); fit();
+}
+function fit() {
+  const vis = boats.filter(b => b.visible && b.inRace); if (!vis.length) return;
+  let s = 90, n = -90, w = 180, e = -180;
+  vis.forEach(b => { for (let i = b.i0; i <= b.i1; i += 10) { s = Math.min(s, b.lat[i]); n = Math.max(n, b.lat[i]); w = Math.min(w, b.lon[i]); e = Math.max(e, b.lon[i]); } });
+  map.fitBounds([[s, w], [n, e]], { padding: [30, 30] });
+}
+async function loadFiles(files, quiet) {
+  const ok = [], bad = [];
+  for (const f of files) {
+    try {
+      const text = await f.text();
+      const isGpx = /\.gpx$/i.test(f.name) || /<gpx[\s>]/i.test(text.slice(0, 500));
+      const { name, pts } = isGpx ? parseGPX(text) : parseCSV(text);
+      const pm = f.name.match(/puck[_ -]?(\d+)/i);
+      const fileName = f.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ');
+      const b = prepare(pm ? 'Puck ' + +pm[1] : (name || fileName), pts);
+      b.file = f.name; b.fileName = name || fileName;
+      if (pm) b.puck = 'puck' + +pm[1];
+      ok.push(b);
+    } catch (err) { bad.push(`${f.name}: ${err.message}`); }
+  }
+  if (ok.length) await addBoats(ok);
+  if (bad.length) toast('Skipped ' + bad.join('; '), 6000);
+  else if (ok.length && !quiet) toast(`Added ${ok.length} track${ok.length > 1 ? 's' : ''}`);
+}
+$('#file').addEventListener('change', e => { const fs = [...e.target.files]; loadFiles(fs); fs.forEach(dockUpload); e.target.value = ''; });
+let dragDepth = 0;
+window.addEventListener('dragenter', e => { e.preventDefault(); dragDepth++; $('#drop').classList.add('show'); });
+window.addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; $('#drop').classList.remove('show'); } });
+window.addEventListener('dragover', e => e.preventDefault());
+window.addEventListener('drop', e => { e.preventDefault(); dragDepth = 0; $('#drop').classList.remove('show'); const fs = [...e.dataTransfer.files]; loadFiles(fs); fs.forEach(dockUpload); });
+
+// ---------- export ----------
+$('#export').addEventListener('click', () => {
+  if (!boats.length) return toast('Add some tracks first');
+  const trk = boats.map(b => {
+    let s = `<trk><name>${esc(b.name)}</name><trkseg>\n`;
+    for (let i = 0; i < b.n; i++) s += `<trkpt lat="${b.lat[i].toFixed(7)}" lon="${b.lon[i].toFixed(7)}"><time>${new Date(b.t[i]).toISOString()}</time></trkpt>\n`;
+    return s + '</trkseg></trk>';
+  }).join('\n');
+  const gpx = `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="WakeBack" xmlns="http://www.topografix.com/GPX/1/1">\n${trk}\n</gpx>`;
+  const d = new Date(boats[0].start).toISOString().slice(0, 10);
+  if (window.WakeBackApp) { WakeBackApp.postMessage(JSON.stringify({ type: 'save', name: `wakeback-${d}.gpx`, mime: 'application/gpx+xml', data: gpx })); return; }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([gpx], { type: 'application/gpx+xml' }));
+  a.download = `wakeback-${d}.gpx`; document.body.appendChild(a); a.click(); a.remove();
+  toast('Downloaded ' + a.download);
+});
+$('#clear').addEventListener('click', () => { boats.forEach(clearLayers); boats = []; colourIdx = 0; focusId = ''; tkSel = null; crew = {}; races = []; raceIdx = -1; meta = { marks: [], fixes: [], lines: [] }; setAdding(false); addingLine = null; sfState = null; setPlaying(false); recomputeTimeline(); renderList(); renderCards(); renderTacks(); renderRaces(); render(); });
+$('#metric').addEventListener('change', drawChartBase);
+
+// ---------- controls ----------
+document.querySelectorAll('.seg[data-opt]').forEach(seg => seg.addEventListener('click', e => {
+  const btn = e.target.closest('button'); if (!btn) return;
+  seg.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === btn));
+  const v = btn.dataset.v, opt = seg.dataset.opt;
+  if (opt === 'colour') {
+    colourMode = v;
+    $('#speedLegend').style.display = v === 'speed' ? 'block' : 'none';
+    $('#tackLegend').style.display = v === 'tack' ? 'flex' : 'none';
+    if (v === 'tack' && wind == null) toast('Set the wind (or press Estimate) to colour by tack');
+    rebuildAll();
+  }
+  if (opt === 'timing') { timing = v; T = -Infinity; recomputeTimeline(); T = tMin; render(); }
+  if (opt === 'base') {
+    if (v === 'sat') { map.removeLayer(osm); map.removeLayer(seamarks); sat.addTo(map); }
+    else { map.removeLayer(sat); osm.addTo(map); seamarks.addTo(map); }
+  }
+}));
+$('#trailOnly').addEventListener('change', rebuildAll);
+$('#play').addEventListener('click', () => setPlaying(!playing));
+$('#scrub').addEventListener('input', e => { T = tMin + (tMax - tMin) * e.target.value / 10000; render(); });
+$('#fit').addEventListener('click', fit);
+$('#togglePanel').addEventListener('click', () => $('#panel').classList.toggle('open'));
+$('#closePanel').addEventListener('click', () => $('#panel').classList.remove('open'));
+$('#qrBtn').addEventListener('click', () => { $('#qrModal').hidden = false; $('#qrClose').focus(); });
+$('#qrClose').addEventListener('click', () => { $('#qrModal').hidden = true; });
+$('#qrModal').addEventListener('click', e => { if (e.target.id === 'qrModal') $('#qrModal').hidden = true; });
+map.on('click', () => $('#panel').classList.remove('open'));
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !$('#qrModal').hidden) { $('#qrModal').hidden = true; return; }
+  if (e.key === 'Escape' && addingMark) { setAdding(false); return; }
+  if (e.key === 'Escape' && addingLine) { setAddingLine(null); return; }
+  if (e.target.matches('input, select')) return;
+  if (e.code === 'Space' && boats.length) { e.preventDefault(); setPlaying(!playing); }
+  if (e.key === 'b' || e.key === 'B') setBig(!document.body.classList.contains('big'));
+  if (e.key === 'f' || e.key === 'F') $('#fs').click();
+});
+
+// ---------- demo: three Solos on Marine Lake (approximate) ----------
+function rng(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function simBoat(name, baseKn, seed, startOffset, heelUp, puck) {
+  const R = rng(seed), C = [53.6503, -3.0102], WIND = 25;
+  const u = [Math.sin(rad(WIND)), Math.cos(rad(WIND))], v = [Math.cos(rad(WIND)), -Math.sin(rad(WIND))];
+  const mk = (a, c) => [u[0]*a + v[0]*c, u[1]*a + v[1]*c];
+  const marks = [mk(380, 10), mk(-360, 45), mk(-120, -45)];
+  let x = marks[2][0] + startOffset, y = marks[2][1] - 15, side = 1, tackT = -99, mi = 0, laps = 0, dside = 1;
+  const dt = 0.5, t0 = Date.parse('2026-09-20T10:30:00Z'), pts = [];
+  for (let s = 0; s < 3 * 3600 && laps < 3; s += dt) {
+    const tx = marks[mi][0] - x, ty = marks[mi][1] - y, d = Math.hypot(tx, ty);
+    if (d < 12) { mi = (mi + 1) % 3; if (mi === 0) laps++; continue; }
+    const want = (Math.atan2(tx, ty) * 180 / Math.PI + 360) % 360;
+    let diff = ((want - WIND + 540) % 360) - 180, hdg, k, heel, pitch;
+    if (Math.abs(diff) < 42) {
+      const lat = x * v[0] + y * v[1];
+      if (lat * side > 60) { side = -side; tackT = s; }
+      hdg = WIND + side * 42; k = 0.82; heel = side * heelUp; pitch = -1;
+    } else if (Math.abs(diff) > 140) {
+      const lat = x * v[0] + y * v[1] - (marks[mi][0] * v[0] + marks[mi][1] * v[1]);
+      if (lat * dside > 35) { dside = -dside; tackT = s; }
+      hdg = WIND + 180 - dside * 22; k = 0.95; heel = -dside * heelUp * 0.25; pitch = 3;
+    } else { hdg = want; k = 1.15; heel = Math.sign(diff) * heelUp * 0.7; pitch = 0.5; }
+    const since = s - tackT; if (since < 8) { k *= 0.55 + 0.45 * since / 8; heel *= since / 8; }
+    heel += 2.5 * Math.sin(s / 3.1 + seed) + 1.5 * (R() - 0.5); pitch += 1.2 * Math.sin(s / 2.3 + seed) + 0.8 * (R() - 0.5);
+    const kn = baseKn * k * (1 + 0.07 * Math.sin(s / 9 + seed) + 0.06 * (R() - 0.5));
+    const ms = kn / KN;
+    x += Math.sin(rad(hdg)) * ms * dt; y += Math.cos(rad(hdg)) * ms * dt;
+    const nx = x + (R() - 0.5) * 1.2, ny = y + (R() - 0.5) * 1.2;
+    pts.push({ t: t0 + s * 1000, lat: C[0] + ny / 111320, lon: C[1] + nx / (111320 * Math.cos(rad(C[0]))), sog: null, heel, pitch, hdg: hdg % 360 });
+  }
+  const b = prepare(name, pts); b.puck = puck; b.fileName = name; return b;
+}
+function demoMarks() {
+  // same course the demo boats sail (clockwise, so every mark is left to starboard)
+  const C = [53.6503, -3.0102], WIND = 25, u = [Math.sin(rad(WIND)), Math.cos(rad(WIND))], v = [Math.cos(rad(WIND)), -Math.sin(rad(WIND))];
+  const mk = (a, c) => [u[0]*a + v[0]*c, u[1]*a + v[1]*c];
+  return [['Windward', mk(380, 10)], ['Leeward', mk(-360, 45)], ['Mark 3', mk(-120, -45)]].map(([name, [x, y]]) =>
+    ({ id: newId(), name, lat: C[0] + y / 111320, lon: C[1] + x / (111320 * Math.cos(rad(C[0]))), side: 'stbd' }));
+}
+function demoLines() {
+  // start line just upwind of where the demo boats set off; finish line just below Mark 3
+  const C = [53.6503, -3.0102], WIND = 25, u = [Math.sin(rad(WIND)), Math.cos(rad(WIND))], v = [Math.cos(rad(WIND)), -Math.sin(rad(WIND))];
+  const m3 = [u[0]*-120 + v[0]*-45, u[1]*-120 + v[1]*-45];
+  const ll = ([x, y]) => ({ lat: C[0] + y / 111320, lon: C[1] + x / (111320 * Math.cos(rad(C[0]))) });
+  const sc = [m3[0] + u[0]*6, m3[1] - 15 + u[1]*6], fc = [m3[0] - u[0]*18, m3[1] - u[1]*18];
+  return [
+    { id: newId(), kind: 'start', a: ll([sc[0] + v[0]*35, sc[1] + v[1]*35]), b: ll([sc[0] - v[0]*35, sc[1] - v[1]*35]) },
+    { id: newId(), kind: 'finish', a: ll([fc[0] + v[0]*30, fc[1] + v[1]*30]), b: ll([fc[0] - v[0]*30, fc[1] - v[1]*30]) },
+  ];
+}
+$('#demo').addEventListener('click', async () => {
+  if (wind == null) { wind = 25; $('#wind').value = 25; windCtl.update(); }
+  dock.session = null; $('#clear').click();
+  await addBoats([simBoat('James 5154', 4.6, 11, 0, 12, 'puck1'), simBoat('Dave', 4.4, 23, 8, 5, 'puck2'), simBoat('Mike', 4.2, 37, -8, 24, 'puck3')]);
+  meta.marks = demoMarks(); meta.lines = demoLines(); saveMeta(); recomputeAll(); renderMarks();
+  toast('Demo loaded: three Solos, three laps. Press Play, then B for big screen.');
+});
+
+renderList(); renderChips(); renderRaces(); renderMarks(); recomputeTimeline(); render(); dockInit();
+})();
+</script>
+</body>
+</html>

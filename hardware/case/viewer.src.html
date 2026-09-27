@@ -1,0 +1,187 @@
+<meta charset="utf-8">
+<title>WakeBack Case</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#EEF2F3; --panel:#FFFFFF; --ink:#16252E; --muted:#56666F; --line:#D5DDE1;
+  --stage:#DCE4E8; --accent:#E0A800; --accent-ink:#3B2C00; --focus:#2A6F97;
+  --body:'Barlow',system-ui,-apple-system,'Segoe UI',sans-serif;
+  --display:'Barlow Condensed','Arial Narrow',sans-serif;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){ --bg:#0F1A20; --panel:#16242C; --ink:#E6EEF1; --muted:#9AB0BA; --line:#2A3C46; --stage:#1B2B34; --accent:#FFC72C; --accent-ink:#2A1F00; --focus:#7FC4EA; color-scheme:dark; }
+}
+:root[data-theme="dark"]{ --bg:#0F1A20; --panel:#16242C; --ink:#E6EEF1; --muted:#9AB0BA; --line:#2A3C46; --stage:#1B2B34; --accent:#FFC72C; --accent-ink:#2A1F00; --focus:#7FC4EA; color-scheme:dark; }
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:16px;line-height:1.5;padding-inline:16px;padding-block:18px 32px}
+.wrap{max-width:1180px;margin:0 auto;display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:18px;align-items:start}
+@media (max-width:860px){.wrap{grid-template-columns:1fr}}
+header{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 16px}
+h1{font-family:var(--display);font-weight:700;font-size:40px;line-height:1;margin:0;letter-spacing:.01em}
+h1 b{color:var(--accent)}
+header p{margin:0;color:var(--muted);max-width:62ch}
+h2{font-family:var(--display);font-weight:600;font-size:21px;margin:0 0 8px;letter-spacing:.01em}
+.stage{position:relative;background:var(--stage);border:1px solid var(--line);border-radius:10px;overflow:hidden;aspect-ratio:4/3;max-width:100%}
+#c{display:block;width:100%;height:100%;touch-action:none}
+.hint{position:absolute;left:12px;bottom:10px;font-size:13px;color:var(--muted);pointer-events:none}
+.loading{position:absolute;inset:0;display:grid;place-items:center;color:var(--muted);font-size:15px}
+.controls{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;margin-top:12px}
+.controls label{display:flex;align-items:center;gap:7px;font-size:15px;cursor:pointer}
+input[type=checkbox]{width:18px;height:18px;accent-color:var(--accent)}
+.slider{display:flex;align-items:center;gap:10px;flex:1 1 240px}
+.slider span{font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;white-space:nowrap}
+input[type=range]{flex:1;accent-color:var(--accent)}
+.side{display:flex;flex-direction:column;gap:18px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.legend{display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;font-size:14px}
+.legend i{display:inline-block;width:11px;height:11px;border-radius:2px;margin-right:7px;vertical-align:-1px}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th{text-align:left;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600;padding:0 6px 6px 0}
+td{padding:6px 6px 6px 0;border-top:1px solid var(--line);vertical-align:top}
+td.n{font-family:var(--mono);font-size:12.5px;font-variant-numeric:tabular-nums;white-space:nowrap}
+ul{margin:0;padding-left:18px;font-size:14.5px;display:flex;flex-direction:column;gap:4px}
+.spec{font-family:var(--mono);font-size:12.5px;display:grid;grid-template-columns:auto 1fr;gap:3px 12px}
+.spec dt{color:var(--muted)}
+.spec dd{margin:0}
+[hidden]{display:none!important}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>Wake<b>Back</b> case</h1>
+    <p>Round puck, 86 mm across and 37 mm tall. Screw-on lid with an O-ring, GPS on a shelf under the lid, twist-lock cradle for the deck. Drag to turn it, pinch or scroll to zoom.</p>
+  </header>
+
+  <section>
+    <div class="stage">
+      <canvas id="c" aria-label="3D model of the WakeBack case"></canvas>
+      <div class="loading" id="loading">Loading the model…</div>
+      <div class="hint">The small arrow on the side of the base points to the bow</div>
+    </div>
+    <div class="controls">
+      <div class="slider"><span>Together</span><input id="explode" type="range" min="0" max="1" step="0.01" value="0.55" aria-label="Pull the parts apart"><span>Apart</span></div>
+      <label><input id="cut" type="checkbox"> Cut in half</label>
+      <label><input id="inside" type="checkbox" checked> Parts inside</label>
+      <label><input id="lid" type="checkbox" checked> Lid</label>
+      <label><input id="cradle" type="checkbox" checked> Cradle</label>
+    </div>
+  </section>
+
+  <aside class="side">
+    <div class="card">
+      <h2>Colours</h2>
+      <div class="legend" id="legend"></div>
+    </div>
+    <div class="card">
+      <h2>Print these</h2>
+      <table>
+        <tr><th>Part</th><th>Size, mm</th><th>Weight</th></tr>
+        <tr><td>Base</td><td class="n">80 × 82 × 36</td><td class="n">~44 g</td></tr>
+        <tr><td>Lid, top face down</td><td class="n">86 × 86 × 10</td><td class="n">~21 g</td></tr>
+        <tr><td>GPS shelf, flat side down</td><td class="n">30 × 49 × 9</td><td class="n">~2 g</td></tr>
+        <tr><td>Cradle</td><td class="n">90 × 94 × 12</td><td class="n">~30 g</td></tr>
+      </table>
+      <dl class="spec" style="margin:12px 0 0">
+        <dt>Material</dt><dd>PETG or ASA</dd>
+        <dt>Layer</dt><dd>0.2 mm</dd>
+        <dt>Walls</dt><dd>5 perimeters</dd>
+        <dt>Top/bottom</dt><dd>6 layers</dd>
+        <dt>Infill</dt><dd>40 % gyroid</dd>
+        <dt>Supports</dt><dd>none</dd>
+      </dl>
+    </div>
+    <div class="card">
+      <h2>Also buy</h2>
+      <ul>
+        <li>O-ring 70 × 2 mm, nitrile</li>
+        <li>2 × M2.5 × 20 mm stainless screws (board and GPS shelf)</li>
+        <li>1 × M2.5 × 8 mm stainless screw (third board hole)</li>
+        <li>1 mm foam pad for the top of the GPS</li>
+        <li>3 × No.6 countersunk stainless screws for the cradle, or a strap</li>
+        <li>A little silicone grease for the O-ring</li>
+      </ul>
+    </div>
+  </aside>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "__THREE__/build/three.module.min.js", "three/addons/": "__THREE__/examples/jsm/" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+const GLB = '__GLB__';
+const NAMES = { base:'Base', lid:'Lid', bridge:'GPS shelf', cradle:'Cradle', battery:'Battery', 'Qi coil':'Qi coil', 'Qi board':'Qi receiver',
+  board:'Carrier board', TP4056:'TP4056 charger', XIAO:'XIAO', IMU:'Heel sensor', GPS:'GPS' };
+const INSIDE = ['battery','Qi coil','Qi board','board','TP4056','XIAO','IMU','GPS'];
+// how far each part moves (mm, upward) when pulled apart
+const LIFT = { cradle:-26, base:0, battery:0, 'Qi coil':0, 'Qi board':0, board:16, TP4056:16, XIAO:16, IMU:16, bridge:34, GPS:34, lid:56 };
+
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true, alpha:true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.localClippingEnabled = true;
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(32, 4/3, 1, 2000);
+camera.position.set(150, 120, 190);
+const controls = new OrbitControls(camera, canvas);
+controls.target.set(0, 12, 0); controls.enableDamping = true;
+scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 1.6));
+const sun = new THREE.DirectionalLight(0xffffff, 1.9); sun.position.set(120, 220, 160); scene.add(sun);
+const fill = new THREE.DirectionalLight(0xffffff, 0.6); fill.position.set(-150, 60, -120); scene.add(fill);
+
+const root = new THREE.Group(); root.rotation.x = -Math.PI / 2; scene.add(root);   // model is Z-up
+const cutPlane = new THREE.Plane(new THREE.Vector3(0, 0, -1), -3);                   // keep the bow half (model y > 3)
+const parts = {};
+
+function resize(){
+  const r = canvas.getBoundingClientRect();
+  renderer.setSize(r.width, r.height, false);
+  camera.aspect = r.width / r.height; camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(canvas);
+
+const bin = Uint8Array.from(atob(GLB), c => c.charCodeAt(0)).buffer;
+new GLTFLoader().parse(bin, '', gltf => {
+  gltf.scene.traverse(o => {
+    if (!o.isMesh) return;
+    const n = o.name in LIFT ? o.name : (o.parent && o.parent.name in LIFT ? o.parent.name : o.name);
+    o.material = o.material.clone();
+    o.material.side = THREE.DoubleSide;
+    o.material.metalness = 0; o.material.roughness = 0.72; o.material.flatShading = true;
+    parts[n] = o;
+  });
+  // move every part into our Z-up group, dropping any transform the file carried
+  Object.values(parts).forEach(o => { o.removeFromParent(); o.position.set(0, 0, 0); o.rotation.set(0, 0, 0); o.scale.set(1, 1, 1); root.add(o); });
+  const lg = document.getElementById('legend');
+  Object.entries(NAMES).forEach(([k, label]) => {
+    if (!parts[k]) return;
+    const c = '#' + parts[k].material.color.getHexString(THREE.SRGBColorSpace);
+    const d = document.createElement('div'); d.innerHTML = `<i style="background:${c}"></i>${label}`; lg.appendChild(d);
+  });
+  document.getElementById('loading').hidden = true;
+  apply();
+}, err => { document.getElementById('loading').textContent = 'The model could not be loaded.'; console.error(err); });
+
+const $ = id => document.getElementById(id);
+function apply(){
+  const t = +$('explode').value, cut = $('cut').checked;
+  for (const [n, o] of Object.entries(parts)){
+    o.position.z = (LIFT[n] || 0) * t;
+    o.visible = !(INSIDE.includes(n) && !$('inside').checked) && !(n === 'lid' && !$('lid').checked) && !(n === 'cradle' && !$('cradle').checked);
+    o.material.clippingPlanes = cut ? [cutPlane] : [];
+    o.material.needsUpdate = true;
+  }
+}
+['explode','cut','inside','lid','cradle'].forEach(id => $(id).addEventListener('input', apply));
+
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+(function loop(){ controls.update(); renderer.render(scene, camera); requestAnimationFrame(loop); })();
+if (!reduce){ controls.autoRotate = true; controls.autoRotateSpeed = 0.6; canvas.addEventListener('pointerdown', () => controls.autoRotate = false, { once:true }); }
+</script>

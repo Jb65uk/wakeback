@@ -1,0 +1,450 @@
+#!/usr/bin/env python3
+"""WakeBack dock server.
+
+Runs on the dock Pi (or your laptop for development). It:
+  - serves the viewer at /
+  - lists sessions (folders of track files) at /api/sessions
+  - serves track files from data/sessions/<date>/<file>
+  - accepts uploads from pucks at POST /api/upload (multipart, field "file")
+  - accepts uploads from the browser (drag-drop in the viewer) the same way
+  - stores who sailed which puck, per session, at /api/sessions/<day>/crew
+
+Run:  python server/app.py            (http://localhost:5000)
+"""
+import os, re, json, threading, time, shutil, socket, subprocess
+from datetime import datetime, timezone
+from flask import Flask, request, jsonify, send_from_directory, abort
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SESSIONS = os.path.join(ROOT, 'data', 'sessions')
+VIEWER = os.path.join(ROOT, 'viewer')
+os.makedirs(SESSIONS, exist_ok=True)
+lock = threading.Lock()
+PUCKS = os.path.join(ROOT, 'data', 'pucks.json')
+BOOT = time.time()
+
+app = Flask(__name__, static_folder=None)
+SAFE_RE = re.compile(r'^[A-Za-z0-9._ -]+$')
+
+class _Safe:
+    """Allowed day/file names. Also refuses "." and "..", so nothing outside data/sessions can be read or deleted."""
+    def match(self, s): return SAFE_RE.match(s) if s not in ('.', '..') else None
+SAFE = _Safe()
+
+def first_timestamp(path):
+    """Read the first timestamp in a CSV (t_ms) or GPX (<time>) so a session is filed by sailing date, not upload date."""
+    try:
+        with open(path, 'r', errors='ignore') as f:
+            head = f.read(4000)
+        if path.lower().endswith('.gpx'):
+            m = re.search(r'<time>([^<]+)</time>', head)
+            return datetime.fromisoformat(m.group(1).replace('Z', '+00:00')) if m else None
+        lines = head.splitlines()
+        if len(lines) < 2: return None
+        cols = [c.strip().lower() for c in lines[0].split(',')]
+        ti = next((i for i, c in enumerate(cols) if c.startswith('t')), 0)
+        v = float(lines[1].split(',')[ti])
+        if v > 1e12: v /= 1000
+        return datetime.fromtimestamp(v, tz=timezone.utc)
+    except Exception:
+        return None
+
+# ---------- viewer ----------
+@app.get('/')
+def index():
+    return send_from_directory(VIEWER, 'index.html')
+
+@app.get('/viewer/<path:p>')
+def viewer_static(p):
+    return send_from_directory(VIEWER, p)
+
+# ---------- sessions ----------
+@app.get('/api/sessions')
+def sessions():
+    out = []
+    for day in sorted(os.listdir(SESSIONS), reverse=True):
+        d = os.path.join(SESSIONS, day)
+        if not os.path.isdir(d): continue
+        files = sorted(f for f in os.listdir(d) if f.lower().endswith(('.csv', '.gpx')))
+        if files:
+            races = 0
+            try:
+                with open(os.path.join(d, 'races.json')) as f: races = len(json.load(f))
+            except (OSError, ValueError): pass
+            out.append({'id': day, 'files': files, 'count': len(files), 'races': races})
+    return jsonify(out)
+
+@app.get('/api/sessions/<day>/<name>')
+def track(day, name):
+    if not (SAFE.match(day) and SAFE.match(name)): abort(400)
+    return send_from_directory(os.path.join(SESSIONS, day), name)
+
+@app.post('/api/upload')
+def upload():
+    """Pucks and the browser both post here. Field: file. Optional: puck (e.g. 'puck3')."""
+    f = request.files.get('file')
+    if not f or not f.filename: return jsonify(error='no file'), 400
+    # phones name files all sorts of ways ("Morning sail (2).GPX"): tidy rather than refuse
+    name = re.sub(r'[^A-Za-z0-9._ -]+', '_', os.path.basename(f.filename)).strip(' ._') or 'track.gpx'
+    if not name.lower().endswith(('.csv', '.gpx')):
+        return jsonify(error='That file isn\'t a GPX or CSV track. In your sailing app, look for "Export GPX".'), 400
+    puck = request.form.get('puck', '')
+    if puck and not name.lower().startswith(puck.lower()):
+        name = f'{puck}_{name}'
+    tmp = os.path.join(SESSIONS, '.incoming_' + name)
+    f.save(tmp)
+    when = first_timestamp(tmp) or datetime.now(timezone.utc)
+    day = when.strftime('%Y-%m-%d')
+    dest_dir = os.path.join(SESSIONS, day); os.makedirs(dest_dir, exist_ok=True)
+    dest = os.path.join(dest_dir, name)
+    with lock:
+        base, ext = os.path.splitext(name); n = 1
+        while os.path.exists(dest):
+            n += 1; dest = os.path.join(dest_dir, f'{base}-{n}{ext}')
+        os.replace(tmp, dest)
+        pm = re.match(r'puck[_ -]?(\d+)', os.path.basename(dest), re.I)
+        if pm:
+            pk = f'puck{int(pm.group(1))}'
+            m = load_pucks(); r = m.setdefault(pk, {})
+            r['last_upload'] = {'time': int(time.time() * 1000), 'session': day, 'file': os.path.basename(dest), 'bytes': os.path.getsize(dest)}
+            save_pucks(m)
+        # uploaded from the phone page with a name: that's who sailed it
+        sailor = request.form.get('sailor', '').strip()[:40]
+        if sailor:
+            cp = os.path.join(dest_dir, 'crew.json')
+            try:
+                with open(cp) as fh: crew = json.load(fh)
+            except (OSError, ValueError): crew = {}
+            crew[os.path.basename(dest)] = sailor
+            with open(cp, 'w') as fh: json.dump(crew, fh, indent=1)
+    return jsonify(ok=True, session=day, file=os.path.basename(dest))
+
+@app.delete('/api/sessions/<day>/<name>')
+def delete_track(day, name):
+    if not (SAFE.match(day) and SAFE.match(name)): abort(400)
+    p = os.path.join(SESSIONS, day, name)
+    if not os.path.exists(p): abort(404)
+    os.remove(p)
+    return jsonify(ok=True)
+
+def clean_marks(ms):
+    """Course marks: name, position, and which side to leave them (port = red, stbd = green)."""
+    out = []
+    for m in (ms if isinstance(ms, list) else [])[:30]:
+        try:
+            lat, lon = float(m['lat']), float(m['lon'])
+            if not (-90 <= lat <= 90 and -180 <= lon <= 180): continue
+            out.append({'id': str(m.get('id', ''))[:16], 'name': str(m.get('name', 'Mark'))[:30], 'lat': lat, 'lon': lon,
+                        'side': 'stbd' if m.get('side') == 'stbd' else 'port'})
+        except (KeyError, TypeError, ValueError): pass
+    return out
+
+def clean_lines(ls):
+    """Start/finish lines: kind, committee boat end (a) and pin end (b)."""
+    out = []
+    for l in (ls if isinstance(ls, list) else [])[:6]:
+        try:
+            ends = {}
+            for w in ('a', 'b'):
+                lat, lon = float(l[w]['lat']), float(l[w]['lon'])
+                if not (-90 <= lat <= 90 and -180 <= lon <= 180): raise ValueError
+                ends[w] = {'lat': lat, 'lon': lon}
+            out.append({'id': str(l.get('id', ''))[:16], 'kind': l.get('kind') if l.get('kind') in ('start', 'finish', 'both') else 'start', **ends})
+        except (KeyError, TypeError, ValueError): pass
+    return out
+
+def clean_gun(v):
+    try: return int(v) if v else None
+    except (TypeError, ValueError): return None
+
+# ---------- session meta: whole-session marks and your corrections to tacks/gybes/marks ----------
+@app.get('/api/sessions/<day>/meta')
+def get_meta(day):
+    if not SAFE.match(day): abort(400)
+    try:
+        with open(os.path.join(SESSIONS, day, 'meta.json')) as f: return jsonify(json.load(f))
+    except (OSError, ValueError): return jsonify({})
+
+@app.put('/api/sessions/<day>/meta')
+def put_meta(day):
+    if not SAFE.match(day): abort(400)
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict): return jsonify(error='expected an object'), 400
+    fixes = []
+    for f in (body.get('fixes') if isinstance(body.get('fixes'), list) else [])[:2000]:
+        try:
+            if f['kind'] in ('Tack', 'Gybe', 'Mark', 'none'): fixes.append({'k': str(f['k'])[:80], 't': int(f['t']), 'kind': f['kind']})
+        except (KeyError, TypeError, ValueError): pass
+    clean = {'marks': clean_marks(body.get('marks')), 'fixes': fixes, 'lines': clean_lines(body.get('lines'))}
+    if clean_gun(body.get('gun')): clean['gun'] = clean_gun(body.get('gun'))
+    d = os.path.join(SESSIONS, day); os.makedirs(d, exist_ok=True)
+    with lock:
+        with open(os.path.join(d, 'meta.json'), 'w') as f: json.dump(clean, f, indent=1)
+    return jsonify(clean)
+
+# ---------- races (time windows within a session day, each with its own marks) ----------
+@app.get('/api/sessions/<day>/races')
+def get_races(day):
+    if not SAFE.match(day): abort(400)
+    try:
+        with open(os.path.join(SESSIONS, day, 'races.json')) as f: return jsonify(json.load(f))
+    except (OSError, ValueError): return jsonify([])
+
+@app.put('/api/sessions/<day>/races')
+def put_races(day):
+    if not SAFE.match(day): abort(400)
+    body = request.get_json(silent=True)
+    if not isinstance(body, list): return jsonify(error='expected a list'), 400
+    clean = []
+    for r in body:
+        try:
+            st, en = int(r['start']), int(r['end'])
+            if en > st:
+                race = {'name': str(r.get('name', 'Race'))[:40], 'start': st, 'end': en, 'marks': clean_marks(r.get('marks')), 'lines': clean_lines(r.get('lines'))}
+                if clean_gun(r.get('gun')): race['gun'] = clean_gun(r.get('gun'))
+                clean.append(race)
+        except (KeyError, TypeError, ValueError): pass
+    clean.sort(key=lambda r: r['start'])
+    d = os.path.join(SESSIONS, day); os.makedirs(d, exist_ok=True)
+    with lock:
+        with open(os.path.join(d, 'races.json'), 'w') as f: json.dump(clean, f, indent=1)
+    return jsonify(clean)
+
+# ---------- crew: who had which puck, per session ----------
+# Puck numbers never change; pucks get handed out differently each time, so names live with the session.
+@app.get('/api/sessions/<day>/crew')
+def get_crew(day):
+    if not SAFE.match(day): abort(400)
+    try:
+        with open(os.path.join(SESSIONS, day, 'crew.json')) as f: return jsonify(json.load(f))
+    except (OSError, ValueError): return jsonify({})
+
+@app.put('/api/sessions/<day>/crew')
+def put_crew(day):
+    if not SAFE.match(day): abort(400)
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict): return jsonify(error='expected an object'), 400
+    clean = {str(k)[:80]: str(v).strip()[:40] for k, v in body.items() if str(v).strip()}
+    d = os.path.join(SESSIONS, day); os.makedirs(d, exist_ok=True)
+    with lock:
+        with open(os.path.join(d, 'crew.json'), 'w') as f: json.dump(clean, f, indent=1)
+    return jsonify(clean)
+
+@app.get('/api/sailors')
+def sailors():
+    """Every name used in any session, for the name picker."""
+    names = set()
+    for day in os.listdir(SESSIONS):
+        try:
+            with open(os.path.join(SESSIONS, day, 'crew.json')) as f: names.update(json.load(f).values())
+        except (OSError, ValueError, AttributeError): pass
+    return jsonify(sorted(names, key=str.lower))
+
+# ---------- phone uploads: QR codes for the projector, and a simple upload page ----------
+# Set these to match the dock's own WiFi (the Pi access point). Defaults suit a dev laptop.
+WIFI_SSID = os.environ.get('WAKEBACK_WIFI', 'wakeback')
+WIFI_PASS = os.environ.get('WAKEBACK_WIFI_PASS', '')
+PUBLIC_URL = os.environ.get('WAKEBACK_URL', '')          # e.g. http://wakeback.local  (blank: use whatever address the browser used)
+
+def upload_url():
+    return (PUBLIC_URL.rstrip('/') or request.host_url.rstrip('/')) + '/upload'
+
+def wifi_qr_text():
+    esc = lambda v: re.sub(r'([\\;,:"])', r'\\\1', v)
+    return f'WIFI:T:{"WPA" if WIFI_PASS else "nopass"};S:{esc(WIFI_SSID)};' + (f'P:{esc(WIFI_PASS)};' if WIFI_PASS else '') + ';'
+
+@app.get('/api/dockinfo')
+def dockinfo():
+    return jsonify(wifi=WIFI_SSID, password=WIFI_PASS, upload_url=upload_url())
+
+@app.get('/api/qr/<what>.svg')
+def qr(what):
+    import segno
+    if what == 'wifi': data = wifi_qr_text()
+    elif what == 'upload': data = upload_url()
+    else: abort(404)
+    import io
+    buf = io.BytesIO()
+    # a full SVG document (with xmlns), so browsers will show it in an <img>
+    segno.make(data, error='m').save(buf, kind='svg', scale=8, border=2, dark='#13293A', light='#FFFFFF')
+    return app.response_class(buf.getvalue(), mimetype='image/svg+xml', headers={'Cache-Control': 'no-store'})
+
+@app.get('/upload')
+def upload_page():
+    return send_from_directory(VIEWER, 'upload.html')
+
+# ---------- dock: puck check-ins, status, internet ----------
+def load_pucks():
+    try:
+        with open(PUCKS) as f: return json.load(f)
+    except (OSError, ValueError): return {}
+
+def save_pucks(m):
+    tmp = PUCKS + '.tmp'
+    with open(tmp, 'w') as f: json.dump(m, f, indent=1)
+    os.replace(tmp, PUCKS)
+
+# single-cell LiPo, resting voltage -> rough % (good enough for a dock screen)
+LIPO = [(4.20, 100), (4.10, 90), (4.00, 78), (3.90, 62), (3.80, 45), (3.75, 35), (3.70, 22), (3.65, 12), (3.60, 6), (3.50, 2), (3.30, 0)]
+def pct_from_mv(mv):
+    v = mv / 1000
+    if v >= LIPO[0][0]: return 100
+    for (v1, p1), (v2, p2) in zip(LIPO, LIPO[1:]):
+        if v >= v2: return round(p2 + (p1 - p2) * (v - v2) / (v1 - v2))
+    return 0
+
+ONLINE_SECS = 90      # a docked puck checks in every ~30 s; three missed = gone
+FLEET = int(os.environ.get('WAKEBACK_FLEET', '0') or 0)   # how many pucks the club has, so ones never seen still get a row
+
+@app.post('/api/pucks/checkin')
+def puck_checkin():
+    """Pucks call this every ~30 s while on the pad (and once on waking near the dock).
+    JSON: {"puck": 3, "battery_mv": 4012, "charging": "charging"|"full"|"not", "on_pad": true,
+           "free_kb": 12000, "total_kb": 14336, "fw": "0.3.1", "pending": 1, "rssi": -52}"""
+    b = request.get_json(silent=True) or {}
+    try: num = int(str(b.get('puck', '')).replace('puck', ''))
+    except ValueError: return jsonify(error='puck number missing'), 400
+    if not 1 <= num <= 99: return jsonify(error='puck number out of range'), 400
+    now = int(time.time() * 1000)
+    with lock:
+        m = load_pucks(); r = m.setdefault(f'puck{num}', {})
+        for k in ('battery_mv', 'free_kb', 'total_kb', 'pending', 'rssi'):
+            if isinstance(b.get(k), (int, float)): r[k] = b[k]
+        if b.get('charging') in ('charging', 'full', 'not'): r['charging'] = b['charging']
+        if isinstance(b.get('fw'), str): r['fw'] = b['fw'][:16]
+        r['on_pad'] = bool(b.get('on_pad', True))
+        r['last_seen'] = now
+        if r['on_pad']: r['last_on_pad'] = now
+        save_pucks(m)
+    # the puck uses this reply to set its clock before GPS lock and to know the dock heard it
+    return jsonify(ok=True, time_ms=now)
+
+def last_sailor(session, fname):
+    try:
+        with open(os.path.join(SESSIONS, session, 'crew.json')) as f: crew = json.load(f)
+    except (OSError, ValueError): return None
+    pm = re.match(r'(puck\d+)', fname or '', re.I)
+    return crew.get(pm.group(1).lower() if pm else '') or crew.get(fname)
+
+@app.get('/api/pucks')
+def pucks():
+    now = time.time() * 1000
+    m = load_pucks()
+    # fall back to the files on disk for last upload (works for sessions copied in by hand, and the demo data)
+    for day in (d for d in os.listdir(SESSIONS) if SAFE.match(d)):
+        dd = os.path.join(SESSIONS, day)
+        if not os.path.isdir(dd): continue
+        for fn in os.listdir(dd):
+            pm = re.match(r'puck[_ -]?(\d+)', fn, re.I)
+            if not pm or not fn.lower().endswith(('.csv', '.gpx')): continue
+            r = m.setdefault(f'puck{int(pm.group(1))}', {})
+            fp = os.path.join(dd, fn); mt = int(os.path.getmtime(fp) * 1000)
+            lu = r.get('last_upload')
+            if not lu or (lu.get('session', '') < day) or (lu.get('session') == day and lu.get('time', 0) < mt and not os.path.exists(os.path.join(SESSIONS, lu['session'], lu.get('file', '')))):
+                r['last_upload'] = {'time': mt, 'session': day, 'file': fn, 'bytes': os.path.getsize(fp)}
+    for n in range(1, FLEET + 1): m.setdefault(f'puck{n}', {})
+    out = []
+    for key, r in sorted(m.items(), key=lambda kv: int(kv[0][4:])):
+        seen = r.get('last_seen')
+        docked = bool(r.get('on_pad')) and seen is not None and now - seen < ONLINE_SECS * 1000
+        lu = r.get('last_upload')
+        out.append({
+            'puck': int(key[4:]), 'docked': docked, 'last_seen': seen, 'last_on_pad': r.get('last_on_pad'),
+            'battery_pct': pct_from_mv(r['battery_mv']) if 'battery_mv' in r else None, 'battery_mv': r.get('battery_mv'),
+            'charging': r.get('charging') if docked else None,
+            'free_kb': r.get('free_kb'), 'total_kb': r.get('total_kb'), 'fw': r.get('fw'), 'pending': r.get('pending'), 'rssi': r.get('rssi'),
+            'last_upload': dict(lu, sailor=last_sailor(lu['session'], lu.get('file'))) if lu else None,
+        })
+    return jsonify(pucks=out, now=int(now))
+
+def online():
+    try:
+        socket.create_connection(('1.1.1.1', 53), timeout=1.5).close(); return True
+    except OSError:
+        return False
+
+def nmcli(*args, timeout=20):
+    if not shutil.which('nmcli'): return None
+    try:
+        r = subprocess.run(['nmcli', *args], capture_output=True, text=True, timeout=timeout)
+        return r
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+UPLINK_IF = os.environ.get('WAKEBACK_UPLINK_IF', 'wlan1')   # USB WiFi dongle for the club/home network; onboard wlan0 runs the dock's own WiFi
+ADMIN_PIN = os.environ.get('WAKEBACK_PIN', '')              # set this on the Pi so only you can change the WiFi
+# Not on the Pi (no NetworkManager)? Run the WiFi screens in demo mode with made-up networks, so the flow can be tried in VS Code.
+DEMO_WIFI = not shutil.which('nmcli')
+DEMO_NETS = [('SSC Members', 82, True), ('SSC Guest', 64, False), ('BT-Hub-4F2A', 41, True), ('Pier Free WiFi', 23, False)]
+demo_state = {'connected': None}
+
+@app.get('/api/dock/status')
+def dock_status():
+    du = shutil.disk_usage(SESSIONS)
+    nets = []
+    r = nmcli('-t', '-f', 'DEVICE,TYPE,STATE,CONNECTION', 'device')
+    if r and r.returncode == 0:
+        for line in r.stdout.splitlines():
+            dev, typ, state, con = (line.split(':') + ['', '', '', ''])[:4]
+            if typ in ('wifi', 'ethernet'): nets.append({'device': dev, 'type': typ, 'state': state, 'connection': con})
+    if DEMO_WIFI and demo_state['connected']:
+        nets.append({'device': UPLINK_IF, 'type': 'wifi', 'state': 'connected', 'connection': demo_state['connected']})
+    return jsonify(
+        online=online(), networks=nets, can_manage_wifi=True, demo=DEMO_WIFI, uplink_if=UPLINK_IF,
+        dock_wifi=WIFI_SSID, pin_required=bool(ADMIN_PIN),
+        hostname=socket.gethostname(), time_ms=int(time.time() * 1000), uptime_s=int(time.time() - BOOT),
+        disk_free=du.free, disk_total=du.total,
+        sessions=len([d for d in os.listdir(SESSIONS) if os.path.isdir(os.path.join(SESSIONS, d))]),
+        nas=None,    # sync to the NAS isn't set up yet
+    )
+
+@app.get('/api/wifi/scan')
+def wifi_scan():
+    if DEMO_WIFI:
+        time.sleep(1)   # feels like a scan
+        return jsonify(available=True, demo=True, networks=[{'ssid': n, 'signal': sg, 'secure': sec, 'in_use': n == demo_state['connected']} for n, sg, sec in DEMO_NETS])
+    nmcli('device', 'wifi', 'rescan', 'ifname', UPLINK_IF, timeout=15)
+    r = nmcli('-t', '-f', 'IN-USE,SSID,SIGNAL,SECURITY', 'device', 'wifi', 'list', 'ifname', UPLINK_IF)
+    seen, nets = set(), []
+    for line in (r.stdout.splitlines() if r and r.returncode == 0 else []):
+        parts = re.split(r'(?<!\\):', line)
+        if len(parts) < 4 or not parts[1] or parts[1] in seen or parts[1] == WIFI_SSID: continue
+        seen.add(parts[1])
+        nets.append({'ssid': parts[1].replace('\\:', ':'), 'signal': int(parts[2] or 0), 'secure': parts[3] not in ('', '--'), 'in_use': parts[0] == '*'})
+    nets.sort(key=lambda n: -n['signal'])
+    return jsonify(available=True, networks=nets)
+
+@app.post('/api/wifi/connect')
+def wifi_connect():
+    b = request.get_json(silent=True) or {}
+    if ADMIN_PIN and str(b.get('pin', '')) != ADMIN_PIN: return jsonify(error='Wrong PIN.'), 403
+    ssid, pw = str(b.get('ssid', ''))[:64], str(b.get('password', ''))[:128]
+    if not ssid: return jsonify(error='Pick a network first.'), 400
+    if DEMO_WIFI:
+        secure = next((sec for n, _, sec in DEMO_NETS if n == ssid), True)
+        time.sleep(1.5)
+        if secure and not pw: return jsonify(error='That network needs a password.'), 400
+        if secure and pw.lower() == 'wrong': return jsonify(error='The password was wrong.'), 400
+        demo_state['connected'] = ssid
+        return jsonify(ok=True, online=online(), demo=True)
+    args = ['device', 'wifi', 'connect', ssid, 'ifname', UPLINK_IF] + (['password', pw] if pw else [])
+    r = nmcli(*args, timeout=45)
+    if not r or r.returncode != 0:
+        msg = (r.stderr or r.stdout).strip() if r else 'no reply from network manager'
+        if 'Secrets were required' in msg or 'password' in msg.lower(): msg = 'The password was wrong.'
+        return jsonify(error=f'Could not connect: {msg}'), 400
+    return jsonify(ok=True, online=online())
+
+@app.get('/dock')
+def dock_page():
+    return send_from_directory(VIEWER, 'dock.html')
+
+# ---------- puck check-in (firmware will use this) ----------
+@app.get('/api/hello')
+def hello():
+    return jsonify(dock='wakeback', time_ms=int(datetime.now(timezone.utc).timestamp() * 1000))
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    print(f'WakeBack dock on http://localhost:{port}  (sessions in {SESSIONS})')
+    app.run(host='0.0.0.0', port=port, debug=True)

@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Dock · WakeBack</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#13293A; --panel:#13293A; --card:#1C3A4F; --ink:#EAF2F5; --muted:#8FAAB8; --line:rgba(234,242,245,.13);
+  --signal:#FFC72C; --warn:#FFC72C; --bad:#FF6B6B; --good:#EAF2F5;
+  --num:'Barlow Condensed','Arial Narrow',sans-serif; --body:'Barlow',system-ui,-apple-system,'Segoe UI',sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15px;line-height:1.45}
+button,input,select{font:inherit;color:inherit}
+.wrap{max-width:1180px;margin:0 auto;padding:calc(18px + env(safe-area-inset-top)) 16px calc(40px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:22px}
+header{display:flex;align-items:center;gap:22px;flex-wrap:wrap}
+h1{font-family:var(--num);font-weight:700;font-size:32px;line-height:1;margin:0}
+h1 span{color:var(--signal)}
+nav{display:flex;gap:4px;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:3px}
+nav a{padding:6px 16px;border-radius:6px;color:var(--muted);text-decoration:none;font-weight:600}
+nav a.on{background:var(--ink);color:var(--bg)}
+nav a:focus-visible,button:focus-visible,input:focus-visible,.net:focus-visible{outline:2px solid var(--signal);outline-offset:2px}
+h2{font-family:var(--num);font-weight:600;font-size:22px;margin:0 0 10px}
+.summary{font-size:18px;display:flex;flex-wrap:wrap;gap:6px 18px;align-items:baseline}
+.summary b{font-family:var(--num);font-size:30px;line-height:1}
+.summary .w{color:var(--warn)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}
+.pk{background:var(--card);border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:10px;border:1px solid transparent}
+.pk.away{background:transparent;border-color:var(--line)}
+.pk.alert{border-color:var(--warn)}
+.pk.bad{border-color:var(--bad)}
+.top{display:flex;align-items:center;gap:10px}
+.pb{display:inline-flex;align-items:center;justify-content:center;min-width:48px;height:32px;padding:0 8px;border-radius:6px;background:var(--c);color:#13293A;font-family:var(--num);font-weight:700;font-size:22px}
+.st{font-weight:600}
+.st small{display:block;font-weight:400;color:var(--muted);font-size:13px}
+.pill{margin-left:auto;font-size:12px;font-weight:700;border-radius:999px;padding:3px 10px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+.pill.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.bat{display:grid;grid-template-columns:1fr auto;gap:4px 10px;align-items:center}
+.bar{height:10px;border-radius:5px;background:rgba(234,242,245,.12);overflow:hidden}
+.bar i{display:block;height:100%;background:var(--ink);border-radius:5px}
+.bar.low i{background:var(--bad)}.bar.mid i{background:var(--warn)}
+.bat .pc{font-family:var(--num);font-weight:700;font-size:24px;line-height:1;font-variant-numeric:tabular-nums}
+.bat .cs{grid-column:1/-1;font-size:13px;color:var(--muted)}
+.cs.w{color:var(--warn);font-weight:600}.cs.b{color:var(--bad);font-weight:600}
+dl{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;margin:0;font-size:13.5px}
+dt{color:var(--muted)}
+dd{margin:0;font-variant-numeric:tabular-nums}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.box{background:var(--card);border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:12px}
+.state{display:flex;align-items:center;gap:10px;font-size:18px;font-weight:600}
+.dot{width:12px;height:12px;border-radius:50%;background:var(--muted);flex:0 0 auto}
+.dot.ok{background:var(--ink);box-shadow:0 0 0 3px rgba(234,242,245,.2)}
+.dot.no{background:var(--bad)}
+.btn{background:transparent;border:1px solid var(--line);border-radius:6px;padding:8px 14px;cursor:pointer;font-weight:600}
+.btn.primary{background:var(--signal);border-color:var(--signal);color:#13293A}
+.btn:disabled{opacity:.5;cursor:default}
+.hint{color:var(--muted);font-size:13px}
+.nets{display:flex;flex-direction:column;gap:4px;max-height:260px;overflow:auto}
+.net{display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:center;padding:9px 10px;border-radius:6px;background:rgba(0,0,0,.18);border:1px solid transparent;cursor:pointer;text-align:left}
+.net.sel{border-color:var(--signal)}
+.sig{font-family:var(--num);color:var(--muted)}
+.lock{font-size:12px;color:var(--muted)}
+.form{display:flex;flex-direction:column;gap:8px}
+.form input{background:rgba(0,0,0,.2);border:1px solid var(--line);border-radius:6px;padding:9px 10px}
+.msg{font-size:14px;min-height:1em}
+.msg.err{color:var(--bad)}.msg.ok{color:var(--ink)}
+.empty{color:var(--muted);border:1px dashed var(--line);border-radius:10px;padding:18px;line-height:1.5}
+code{background:rgba(0,0,0,.25);padding:1px 5px;border-radius:4px;font-size:13px}
+@media (max-width:760px){.cols{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Wake<span>Back</span></h1>
+    <nav aria-label="Sections"><a href="/">Replay</a><a href="/dock" class="on" aria-current="page">Dock</a></nav>
+  </header>
+
+  <section aria-live="polite"><div class="summary" id="summary">Checking the dock…</div></section>
+
+  <section>
+    <h2>Pucks</h2>
+    <div class="grid" id="pucks"></div>
+  </section>
+
+  <section class="cols">
+    <div class="box">
+      <h2 style="margin:0">Internet</h2>
+      <div class="state"><span class="dot" id="netDot"></span><span id="netState">Checking…</span></div>
+      <div class="hint" id="netVia"></div>
+      <div class="hint" id="apNote"></div>
+      <div><button class="btn" id="wifiBtn">Connect to WiFi</button></div>
+      <div class="hint" id="demoNote" hidden>Demo mode: this computer isn't the dock, so these networks are made up and nothing really changes. Type "wrong" as the password to see a failed connection.</div>
+      <div id="wifiPanel" hidden>
+        <div class="form">
+          <div class="row" style="display:flex;justify-content:space-between;align-items:center"><b>Networks the dock can see</b><button class="btn" id="rescan">Scan again</button></div>
+          <div class="nets" id="nets"><div class="hint">Scanning…</div></div>
+          <input type="password" id="wpass" placeholder="WiFi password" autocomplete="off" aria-label="WiFi password">
+          <input type="password" id="wpin" placeholder="Dock PIN" inputmode="numeric" autocomplete="off" aria-label="Dock PIN" hidden>
+          <button class="btn primary" id="wconnect" disabled>Connect</button>
+          <div class="msg" id="wmsg" role="status"></div>
+        </div>
+      </div>
+    </div>
+    <div class="box">
+      <h2 style="margin:0">Dock</h2>
+      <dl id="health"></dl>
+    </div>
+  </section>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+// same fixed colours as the replay, so P3 is the same colour everywhere
+const COLORS = ['#FFC72C', '#4CC9F0', '#F72585', '#FF9F1C', '#9B5DE5', '#FFFFFF', '#A0C4FF', '#F15BB5'];
+const colourOf = n => COLORS[(n - 1) % COLORS.length];
+let serverOffset = 0;   // dock clock minus browser clock, so "ago" is right even if a laptop's clock is off
+
+function ago(ms) {
+  if (!ms) return 'never';
+  const s = Math.max(0, (Date.now() + serverOffset - ms) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return Math.round(s / 60) + ' min ago';
+  if (s < 86400) return Math.round(s / 3600) + ' h ago';
+  const d = Math.round(s / 86400); return d === 1 ? 'yesterday' : d + ' days ago';
+}
+function when(ms) {
+  const d = new Date(ms), now = new Date(Date.now() + serverOffset);
+  const t = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  if (d.toDateString() === now.toDateString()) return 'Today ' + t;
+  const y = new Date(now); y.setDate(y.getDate() - 1);
+  if (d.toDateString() === y.toDateString()) return 'Yesterday ' + t;
+  return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }) + ' ' + t;
+}
+const mb = kb => (kb / 1024).toFixed(1) + ' MB';
+const sessionLbl = id => new Date(id + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+
+function puckCard(p, newestFw) {
+  const pct = p.battery_pct, low = pct != null && pct < 30;
+  let cs = '', csCls = '', cls = p.docked ? '' : 'away';
+  if (p.docked) {
+    if (p.charging === 'charging') cs = pct >= 100 ? 'Topping up' : `Charging${pct != null ? `, about ${Math.max(5, Math.round((100 - pct) * 1.6 / 5) * 5)} min to full` : ''}`;
+    else if (p.charging === 'full') cs = 'Full, ready to go';
+    else { cs = 'On the dock but not charging. Check it\'s sitting square on the pad.'; csCls = 'b'; cls += ' bad'; }
+  } else if (pct != null) {
+    cs = low ? 'Was low when it left. Charge it before it goes out again.' : `Battery when last seen`;
+    if (low) csCls = 'w';
+  }
+  if (p.docked && low && p.charging !== 'not') { csCls = csCls || 'w'; if (!cls.includes('bad')) cls += ' alert'; }
+  const barCls = pct == null ? '' : pct < 30 ? 'low' : pct < 60 ? 'mid' : '';
+  const lu = p.last_upload;
+  const sub = p.docked ? (p.pending ? 'Uploading…' : 'Checked in ' + ago(p.last_seen)) : (p.last_seen ? 'Last seen ' + ago(p.last_seen) : 'Not checked in yet');
+  const oldFw = p.fw && newestFw && p.fw !== newestFw;
+  return `<article class="pk ${cls}" style="--c:${colourOf(p.puck)}" aria-label="Puck ${p.puck}">
+    <div class="top"><span class="pb">P${p.puck}</span><span class="st">${p.docked ? 'On the dock' : p.last_seen ? 'Away' : 'Never seen'}<small>${esc(sub)}</small></span></div>
+    ${pct != null ? `<div class="bat"><div class="bar ${barCls}"><i style="width:${pct}%"></i></div><span class="pc">${pct}%</span><span class="cs ${csCls}">${esc(cs)}</span></div>` : '<div class="hint">No battery reading yet.</div>'}
+    <dl>
+      <dt>Last upload</dt><dd>${lu ? `${when(lu.time)}<br><span class="hint">${esc(sessionLbl(lu.session))} · ${(lu.bytes / 1048576).toFixed(1)} MB${lu.sailor ? ' · ' + esc(lu.sailor) : ''}</span>` : 'None yet'}</dd>
+      ${p.free_kb != null ? `<dt>Storage</dt><dd>${mb(p.free_kb)} free</dd>` : ''}
+      ${p.fw ? `<dt>Firmware</dt><dd>${esc(p.fw)}${oldFw ? ` <span class="cs w">(update to ${esc(newestFw)})</span>` : ''}</dd>` : ''}
+    </dl>
+  </article>`;
+}
+
+function newestVersion(list) {
+  const v = list.map(p => p.fw).filter(Boolean);
+  return v.sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).pop();
+}
+
+async function refresh() {
+  try {
+    const [pr, dr] = await Promise.all([fetch('/api/pucks', { cache: 'no-store' }), fetch('/api/dock/status', { cache: 'no-store' })]);
+    const pj = await pr.json(), d = await dr.json();
+    serverOffset = d.time_ms - Date.now();
+    const list = pj.pucks, fw = newestVersion(list);
+    $('#pucks').innerHTML = list.length ? list.map(p => puckCard(p, fw)).join('')
+      : '<div class="empty">No pucks have checked in yet. Put one on the pad and it appears here within 30 seconds.<br>Developing on a laptop? Run <code>python tools/fake_pucks.py</code>.</div>';
+
+    // summary
+    const docked = list.filter(p => p.docked), charging = docked.filter(p => p.charging === 'charging'),
+          notCh = docked.filter(p => p.charging === 'not'), low = list.filter(p => p.battery_pct != null && p.battery_pct < 30 && !(p.docked && p.charging === 'full'));
+    const parts = [`<span><b>${docked.length}</b> of ${list.length} on the dock</span>`];
+    if (charging.length) parts.push(`<span>${charging.length} charging</span>`);
+    if (notCh.length) parts.push(`<span class="w">${notCh.map(p => 'P' + p.puck).join(', ')} not charging</span>`);
+    if (low.length) parts.push(`<span class="w">${low.map(p => 'P' + p.puck).join(', ')} low</span>`);
+    parts.push(`<span>${d.online ? 'Online' : 'No internet'}</span>`);
+    $('#summary').innerHTML = parts.join('');
+
+    // internet
+    const up = (d.networks || []).find(n => n.state === 'connected' && n.device !== 'lo' && n.connection && n.connection !== d.dock_wifi);
+    $('#netDot').className = 'dot ' + (d.online ? 'ok' : 'no');
+    $('#netState').textContent = d.online ? 'Connected to the internet' : 'No internet';
+    $('#netVia').textContent = up ? `Via ${up.type === 'ethernet' ? 'cable' : 'WiFi'}: ${up.connection}` : (d.online ? '' : 'Plug in a network cable or connect to the club WiFi. Replays still work without internet, but the map background and syncing need it.');
+    $('#apNote').innerHTML = `Pucks and phones join the dock's own WiFi, <b>${esc(d.dock_wifi)}</b>, which stays on whatever happens here.`;
+    const viaWifi = up && up.type === 'wifi';
+    $('#wifiBtn').textContent = viaWifi ? 'Change WiFi' : 'Connect to WiFi';
+    $('#wifiBtn').hidden = d.can_manage_wifi === false;   // the phone app can't change WiFi
+    if (d.phone) $('#apNote').innerHTML = `Pucks and phones join this phone's hotspot, <b>${esc(d.dock_wifi)}</b>. Keep WakeBack open while they upload.`;
+    $('#wifiBtn').classList.toggle('primary', !d.online);
+    $('#demoNote').hidden = !d.demo;
+    if (d.demo && up) $('#netState').textContent = `Joined ${up.connection}` + (d.online ? '' : ' (demo)');
+    $('#wpin').hidden = !d.pin_required;
+
+    // health
+    const gb = b => (b / 1e9).toFixed(1) + ' GB';
+    const up_s = d.uptime_s, uptime = up_s < 3600 ? Math.round(up_s / 60) + ' min' : up_s < 86400 ? Math.round(up_s / 3600) + ' h' : Math.round(up_s / 86400) + ' days';
+    $('#health').innerHTML = `
+      <dt>Name</dt><dd>${esc(d.hostname)}</dd>
+      <dt>Clock</dt><dd>${new Date(d.time_ms).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })}</dd>
+      <dt>Running for</dt><dd>${uptime}</dd>
+      <dt>Storage</dt><dd>${d.disk_free == null ? 'n/a' : gb(d.disk_free) + ' free of ' + gb(d.disk_total)}${d.disk_free != null && d.disk_free < 2e9 ? ' <span class="cs w">(getting full)</span>' : ''}</dd>
+      <dt>Sessions</dt><dd>${d.sessions} sailing day${d.sessions === 1 ? '' : 's'} stored</dd>
+      <dt>Backup to NAS</dt><dd>${d.nas ? esc(d.nas) : 'Not set up yet'}</dd>`;
+  } catch (e) {
+    $('#summary').innerHTML = '<span class="w">Can\'t reach the dock. Check you\'re on its WiFi.</span>';
+  }
+}
+
+// ---------- WiFi ----------
+let pick = null;
+async function scan() {
+  $('#nets').innerHTML = '<div class="hint">Scanning…</div>'; pick = null; $('#wconnect').disabled = true;
+  try {
+    const j = await (await fetch('/api/wifi/scan', { cache: 'no-store' })).json();
+    $('#nets').innerHTML = j.networks.length ? j.networks.map(n => `<button class="net" data-ssid="${esc(n.ssid)}" data-secure="${n.secure ? 1 : 0}"><span>${esc(n.ssid)}${n.in_use ? ' <span class="lock">(connected)</span>' : ''}</span><span class="lock">${n.secure ? 'Password' : 'Open'}</span><span class="sig">${n.signal}%</span></button>`).join('')
+      : '<div class="hint">No networks found. Try again, or plug in a network cable.</div>';
+  } catch { $('#nets').innerHTML = '<div class="hint">Scan failed.</div>'; }
+}
+$('#wifiBtn').addEventListener('click', () => { const p = $('#wifiPanel'); p.hidden = !p.hidden; if (!p.hidden) scan(); });
+$('#rescan').addEventListener('click', scan);
+$('#nets').addEventListener('click', e => {
+  const b = e.target.closest('.net'); if (!b) return;
+  document.querySelectorAll('.net').forEach(x => x.classList.toggle('sel', x === b));
+  pick = b.dataset.ssid; $('#wpass').hidden = b.dataset.secure !== '1'; $('#wconnect').disabled = false; $('#wmsg').textContent = '';
+  if (!$('#wpass').hidden) $('#wpass').focus();
+});
+$('#wconnect').addEventListener('click', async () => {
+  const msg = $('#wmsg'); msg.className = 'msg';
+  if (!pick) { msg.className = 'msg err'; msg.textContent = 'Pick a network first.'; return; }
+  if (!$('#wpass').hidden && !$('#wpass').value) { msg.className = 'msg err'; msg.textContent = 'Type the WiFi password.'; $('#wpass').focus(); return; }
+  if (!$('#wpin').hidden && !$('#wpin').value) { msg.className = 'msg err'; msg.textContent = 'Type the dock PIN.'; $('#wpin').focus(); return; }
+  $('#wconnect').disabled = true; msg.textContent = `Connecting to ${pick}…`;
+  try {
+    const r = await fetch('/api/wifi/connect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ssid: pick, password: $('#wpass').value, pin: $('#wpin').value }) });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Could not connect.');
+    msg.className = 'msg ok'; msg.textContent = j.online ? `Connected to ${pick}. The dock is online.` : `Joined ${pick}, but there's no internet through it yet.`;
+    $('#wpass').value = ''; refresh();
+    setTimeout(() => { $('#wifiPanel').hidden = true; msg.textContent = ''; }, 3000);
+  } catch (e) { msg.className = 'msg err'; msg.textContent = e.message; }
+  finally { $('#wconnect').disabled = false; }
+});
+
+refresh(); setInterval(refresh, 5000);
+</script>
+</body>
+</html>

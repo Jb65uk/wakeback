@@ -1,0 +1,31 @@
+name: wakeback
+description: WakeBack phone/tablet app — the dock in your pocket, running the real WakeBack viewer.
+publish_to: 'none'
+version: 0.2.0+2
+
+environment:
+  sdk: '>=3.4.0 <4.0.0'
+
+# Ranges, so `flutter pub get` picks the newest versions that work with your Flutter SDK.
+dependencies:
+  flutter:
+    sdk: flutter
+  webview_flutter: '>=4.10.0 <5.0.0'
+  webview_flutter_android: '>=3.16.0 <5.0.0'
+  path_provider: ^2.1.4
+  shared_preferences: ^2.3.2
+  http: '>=1.2.2 <2.0.0'
+  share_plus: '>=10.1.2 <12.0.0'
+  file_picker: '>=8.1.2 <11.0.0'
+  mime: '>=1.0.4 <3.0.0'
+  qr: '>=3.0.1 <4.0.0'
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: '>=4.0.0 <7.0.0'
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/web/

@@ -1,0 +1,42 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Install requirements",
+      "type": "shell",
+      "command": "pip install -r server/requirements.txt",
+      "problemMatcher": []
+    },
+    {
+      "label": "Generate fake data",
+      "type": "shell",
+      "command": "python tools/gen_fake_data.py",
+      "problemMatcher": []
+    },
+    {
+      "label": "Run dock server",
+      "type": "shell",
+      "command": "python server/app.py",
+      "isBackground": true,
+      "problemMatcher": [],
+      "options": {
+        "env": {
+          "WAKEBACK_FLEET": "6"
+        }
+      }
+    },
+    {
+      "label": "Fake puck upload (training session)",
+      "type": "shell",
+      "command": "python tools/fake_puck_upload.py data/sessions/2026-09-22/puck1_174500.csv --puck puck1",
+      "problemMatcher": []
+    },
+    {
+      "label": "Fake pucks (Dock page demo)",
+      "type": "shell",
+      "command": "python tools/fake_pucks.py --fast",
+      "isBackground": true,
+      "problemMatcher": []
+    }
+  ]
+}

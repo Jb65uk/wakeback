@@ -1,0 +1,191 @@
+// Two-way sync between the phone's dock and your WakeBack server (server/app.py),
+// using only the server's existing endpoints — nothing new needed on the server.
+//
+// Per sailing day:
+//   tracks  — anything missing on either side is copied across (same file names)
+//   crew    — merged; where both named the same puck differently, the phone wins
+//   races / course (marks, lines, gun, corrections) — copied to whichever side has none;
+//             if both sides have a different one, you choose which to keep
+import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:http/http.dart' as http;
+
+import '../dock/store.dart';
+
+class SyncException implements Exception {
+  final String message;
+  const SyncException(this.message);
+  @override
+  String toString() => message;
+}
+
+class DayCompare {
+  final String day;
+  final List<String> phoneOnly, serverOnly, both;
+  const DayCompare(this.day, this.phoneOnly, this.serverOnly, this.both);
+  bool get onPhone => phoneOnly.isNotEmpty || both.isNotEmpty;
+  bool get onServer => serverOnly.isNotEmpty || both.isNotEmpty;
+  bool get tracksInSync => phoneOnly.isEmpty && serverOnly.isEmpty;
+}
+
+class SyncReport {
+  int up = 0, down = 0;
+  final List<String> changed = []; // human-readable notes
+  final List<String> conflicts = []; // 'races' / 'meta' that differ and need a choice
+}
+
+/// Deep equality for decoded JSON, comparing numbers by value (5 == 5.0).
+bool jsonEq(Object? a, Object? b) {
+  if (a is num && b is num) return a == b;
+  if (a is Map && b is Map) {
+    if (a.length != b.length) return false;
+    for (final k in a.keys) {
+      if (!b.containsKey(k) || !jsonEq(a[k], b[k])) return false;
+    }
+    return true;
+  }
+  if (a is List && b is List) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (!jsonEq(a[i], b[i])) return false;
+    }
+    return true;
+  }
+  return a == b;
+}
+
+bool _metaEmpty(Map m) =>
+    ((m['marks'] as List?)?.isEmpty ?? true) &&
+    ((m['lines'] as List?)?.isEmpty ?? true) &&
+    ((m['fixes'] as List?)?.isEmpty ?? true) &&
+    !pyTruthy(m['gun']);
+
+class ServerSync {
+  final String base;
+  final DockStore store;
+  ServerSync(String url, this.store) : base = url.trim().replaceAll(RegExp(r'/+$'), '');
+
+  Uri _u(String p) => Uri.parse('$base$p');
+
+  Future<http.Response> _go(Future<http.Response> f, {Duration timeout = const Duration(seconds: 20)}) async {
+    try {
+      final r = await f.timeout(timeout);
+      if (r.statusCode >= 400) {
+        String msg;
+        try {
+          msg = '${(jsonDecode(utf8.decode(r.bodyBytes)) as Map)['error']}';
+        } catch (_) {
+          msg = 'HTTP ${r.statusCode}';
+        }
+        throw SyncException('Server said: $msg');
+      }
+      return r;
+    } on TimeoutException {
+      throw const SyncException('Server didn\'t answer — check the address and your signal');
+    } on SyncException {
+      rethrow;
+    } catch (e) {
+      throw SyncException('Can\'t reach the server: $e');
+    }
+  }
+
+  Future<Object?> _getJson(String p) async => jsonDecode(utf8.decode((await _go(http.get(_u(p)))).bodyBytes));
+
+  Future<Object?> _putJson(String p, Object value) async => jsonDecode(utf8.decode((await _go(
+          http.put(_u(p), headers: {'Content-Type': 'application/json'}, body: jsonEncode(value))))
+      .bodyBytes));
+
+  /// Is this a WakeBack dock/server? Returns its session list.
+  Future<List<Map<String, dynamic>>> serverSessions() async {
+    final j = await _getJson('/api/sessions');
+    if (j is! List) throw const SyncException('That address answered, but it isn\'t a WakeBack server');
+    return j.whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
+  }
+
+  Future<List<DayCompare>> compare() async {
+    final server = {for (final s in await serverSessions()) '${s['id']}': ((s['files'] as List?) ?? const []).map((e) => '$e').toSet()};
+    final phone = {for (final s in await store.sessions()) '${s['id']}': ((s['files'] as List?) ?? const []).map((e) => '$e').toSet()};
+    final days = {...server.keys, ...phone.keys}.toList()..sort((a, b) => b.compareTo(a));
+    return [
+      for (final d in days)
+        DayCompare(
+          d,
+          ((phone[d] ?? <String>{}).difference(server[d] ?? <String>{})).toList()..sort(),
+          ((server[d] ?? <String>{}).difference(phone[d] ?? <String>{})).toList()..sort(),
+          ((phone[d] ?? <String>{}).intersection(server[d] ?? <String>{})).toList()..sort(),
+        ),
+    ];
+  }
+
+  Future<void> _uploadTrack(String day, String name) async {
+    final f = await store.trackFile(day, name);
+    final req = http.MultipartRequest('POST', _u('/api/upload'))
+      ..files.add(http.MultipartFile.fromBytes('file', await f.readAsBytes(), filename: name));
+    final r = await _go(req.send().then(http.Response.fromStream), timeout: const Duration(minutes: 3));
+    // The server files by the track's own timestamp; if it put it somewhere else (e.g. a track with no
+    // timestamp lands on "today"), move ours to match so it isn't uploaded again next time.
+    try {
+      final j = (jsonDecode(utf8.decode(r.bodyBytes)) as Map).cast<String, dynamic>();
+      final sDay = '${j['session'] ?? day}', sFile = '${j['file'] ?? name}';
+      if (sDay != day || sFile != name) await store.moveTrack(day, name, sDay, sFile);
+    } catch (_) {}
+  }
+
+  Future<Uint8List> _downloadTrack(String day, String name) async =>
+      (await _go(http.get(_u('/api/sessions/${Uri.encodeComponent(day)}/${Uri.encodeComponent(name)}')), timeout: const Duration(minutes: 3))).bodyBytes;
+
+  /// Sync one day. [resolve] picks a side for a course that differs: {'races': 'phone'|'server', 'meta': ...}.
+  Future<SyncReport> syncDay(DayCompare c, {Map<String, String> resolve = const {}, void Function(String)? progress}) async {
+    final day = c.day;
+    final rep = SyncReport();
+
+    // ---- tracks
+    for (final f in c.phoneOnly) {
+      progress?.call('Uploading $f');
+      await _uploadTrack(day, f);
+      rep.up++;
+    }
+    for (final f in c.serverOnly) {
+      progress?.call('Downloading $f');
+      if (await store.putTrack(day, f, await _downloadTrack(day, f))) rep.down++;
+    }
+
+    progress?.call('Names and course');
+    // ---- crew: merge, phone wins on a clash
+    final sCrew = ((await _getJson('/api/sessions/$day/crew')) as Map?)?.cast<String, dynamic>() ?? {};
+    final pCrew = await store.getCrew(day);
+    final merged = {...sCrew, ...pCrew};
+    if (!jsonEq(merged, sCrew)) {
+      await _putJson('/api/sessions/$day/crew', merged);
+      rep.changed.add('names sent to server');
+    }
+    if (!jsonEq(merged, pCrew)) {
+      await store.putRaw(day, 'crew', merged);
+      rep.changed.add('names updated on phone');
+    }
+
+    // ---- races and course
+    for (final what in ['races', 'meta']) {
+      final label = what == 'races' ? 'races' : 'course';
+      final s = await _getJson('/api/sessions/$day/$what');
+      final p = what == 'races' ? await store.getRaces(day) : await store.getMeta(day);
+      final sEmpty = what == 'races' ? (s is! List || s.isEmpty) : (s is! Map || _metaEmpty(s));
+      final pEmpty = what == 'races' ? (p as List).isEmpty : _metaEmpty(p as Map);
+      if (jsonEq(s, p) || (sEmpty && pEmpty)) continue;
+      final pick = resolve[what] ?? (sEmpty ? 'phone' : pEmpty ? 'server' : null);
+      if (pick == 'phone') {
+        final clean = await _putJson('/api/sessions/$day/$what', p);
+        if (clean != null) await store.putRaw(day, what, clean);
+        rep.changed.add('$label sent to server');
+      } else if (pick == 'server') {
+        await store.putRaw(day, what, s ?? (what == 'races' ? <Object>[] : <String, Object>{}));
+        rep.changed.add('$label copied to phone');
+      } else {
+        rep.conflicts.add(what);
+      }
+    }
+    return rep;
+  }
+}

@@ -1,0 +1,13 @@
+data/sessions/*/meta.json
+
+# Flutter app build output (setup.ps1 / the GitHub build make these)
+app/android/
+app/build/
+app/.dart_tool/
+app/pubspec.lock
+app/WakeBack.apk
+app/.flutter-plugins*
+# local stuff
+__pycache__/
+data/pucks.json
+data/sessions/.incoming_*

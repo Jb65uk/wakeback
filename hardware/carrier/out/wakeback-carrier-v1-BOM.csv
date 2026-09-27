@@ -1,0 +1,4 @@
+Comment,Designator,Footprint,JLCPCB Part #
+100k,"R1,R2,R3,R4",R_1206,C17900
+300R,R5,R_1206,C17887
+LED red,D1,LED_0805,C84256

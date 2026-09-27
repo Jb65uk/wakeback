@@ -1,0 +1,15 @@
+M48
+; WakeBack carrier v1
+; #@! TF.FileFunction,NonPlated,1,2,NPTH
+FMAT,2
+METRIC
+T1C2.700
+%
+G90
+G05
+T1
+X0.000Y26.000
+X-22.500Y15.500
+X21.000Y-17.000
+T0
+M30

@@ -1,0 +1,75 @@
+# Builds the WakeBack Android app in the cloud and publishes WakeBack.apk.
+# Runs on every push that touches the app or viewer, or by hand: Actions tab -> Build WakeBack APK -> Run workflow.
+# Download on your phone:  https://github.com/<you>/<repo>/releases/latest  -> WakeBack.apk
+name: Build WakeBack APK
+
+on:
+  push:
+    paths: ['app/**', 'viewer/**', '.github/workflows/build-apk.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write   # to publish the APK as a release
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Latest viewer into the app
+        run: cp ../viewer/index.html ../viewer/dock.html ../viewer/upload.html assets/web/
+
+      - name: Android project + permissions
+        run: |
+          flutter create --platforms=android --org uk.bridgesolutions --project-name wakeback .
+          rm -f test/widget_test.dart
+          python3 - <<'PY'
+          import re
+          p = 'android/app/src/main/AndroidManifest.xml'
+          s = open(p).read()
+          if 'android.permission.INTERNET' not in s:
+              s = re.sub(r'(<manifest[^>]*>)', r'\1\n    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />', s, count=1)
+          if 'usesCleartextTraffic' not in s:
+              s = s.replace('<application', '<application android:usesCleartextTraffic="true"', 1)
+          s = s.replace('android:label="wakeback"', 'android:label="WakeBack"')
+          open(p, 'w').write(s)
+          PY
+
+      - run: flutter pub get
+
+      - name: Tests (phone dock behaves like app.py, sync)
+        run: flutter test
+
+      - name: Build APK
+        run: |
+          flutter build apk --release
+          cp build/app/outputs/flutter-apk/app-release.apk WakeBack.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WakeBack-apk
+          path: app/WakeBack.apk
+
+      - name: Publish as a release (fixed download link)
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: app-${{ github.run_number }}
+          name: WakeBack app build ${{ github.run_number }}
+          body: Open this page on your phone, tap WakeBack.apk, then open the download and allow "install unknown apps".
+          files: app/WakeBack.apk
+          make_latest: true
