@@ -63,5 +63,15 @@ club pucks ─► dock Pi at the club ──────────────
    Authenticator-app codes, no SMS/email service; optional for sailors, on for the admin; admin can turn it
    off for someone who's lost their phone (from /admin, like a password reset).
 
+8. **GDPR / keeping personal data tight** — TO DO
+   The server holds names, emails, password hashes and GPS tracks (which are personal data too: where
+   someone was, when). To do: a short privacy note in the app and on the server (what's kept, why, who sees
+   it); emails never leave the server (already: the API only sends names) and never appear in the viewer,
+   logs or the audit trail beyond what the admin needs; **delete my account** in the app and /admin that
+   removes the account *and* their tracks (or hands club tracks to the club); **export my data** (a zip of
+   your tracks + account details); a friend can only see your email if you've accepted them; keep the
+   Cloudflare-fronted server HTTPS-only, back-ups encrypted, and the SQLite/data folder off any shared NAS
+   share. No third-party analytics or trackers, so nothing to consent to beyond the account itself.
+
 Also still on you: add the GitHub signing secrets; scope Cloudflare Access to `/admin` only so the app can
 create accounts.
