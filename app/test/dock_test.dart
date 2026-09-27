@@ -171,6 +171,36 @@ void main() {
     expect(crew, {'puck1': 'James', 'puck3': 'None'}); // str(None) is truthy in Python too
   });
 
+  test('the day\'s weather is kept and cleaned exactly like app.py', () async {
+    final (s, meta) = await d.req('PUT', '/api/sessions/2026-09-20/meta', json: {
+      'marks': [],
+      'weather': {
+        'src': 'Open-Meteo', 'lat': 53.65, 'lon': -3.01, 'got': 1790000000123.9,
+        'pts': [
+          [1789898400000, 225, 15.5, 21.2],
+          [1789902000000.7, '-10', '16', null],
+          [1789905600000, 230, -1, 20],
+          [1789909200000, 235, 17],
+          ['x', 1, 2, 3],
+          [1789912800000, 400.5, 18.25, 300],
+        ],
+      },
+    });
+    expect(s, 200);
+    // app.py's answer for the same request, verbatim
+    expect(meta, {
+      'fixes': [], 'lines': [], 'marks': [],
+      'weather': {
+        'got': 1790000000123, 'lat': 53.65, 'lon': -3.01, 'src': 'Open-Meteo',
+        'pts': [[1789898400000, 225.0, 15.5, 21.2], [1789902000000, 350.0, 16.0, null], [1789909200000, 235.0, 17.0, null]],
+      },
+    });
+    final (_, junk) = await d.req('PUT', '/api/sessions/2026-09-20/meta', json: {
+      'weather': {'pts': [['bad']]}
+    });
+    expect(junk, {'fixes': [], 'lines': [], 'marks': []});
+  });
+
   test('puck check-ins drive the Dock page', () async {
     final (s, j) = await d.req('POST', '/api/pucks/checkin',
         json: {'puck': 3, 'battery_mv': 4000, 'charging': 'charging', 'on_pad': true, 'free_kb': 12000, 'total_kb': 14336, 'fw': '0.3.1'});
@@ -225,6 +255,9 @@ void main() {
       await d.req('PUT', '/api/sessions/$day/crew', json: {'puck1': 'James'});
       await server.req('PUT', '/api/sessions/$day/crew', json: {'puck2': 'Dave'});
       await d.req('PUT', '/api/sessions/$day/races', json: [{'name': 'Race 1', 'start': 1, 'end': 2}]);
+      await d.req('PUT', '/api/sessions/$day/meta', json: {
+        'weather': {'src': 'Open-Meteo', 'pts': [[1789898400000, 225, 15.5, 21.2]]}
+      });
 
       final sync = ServerSync(server.url, d.store);
       final days = await sync.compare();
@@ -239,6 +272,7 @@ void main() {
         expect(((await dock.req('GET', '/api/sessions')).$2 as List).single['files'], ['puck1_103000.csv', 'puck2_103000.csv']);
         expect((await dock.req('GET', '/api/sessions/$day/crew')).$2, {'puck1': 'James', 'puck2': 'Dave'});
         expect(((await dock.req('GET', '/api/sessions/$day/races')).$2 as List).single['name'], 'Race 1');
+        expect((await dock.req('GET', '/api/sessions/$day/meta')).$2['weather']['pts'], [[1789898400000, 225.0, 15.5, 21.2]]);
       }
       expect((await sync.compare()).single.tracksInSync, true);
 

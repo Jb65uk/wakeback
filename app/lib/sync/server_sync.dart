@@ -60,7 +60,8 @@ bool _metaEmpty(Map m) =>
     ((m['marks'] as List?)?.isEmpty ?? true) &&
     ((m['lines'] as List?)?.isEmpty ?? true) &&
     ((m['fixes'] as List?)?.isEmpty ?? true) &&
-    !pyTruthy(m['gun']);
+    !pyTruthy(m['gun']) &&
+    m['weather'] == null;
 
 class ServerSync {
   final String base;

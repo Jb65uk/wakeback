@@ -69,7 +69,7 @@ download to the app; in a browser or on the Pi it behaves exactly as before.
 - Replay all boats on one clock, live speed/heel/pitch/VMG cards, 60 s trails, heading arrows
 - Colour tracks by boat or by speed; satellite or OpenSeaMap chart base
 - Races: split a day into time windows by hand (11:00–12:00, 12:00–13:30) or with Auto split (gaps where nobody moved for 5 min); stats, tacks, chart and replay all follow the selected race, and races are saved on the dock per day
-- Wind direction typed in or estimated from the beating headings → VMG, true wind angle, upwind/downwind averages, wind arrow on the map
+- Wind direction typed in, estimated from the beating headings, or from **Get weather** (Open-Meteo: direction, speed and gusts for where and when you sailed, saved with the day, set per race, live on the map and big screen) → VMG, true wind angle, upwind/downwind averages, wind arrow on the map
 - Tacks, gybes and mark roundings told apart, each with speed before/min, time back up to speed and metres lost; averages for each (tack loss, gybe loss, mark loss); click any one to jump the replay there
 - Course marks: add them on the map, drag to adjust, set each to port (red) or starboard (green). Set per race, so a moved windward mark between races is fine. With marks placed, roundings are found at the real marks on any course shape (reaches included), and a rounding the wrong way is flagged
 - Start and finish lines: tap the committee boat end then the pin end, drag to adjust; a line can be start, finish or both. With the gun time (typed, or estimated from the fleet) you get each boat's start: seconds late, distance back and speed at the gun, which end, and OCS (over early, and whether they went back). The finish gives order, elapsed time and gap to first. Saved per race with the marks
@@ -106,7 +106,7 @@ Phone/watch GPX files are accepted too; they just lack heel and pitch.
 | POST | `/api/upload` | multipart `file` (+ optional `puck`); filed by the first timestamp in the file |
 | DELETE | `/api/sessions/<day>/<file>` | remove a track |
 | GET / PUT | `/api/sessions/<day>/races` | race windows for that day: `[{"name","start","end","gun","marks":[...],"lines":[{"kind":"start"/"finish"/"both","a":{lat,lon},"b":{lat,lon}}]}]`, times in epoch ms, a = committee boat end, b = pin |
-| GET / PUT | `/api/sessions/<day>/meta` | whole-session marks and your corrections: `{"marks":[{"name","lat","lon","side":"port"/"stbd"}],"fixes":[...]}` |
+| GET / PUT | `/api/sessions/<day>/meta` | whole-session marks, your corrections and the day's weather: `{"marks":[{"name","lat","lon","side":"port"/"stbd"}],"fixes":[...],"weather":{"src","lat","lon","got","pts":[[t_ms,dir,kn,gust],...]}}` |
 | GET / PUT | `/api/sessions/<day>/crew` | who had which puck that day: `{"puck3": "Dave"}` |
 | GET | `/api/sailors` | every name used in any session (for the name picker) |
 | POST | `/api/pucks/checkin` | puck check-in every ~30 s on the pad: `{"puck":3,"battery_mv":4012,"charging":"charging"/"full"/"not","on_pad":true,"free_kb":12000,"total_kb":14336,"fw":"0.3.1","pending":1}`; reply carries dock time |
@@ -131,7 +131,7 @@ Agreed, not built yet. Roughly in the order they'd make sense.
 2. **Phone upload via QR codes**: code is in (`/upload` page, QR codes from the dock, new tracks appear on the projector by themselves) but paused; needs a proper test on real phones.
 3. **Home viewing, read-only**: dock syncs sessions to the home server (NAS/Tower) when online; published through a Cloudflare tunnel (e.g. puck.bridgesolutions.uk). Public copy runs the viewer locked: replay, races, colours, chart, focus a boat, tack list, big/full screen, download a track. No editing of names, races, marks or corrections; server refuses all changes. Choose per session whether it's published. Decide: club members only (Cloudflare Access email code) or anyone with the link.
 4. **Up to 16 pucks**: 16 distinct colours (no red/green), compact one-row-per-boat projector view, stress test with a fake 16-boat race, bigger pad tray and power supply.
-5. **Weather data**: Open-Meteo (free, hourly, anywhere) to fill in wind per race; switch to the SSC weather station when it's running (log direction/speed every few seconds with a timestamp) for real shifts, lifts and headers.
+5. **Weather data**: ~~Open-Meteo~~ done — **Get weather** fills in wind direction, speed and gusts per race (hourly model). Next: the SSC weather station when it's running (log direction/speed every few seconds with a timestamp) for real shifts, lifts and headers — same `meta.weather.pts` format, just finer.
 6. **Offline map backgrounds**: dock keeps the satellite/chart tiles for each venue it's been online at, so away venues work without internet.
 7. **Leg analysis**: with marks placed, split each race into legs and show who gained or lost on each beat and run.
 8. **NAS backup** of sessions from the dock.

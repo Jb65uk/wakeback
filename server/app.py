@@ -153,6 +153,26 @@ def clean_lines(ls):
         except (KeyError, TypeError, ValueError): pass
     return out
 
+def clean_weather(w):
+    """Wind for the day from Open-Meteo: {src, lat, lon, got, pts: [[t_ms, dir, kn, gust|null], ...]}."""
+    if not isinstance(w, dict): return None
+    pts = []
+    for p in (w.get('pts') if isinstance(w.get('pts'), list) else [])[:2000]:
+        try:
+            t, d, s = int(p[0]), float(p[1]) % 360, float(p[2])
+            g = float(p[3]) if len(p) > 3 and p[3] is not None else None
+            if 0 <= s <= 200 and (g is None or 0 <= g <= 250): pts.append([t, d, s, g])
+        except (TypeError, ValueError, IndexError, KeyError): pass
+    if not pts: return None
+    out = {'src': str(w.get('src', ''))[:40], 'pts': pts}
+    try:
+        lat, lon = float(w['lat']), float(w['lon'])
+        if -90 <= lat <= 90 and -180 <= lon <= 180: out['lat'], out['lon'] = lat, lon
+    except (KeyError, TypeError, ValueError): pass
+    try: out['got'] = int(w['got'])
+    except (KeyError, TypeError, ValueError): pass
+    return out
+
 def clean_gun(v):
     try: return int(v) if v else None
     except (TypeError, ValueError): return None
@@ -177,6 +197,8 @@ def put_meta(day):
         except (KeyError, TypeError, ValueError): pass
     clean = {'marks': clean_marks(body.get('marks')), 'fixes': fixes, 'lines': clean_lines(body.get('lines'))}
     if clean_gun(body.get('gun')): clean['gun'] = clean_gun(body.get('gun'))
+    wx = clean_weather(body.get('weather'))
+    if wx: clean['weather'] = wx
     d = os.path.join(SESSIONS, day); os.makedirs(d, exist_ok=True)
     with lock:
         with open(os.path.join(d, 'meta.json'), 'w') as f: json.dump(clean, f, indent=1)

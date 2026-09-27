@@ -147,6 +147,17 @@ body.big #raceTitle{display:block}
 .tk .m{font-family:var(--num);font-weight:600;font-size:16px;color:var(--signal)}
 .windctl{background:var(--panel);color:var(--ink);border-radius:8px;padding:6px 10px;display:flex;align-items:center;gap:8px;font-family:var(--num);font-weight:600;font-size:16px;border:1px solid var(--line)}
 .windctl svg{width:22px;height:22px;fill:var(--signal)}
+.windctl .wxk{font-weight:500;color:var(--muted);margin-left:2px}
+.wxbox{display:flex;flex-direction:column;gap:6px;background:var(--panel-2);border-radius:6px;padding:8px 10px;font-size:13px;color:var(--muted)}
+.wxbox .wxhead{display:flex;align-items:center;gap:8px;justify-content:space-between}
+.wxbox b{color:var(--ink);font-family:var(--num);font-weight:600;font-size:15px}
+.wxhours{display:flex;gap:10px;overflow-x:auto;padding-bottom:2px}
+.wxhours div{flex:0 0 auto;text-align:center;font-family:var(--num);font-size:12px;line-height:1.3}
+.wxhours div.now{color:var(--signal)}
+.wxhours svg{width:14px;height:14px;fill:currentColor;display:block;margin:0 auto 2px}
+#wxBig{display:none;font-family:var(--num);font-weight:600;font-size:20px;color:var(--ink);margin-top:4px}
+body.big #wxBig:not(:empty){display:flex;align-items:center;gap:8px}
+#wxBig svg{width:22px;height:22px;fill:var(--signal)}
 .foot summary{cursor:pointer;color:var(--ink);font-weight:600;font-size:14px}
 .foot p{margin:8px 0 0}
 .foot{margin-top:auto;color:var(--muted);font-size:12px;line-height:1.5}
@@ -286,7 +297,8 @@ body.big #togglePanel,body.big #trailOnlyWrap{display:none}
       </div>
     </div>
     <div class="train">
-      <label>Wind from <input type="number" id="wind" min="0" max="359" step="1" placeholder="°" aria-label="Wind direction, degrees from"> ° <button class="btn" id="windEst" style="padding:4px 8px;font-size:12px">Estimate</button></label>
+      <label>Wind from <input type="number" id="wind" min="0" max="359" step="1" placeholder="°" aria-label="Wind direction, degrees from"> ° <button class="btn" id="windEst" style="padding:4px 8px;font-size:12px">Estimate</button><button class="btn" id="wxGet" style="padding:4px 8px;font-size:12px">Get weather</button></label>
+      <div class="wxbox" id="wxBox" hidden></div>
       <label>Analyse <select id="focus" style="flex:1"><option value="">Pick a boat…</option></select></label>
       <div class="seg" id="tkFilter"><button data-v="all" class="on">All</button><button data-v="Tack">Tacks</button><button data-v="Gybe">Gybes</button><button data-v="Mark">Marks</button></div>
       <label>Sort <select id="tkSort" style="flex:1"><option value="time">In order</option><option value="loss">Worst first</option><option value="best">Best first</option></select></label>
@@ -302,6 +314,7 @@ body.big #togglePanel,body.big #trailOnlyWrap{display:none}
       <p><b>Load</b> a session from the dock, or drop GPX/CSV files anywhere on the map.</p>
       <p><b>Names:</b> puck numbers never change (P3 is always P3, always the same colour). Tap a name to say who had that puck today. It's saved for this session only.</p>
       <p><b>Races:</b> Auto split finds the breaks between races, or add them by hand with start and end times. Everything follows the race you pick.</p>
+      <p><b>Weather:</b> Get weather fetches the wind (direction, speed, gusts) for where and when you sailed, from Open-Meteo (free, needs internet once). It's saved with the day, sets the wind for each race, and shows live on the map and the big screen. Estimate or typing a direction still overrides it.</p>
       <p><b>Wind:</b> type the direction it blows from, or press Estimate. You then get VMG, and tacks, gybes and mark roundings told apart.</p>
       <p><b>Tacks & gybes:</b> tap it under a boat, filter, sort Worst first, tap one to jump the replay there. Loss is metres of VMG lost until the boat's back to 95% of its speed before.</p>
       <p><b>Course marks:</b> Add mark, tap the map where it was laid, drag to adjust. Tap a mark to rename it or set the side: red = leave to port, green = leave to starboard. Marks are per race; new races copy the last race's marks.</p>
@@ -319,6 +332,7 @@ body.big #togglePanel,body.big #trailOnlyWrap{display:none}
 
   <aside id="cards" aria-label="Boat data">
     <div id="raceTitle"></div>
+    <div id="wxBig"></div>
     <div class="chips" id="raceChipsBig"></div>
     <details id="fieldBox"><summary>Choose data</summary><div class="chips" id="fieldChips" style="margin-top:8px"></div></details>
     <div id="cardList" style="display:contents"></div>
@@ -372,6 +386,7 @@ const MAX_DRAW = 4000;        // max points per drawn track
 let boats = [], T = 0, tMin = 0, tMax = 0, playing = false, lastFrame = 0;
 let colourMode = 'boat', timing = 'real', speedMax = 8, colourIdx = 0;
 let wind = null, focusId = '';
+let windSrc = null;                 // where the wind came from: 'weather' | 'est' | 'typed'
 let races = [], raceIdx = -1;      // raceIdx -1 = whole session
 let crew = {};                      // who had which puck this session: { puck3: 'Dave', 'Steve_phone.gpx': 'Steve' }
 let tkFilter = 'all', tkSort = 'time', tkSel = null;
@@ -724,10 +739,96 @@ function estimateWind() {
 $('#windEst').addEventListener('click', () => {
   const e = estimateWind();
   if (!e) return toast('Load some tracks first');
-  wind = e.wind; $('#wind').value = wind;
+  wind = e.wind; windSrc = 'est'; $('#wind').value = wind;
   try { localStorage.setItem('wakeback-wind', wind); } catch {}
   windCtl.update(); recomputeAll(); toast(`Wind estimated at ${String(wind).padStart(3, '0')}°, tacking through ${2 * e.angle}°. Adjust if it looks wrong.`, 5000);
 });
+// ---------- weather (Open-Meteo: free, no key) ----------
+// meta.weather = { src, lat, lon, got, pts: [[t_ms, dir_from_deg, speed_kn, gust_kn|null], ...] } — hourly, saved with the day.
+function wxAt(t) {
+  const p = meta.weather && meta.weather.pts; if (!p || !p.length || !isFinite(t)) return null;
+  const at = k => ({ dir: p[k][1], kn: p[k][2], gust: p[k][3] ?? null });
+  if (t <= p[0][0]) return at(0);
+  if (t >= p[p.length - 1][0]) return at(p.length - 1);
+  let k = 0; while (k < p.length - 2 && p[k + 1][0] <= t) k++;
+  const a = p[k], b = p[k + 1], f = (t - a[0]) / (b[0] - a[0]);
+  return { dir: ((a[1] + angDiff(b[1], a[1]) * f) + 360) % 360, kn: a[2] + (b[2] - a[2]) * f,
+           gust: a[3] != null && b[3] != null ? a[3] + (b[3] - a[3]) * f : (a[3] ?? b[3] ?? null) };
+}
+function wxWindow(t0, t1) {
+  // average over a time window, every 5 minutes: circular mean for direction, max for gusts
+  if (!meta.weather || !(t1 > t0)) return null;
+  let sx = 0, sy = 0, kn = 0, n = 0, gust = null;
+  for (let t = t0; t <= t1; t += 300000) {
+    const w = wxAt(t); if (!w) return null;
+    sx += Math.sin(rad(w.dir)) * Math.max(w.kn, 0.1); sy += Math.cos(rad(w.dir)) * Math.max(w.kn, 0.1); kn += w.kn; n++;
+    if (w.gust != null) gust = Math.max(gust ?? 0, w.gust);
+  }
+  return n ? { dir: Math.round((Math.atan2(sx, sy) * 180 / Math.PI + 360) % 360) % 360, kn: kn / n, gust } : null;
+}
+function activeWindow() {
+  if (raceIdx >= 0 && races[raceIdx]) return [races[raceIdx].start, races[raceIdx].end];
+  return boats.length ? [Math.min(...boats.map(b => b.start)), Math.max(...boats.map(b => b.end))] : [0, 0];
+}
+function applyWeatherWind() {
+  const w = wxWindow(...activeWindow()); if (!w) return false;
+  wind = w.dir; windSrc = 'weather'; $('#wind').value = wind;
+  try { localStorage.setItem('wakeback-wind', wind); } catch {}
+  windCtl.update(); return true;
+}
+function renderWx() {
+  const box = $('#wxBox'), wx = meta.weather;
+  if (!$('#wxGet').disabled) $('#wxGet').textContent = wx ? 'Refresh weather' : 'Get weather';
+  if (!wx || !boats.length) { box.hidden = true; box.innerHTML = ''; windCtl.update(); return; }
+  const [t0, t1] = activeWindow(), w = wxWindow(t0, t1);
+  const hours = wx.pts.filter(p => p[0] >= t0 - 3600000 && p[0] <= t1 + 3600000);
+  const nowH = hours.length ? hours.reduce((a, p) => Math.abs(p[0] - T) < Math.abs(a[0] - T) ? p : a)[0] : null;
+  box.hidden = false;
+  box.innerHTML = `<div class="wxhead"><span>${raceIdx >= 0 ? esc(races[raceIdx].name) : 'Session'}:
+      ${w ? `<b>${String(w.dir).padStart(3, '0')}° ${w.kn.toFixed(0)} kn</b>${w.gust != null ? `, gusts <b>${w.gust.toFixed(0)}</b>` : ''}` : '–'}</span>
+      <button class="lnk" id="wxUse"${windSrc === 'weather' ? ' hidden' : ''}>Use</button></div>
+    <div class="wxhours">${hours.map(p => `<div class="${p[0] === nowH ? 'now' : ''}">${WX_ARROW(p[1])}${hhmm(p[0])}<br>${Math.round(p[1]).toString().padStart(3, '0')}°<br>${p[2].toFixed(0)}${p[3] != null ? '<small>G' + p[3].toFixed(0) + '</small>' : ''}</div>`).join('')}</div>
+    <div style="font-size:11px">${esc(wx.src || 'Open-Meteo')}, weather model for ${wx.lat != null ? wx.lat.toFixed(3) + ', ' + wx.lon.toFixed(3) : 'the course'}. A model, not a gauge on the lake: good for the breeze, less so for shifts.</div>`;
+  windCtl.last = null; windCtl.update();
+}
+async function fetchWeather() {
+  if (!boats.length) return toast('Load a session first');
+  // where: the middle of everyone's tracks; when: the whole session
+  let la = 0, lo = 0, n = 0;
+  for (const b of boats) for (let i = 0; i < b.n; i += 50) { la += b.lat[i]; lo += b.lon[i]; n++; }
+  la /= n; lo /= n;
+  const t0 = Math.min(...boats.map(b => b.start)), t1 = Math.max(...boats.map(b => b.end));
+  const day = t => new Date(t).toISOString().slice(0, 10);
+  const q = `latitude=${la.toFixed(4)}&longitude=${lo.toFixed(4)}&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m`
+          + `&wind_speed_unit=kn&timeformat=unixtime&timezone=GMT&start_date=${day(t0 - 3600000)}&end_date=${day(t1 + 3600000)}`;
+  // recent days: the forecast API (keeps ~3 months of past model runs); older: the ERA5 archive
+  const old = Date.now() - t1 > 80 * 86400000;
+  const srcs = [['Open-Meteo', 'https://api.open-meteo.com/v1/forecast?'], ['Open-Meteo archive (ERA5)', 'https://archive-api.open-meteo.com/v1/archive?']];
+  const btn = $('#wxGet'); btn.disabled = true; btn.textContent = 'Getting…';
+  let lastErr = '';
+  try {
+    for (const [name, url] of old ? srcs.slice(1) : srcs) {
+      try {
+        const r = await fetch(url + q);
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.error) throw new Error(j.reason || 'HTTP ' + r.status);
+        const h = j.hourly || {};
+        const pts = (h.time || []).map((s, i) => [s * 1000, h.wind_direction_10m?.[i], h.wind_speed_10m?.[i], h.wind_gusts_10m?.[i] ?? null])
+          .filter(p => p[1] != null && p[2] != null && p[0] >= t0 - 7200000 && p[0] <= t1 + 7200000);
+        if (!pts.length) throw new Error('no wind data for that time');
+        meta.weather = { src: name, lat: +la.toFixed(4), lon: +lo.toFixed(4), got: Date.now(), pts };
+        saveMeta(); applyWeatherWind(); recomputeAll(); renderWx(); render();
+        const w = wxWindow(...activeWindow());
+        toast(`Weather: wind ${String(w.dir).padStart(3, '0')}° ${w.kn.toFixed(0)} kn${w.gust != null ? ', gusts ' + w.gust.toFixed(0) : ''}. Saved with the day. Press Estimate to fine-tune the direction from the boats.`, 6000);
+        return;
+      } catch (err) { lastErr = err.message; }
+    }
+    toast('Couldn\'t get the weather: ' + (lastErr || 'no internet?') + '. Needs internet once; after that it\'s saved with the day.', 6000);
+  } finally { btn.disabled = false; btn.textContent = meta.weather ? 'Refresh weather' : 'Get weather'; }
+}
+$('#wxGet').addEventListener('click', fetchWeather);
+$('#wxBox').addEventListener('click', e => { if (e.target.id === 'wxUse' && applyWeatherWind()) { recomputeAll(); renderWx(); render(); toast('Wind set from the weather'); } });
+
 // ---------- start & finish lines ----------
 // A = committee boat end, B = pin end. Work in metres around A.
 function lineGeom(l) {
@@ -942,6 +1043,7 @@ function render() {
     setCardVals(b, i);
   }
   $('#clock').textContent = fmtClock(T);
+  if (meta.weather) windCtl.update();
   $('#scrub').value = tMax > tMin ? Math.round((T - tMin) / (tMax - tMin) * 10000) : 0;
   drawChart();
 }
@@ -1097,8 +1199,9 @@ async function loadRaces() {
 }
 function selectRace(i) {
   raceIdx = i; T = -Infinity;
+  if (meta.weather && (windSrc === 'weather' || wind == null)) applyWeatherWind();
   selMark = null; map.closePopup();
-  recomputeAll(); recomputeTimeline(); T = tMin; renderRaces(); renderMarks(); render(); fit();
+  recomputeAll(); recomputeTimeline(); T = tMin; renderRaces(); renderMarks(); renderWx(); render(); fit();
 }
 function renderRaces() {
   const chips = `<button class="chip${raceIdx < 0 ? ' on' : ''}" data-race="-1">Whole session</button>`
@@ -1327,7 +1430,7 @@ async function loadMeta() {
   let got = null;
   if (dock.on && dock.session) { try { const r = await fetch(`/api/sessions/${dock.session}/meta`); if (r.ok) got = await r.json(); } catch {} }
   if (!got || !Object.keys(got).length) { try { got = JSON.parse(localStorage.getItem('wakeback-meta-' + k)); } catch {} }
-  if (got) meta = { marks: Array.isArray(got.marks) ? got.marks : [], fixes: Array.isArray(got.fixes) ? got.fixes : [], lines: Array.isArray(got.lines) ? got.lines : [], ...(got.gun ? { gun: got.gun } : {}) };
+  if (got) meta = { marks: Array.isArray(got.marks) ? got.marks : [], fixes: Array.isArray(got.fixes) ? got.fixes : [], lines: Array.isArray(got.lines) ? got.lines : [], ...(got.gun ? { gun: got.gun } : {}), ...(got.weather && Array.isArray(got.weather.pts) && got.weather.pts.length ? { weather: got.weather } : {}) };
 }
 function saveMeta() {
   const k = sessionKey(); if (!k) return;
@@ -1473,6 +1576,7 @@ $('#tkSort').addEventListener('change', e => { tkSort = e.target.value; renderTa
 $('#wind').addEventListener('change', e => {
   const v = e.target.value.trim();
   wind = v === '' ? null : ((+v % 360) + 360) % 360;
+  windSrc = wind == null ? null : 'typed';
   if (wind != null) e.target.value = wind;
   try { localStorage.setItem('wakeback-wind', wind == null ? '' : wind); } catch {}
   windCtl.update(); recomputeAll();
@@ -1480,11 +1584,18 @@ $('#wind').addEventListener('change', e => {
 $('#focus').addEventListener('change', e => focusBoat(e.target.value));
 const windCtl = L.control({ position: 'topright' });
 windCtl.onAdd = () => { windCtl.el = L.DomUtil.create('div', 'windctl'); windCtl.update(); return windCtl.el; };
+const WX_ARROW = d => `<svg viewBox="0 0 20 20" style="transform:rotate(${d + 180}deg)"><path d="M10 1 L15 12 L10 9.5 L5 12 Z"/></svg>`;
 windCtl.update = () => {
   if (!windCtl.el) return;
-  if (wind == null) { windCtl.el.style.display = 'none'; return; }
-  windCtl.el.style.display = 'flex';
-  windCtl.el.innerHTML = `<svg viewBox="0 0 20 20" style="transform:rotate(${wind + 180}deg)"><path d="M10 1 L15 12 L10 9.5 L5 12 Z"/></svg>Wind ${String(wind).padStart(3, '0')}°`;
+  const w = boats.length && timing === 'real' ? wxAt(T) : null;
+  const sp = w ? ` <span class="wxk">${w.kn.toFixed(0)} kn${w.gust != null ? ' G' + w.gust.toFixed(0) : ''}</span>` : '';
+  const html = wind == null ? '' : `${WX_ARROW(wind)}Wind ${String(wind).padStart(3, '0')}°${sp}`;
+  if (html !== windCtl.last) {
+    windCtl.last = html;
+    windCtl.el.style.display = html ? 'flex' : 'none';
+    windCtl.el.innerHTML = html;
+    $('#wxBig').innerHTML = html && meta.weather ? html : '';
+  }
 };
 windCtl.addTo(map);
 if (wind != null) $('#wind').value = wind;
@@ -1602,9 +1713,11 @@ async function addBoats(list) {
   rememberSailors(boats.map(b => b.name));
   await loadRaces();
   await loadMeta();
+  if (meta.weather) applyWeatherWind();
   boats.forEach(computeDerived);
   computeStartFinish();
   renderMarks();
+  renderWx();
   recomputeTimeline(); T = tMin; renderList(); renderCards(); renderTacks(); renderRaces(); rebuildAll(); fit();
 }
 function fit() {
@@ -1655,7 +1768,7 @@ $('#export').addEventListener('click', () => {
   a.download = `wakeback-${d}.gpx`; document.body.appendChild(a); a.click(); a.remove();
   toast('Downloaded ' + a.download);
 });
-$('#clear').addEventListener('click', () => { boats.forEach(clearLayers); boats = []; colourIdx = 0; focusId = ''; tkSel = null; crew = {}; races = []; raceIdx = -1; meta = { marks: [], fixes: [], lines: [] }; setAdding(false); addingLine = null; sfState = null; setPlaying(false); recomputeTimeline(); renderList(); renderCards(); renderTacks(); renderRaces(); render(); });
+$('#clear').addEventListener('click', () => { boats.forEach(clearLayers); boats = []; colourIdx = 0; focusId = ''; tkSel = null; crew = {}; races = []; raceIdx = -1; meta = { marks: [], fixes: [], lines: [] }; setAdding(false); addingLine = null; sfState = null; renderWx(); setPlaying(false); recomputeTimeline(); renderList(); renderCards(); renderTacks(); renderRaces(); render(); });
 $('#metric').addEventListener('change', drawChartBase);
 
 // ---------- controls ----------

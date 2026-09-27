@@ -119,6 +119,36 @@ List<Map<String, dynamic>> cleanLines(Object? ls) {
   return out;
 }
 
+/// Wind for the day from Open-Meteo: {src, lat, lon, got, pts: [[t_ms, dir, kn, gust|null], ...]} (app.py clean_weather).
+Map<String, dynamic>? cleanWeather(Object? w) {
+  if (w is! Map) return null;
+  final pts = <List<Object?>>[];
+  final raw = w['pts'];
+  if (raw is List) {
+    for (final p in raw.take(2000)) {
+      try {
+        if (p is! List) continue;
+        final t = pyInt(p[0]), d = pyFloat(p[1]) % 360, s = pyFloat(p[2]);
+        final g = p.length > 3 && p[3] != null ? pyFloat(p[3]) : null;
+        if (s >= 0 && s <= 200 && (g == null || (g >= 0 && g <= 250))) pts.add([t, d, s, g]);
+      } catch (_) {}
+    }
+  }
+  if (pts.isEmpty) return null;
+  final out = <String, dynamic>{'src': cut(pyStr(w.containsKey('src') ? w['src'] : ''), 40), 'pts': pts};
+  try {
+    final lat = pyFloat(w['lat']), lon = pyFloat(w['lon']);
+    if (lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
+      out['lat'] = lat;
+      out['lon'] = lon;
+    }
+  } catch (_) {}
+  try {
+    out['got'] = pyInt(w['got']);
+  } catch (_) {}
+  return out;
+}
+
 int? cleanGun(Object? v) {
   if (!pyTruthy(v)) return null;
   try {
@@ -408,6 +438,8 @@ class DockStore {
     final clean = <String, dynamic>{'marks': cleanMarks(body['marks']), 'fixes': fixes, 'lines': cleanLines(body['lines'])};
     final gun = cleanGun(body['gun']);
     if (gun != null && gun != 0) clean['gun'] = gun;
+    final wx = cleanWeather(body['weather']);
+    if (wx != null) clean['weather'] = wx;
     await locked(() => _writeJson(File('${dayDir(day).path}/meta.json'), clean));
     return clean;
   }
