@@ -12,7 +12,7 @@ club pucks ─► dock Pi at the club ──────────────
 ## Decisions (27 Sep 2026)
 
 - **Accounts:** invite-only for now (you add people); can open up later without a rebuild.
-- **Sign-in:** email sign-in link (needs an email-sending account, e.g. Brevo/SMTP). The app stays signed in.
+- **Sign-in:** email + password (no email service needed); the admin resets passwords from /admin. The app stays signed in.
 - **Privacy:** a new sail is visible to **friends** by default; any one can be made private or public.
 - **Clean-up:** the QR phone-upload page is gone (mates use the app instead); old Bluetooth design dropped.
 
@@ -30,9 +30,10 @@ club pucks ─► dock Pi at the club ──────────────
    Sessions by date + venue; venue detection, naming, "wrong venue?" move; owner recorded on every track
    (phone profile, puck's owner, or the club); your old date-only folders are converted automatically;
    the app has a "You" profile; sync keeps venues and owners.
-2. **Accounts and sharing**
-   Database (SQLite) on the server; invite, email sign-in link, the app signs in; owner = your account;
-   friends; private / friends / public per track; only the owner edits or deletes; a read-only public viewer.
+2. **Accounts and sharing** ✅
+   Email + password accounts on the server (SQLite), approval or auto-approve, admin dashboard at /admin,
+   friends, friends/private per track, only the owner (or admin) edits or deletes, the app signs in and
+   keeps demo data separate. Not yet: a public read-only link, email "forgot password".
 3. **Events and "who else was there?"**
    Create an event, share a link/code, everyone adds their track; the server spots other WakeBack sailors at
    the same venue and time and offers to ask them; a feed of your and your friends' sailing.

@@ -10,5 +10,6 @@ services:
     volumes:
       - ./data:/app/data          # sessions, venues, pucks live here, next to this file
     environment:
-      WAKEBACK_WIFI: wakeback      # the dock WiFi name shown on the Dock page
-      WAKEBACK_OWNER: ""           # owner for pucks with none set (e.g. "Southport SC"); blank for personal use
+      WAKEBACK_ADMIN: "you@example.com"   # your email: turns accounts on, and makes that account the admin (/admin)
+      WAKEBACK_WIFI: wakeback              # the dock WiFi name shown on the Dock page
+      WAKEBACK_OWNER: ""                   # owner for pucks with none set (e.g. "Southport SC"); blank for personal use

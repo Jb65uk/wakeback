@@ -120,13 +120,25 @@ Phone/watch GPX files are accepted too; they just lack heel and pitch.
 | GET / POST | `/api/wifi/scan`, `/api/wifi/connect` | find and join a WiFi network (on the Pi) |
 | GET | `/api/hello` | dock time, used by pucks to confirm they're talking to the right box |
 
-## On a NAS (or any Docker box)
+## On a NAS (or any Docker box): accounts, friends, admin
 
 GitHub builds the server as a container on every change: `ghcr.io/jb65uk/wakeback-server:latest`.
 Use `docker-compose.yml` from this repo (on a Ugreen NAS: Docker → Project → Create, paste it). It
 listens on port 5090 and keeps everything in a `data` folder next to the compose file. Put it on the
-internet with a Cloudflare tunnel public hostname pointing at `http://<nas-ip>:5090`, and until
-accounts exist, protect it with Cloudflare Access (email code) so only people you allow get in.
+internet with a Cloudflare tunnel public hostname pointing at `http://<nas-ip>:5090`.
+
+Set **`WAKEBACK_ADMIN`** to your email and accounts switch on:
+
+- Everyone signs in (the app, or the viewer in a browser). New sign-ups wait for approval unless
+  **Auto-approve** is on. The account with the admin email is the admin.
+- **`/admin`** (admin only): approve/disable users, reset passwords, the auto-approve switch, every
+  track (owner, sharing, remove), and a log of changes. Put Cloudflare Access on just this path if you like.
+- Friends see each other's sails unless a sail is set **private**; tracks with no owner (a club
+  dock's) are visible to all. The admin sees everything.
+- Storage: `data/wakeback.db` (users, friends, tokens, log); who owns each track and its sharing
+  live in the session's `owners.json`, so the phone app and a dock Pi keep the same files.
+
+A dock Pi or the phone app runs without `WAKEBACK_ADMIN`: no logins, everything visible, as before.
 
 ## On the Pi
 
