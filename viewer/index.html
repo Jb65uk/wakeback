@@ -1700,9 +1700,17 @@ function renderSessions(list) {
   $('#venueChips').innerHTML = venues.length > 1
     ? `<button class="chip${!venueFilter ? ' on' : ''}" data-vf="">All venues</button>` + venues.map(([v, n]) => `<button class="chip${venueFilter === v ? ' on' : ''}" data-vf="${esc(v)}">${esc(n)}</button>`).join('')
     : '';
-  const shown = list.filter(sx => !venueFilter || sx.venue === venueFilter);
+  let shown = list.filter(sx => !venueFilter || sx.venue === venueFilter);
+  // in the phone app this list is just the recent few (always including the one on screen); the Sessions tab has them all
+  let more = 0;
+  if (window.WakeBackApp && shown.length > 3) {
+    const keep = shown.slice(0, 3), cur = shown.find(sx => sx.id === dock.session);
+    if (cur && !keep.includes(cur)) keep.push(cur);
+    more = shown.length - keep.length; shown = keep;
+  }
   $('#sessList').innerHTML = shown.length
     ? shown.map(sx => `<button class="sess${sx.id === dock.session ? ' on' : ''}" data-sess="${esc(sx.id)}"><span><span class="d">${esc(sx.date ? niceDate(sx.date) : sx.id)}</span>${sx.venue_name ? `<br><span class="v">${esc(sx.venue_name)}</span>` : ''}</span><span class="n">${sx.count} track${sx.count === 1 ? '' : 's'}</span></button>`).join('')
+      + (more ? `<div class="empty">${more} older — see the Sessions tab</div>` : '')
     : '<div class="empty">No sessions yet. Put a puck on its pad, or add tracks.</div>';
   renderVenueBar();
 }
