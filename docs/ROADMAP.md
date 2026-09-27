@@ -44,6 +44,24 @@ club pucks ─► dock Pi at the club ──────────────
 3. **Events and "who else was there?"**
    Create an event, share a link/code, everyone adds their track; the server spots other WakeBack sailors at
    the same venue and time and offers to ask them; a feed of your and your friends' sailing.
-4. **Puck setup from the app** (with the firmware)
-   The app gives your puck your hotspot name/password and its owner (USB, or the puck's own setup WiFi for a
-   minute on first power-up). Travel-proofing uses the venue list.
+4. **Puck setup from the app** (with the firmware) — TO DO, first once a puck is on the bench
+   On first power-up (or holding the button) the puck puts up its own WiFi `wakeback-puck-N` for a couple of
+   minutes; the app joins it and sends hotspot name + password, the owner, and a **puck key** (random,
+   issued by the server, tied to the owner's account — club pucks to the club account). The puck sends the
+   key with every upload; nobody types or remembers it. Lost/sold puck → revoke the key in /admin and set it
+   up again. Lost hotspot password → change it on the phone and re-tell the puck the same way.
+5. **Firmware from the dashboard → app → puck** — TO DO
+   /admin: upload a `.bin` + version + notes; server serves `/api/firmware/latest`. The app shows
+   "Puck 3 is on 1.2, 1.4 available — Update" on the Dock page and pushes it while the puck is on the pad /
+   the hotspot (ESP32 OTA). Rule: keep the previous image and roll back if the new one doesn't check in
+   within a minute — one bad build must not brick the club's pucks on a Saturday.
+6. **App update button** — TO DO
+   The app checks the GitHub release feed, shows "Update available", downloads the APK and hands it to
+   Android's installer. Needs the `ANDROID_KEYSTORE_*` signing secrets on GitHub first (a build signed with a
+   throwaway key won't install over the last one — what stuck on the tablet).
+7. **2FA (TOTP) on accounts** — TO DO
+   Authenticator-app codes, no SMS/email service; optional for sailors, on for the admin; admin can turn it
+   off for someone who's lost their phone (from /admin, like a password reset).
+
+Also still on you: add the GitHub signing secrets; scope Cloudflare Access to `/admin` only so the app can
+create accounts.
