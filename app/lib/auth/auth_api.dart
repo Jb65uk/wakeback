@@ -68,6 +68,10 @@ class AuthApi {
     try {
       j = (jsonDecode(utf8.decode(r.bodyBytes)) as Map).cast<String, dynamic>();
     } catch (_) {
+      if (r.statusCode == 302 || r.statusCode == 301 || (r.headers['location'] ?? '').contains('cloudflareaccess')) {
+        throw AuthException('Something in front of the server (Cloudflare Access?) is asking for its own login. '
+            'Limit it to the /admin page, or turn it off for this address.', r.statusCode);
+      }
       throw AuthException('Unexpected reply (HTTP ${r.statusCode}). Is that a WakeBack server?', r.statusCode);
     }
     if (r.statusCode >= 400) throw AuthException('${j['error'] ?? 'HTTP ${r.statusCode}'}', r.statusCode);

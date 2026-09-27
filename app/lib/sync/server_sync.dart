@@ -81,6 +81,9 @@ class ServerSync {
     try {
       final r = await f.timeout(timeout);
       if (r.statusCode == 401) throw const SyncException('Please sign in to your WakeBack account (Setup → You)', signedOut: true);
+      if (r.statusCode == 301 || r.statusCode == 302) {
+        throw const SyncException('Something in front of the server (Cloudflare Access?) is asking for its own login. Limit it to /admin.');
+      }
       if (r.statusCode >= 400) {
         String msg;
         try {
