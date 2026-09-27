@@ -1,8 +1,8 @@
 // Two-way sync between the phone's dock and your WakeBack server (server/app.py),
 // using only the server's existing endpoints — nothing new needed on the server.
 //
-// Per sailing day:
-//   tracks  — anything missing on either side is copied across (same file names)
+// Venues first (so both sides file tracks under the same venue), then per session (date + venue):
+//   tracks  — anything missing on either side is copied across (same file names), with their owner
 //   crew    — merged; where both named the same puck differently, the phone wins
 //   races / course (marks, lines, gun, corrections) — copied to whichever side has none;
 //             if both sides have a different one, you choose which to keep
@@ -24,7 +24,10 @@ class SyncException implements Exception {
 class DayCompare {
   final String day;
   final List<String> phoneOnly, serverOnly, both;
-  const DayCompare(this.day, this.phoneOnly, this.serverOnly, this.both);
+
+  /// Who sent each of the server's tracks (names only), so downloads keep their owner.
+  final Map<String, String> serverOwners;
+  const DayCompare(this.day, this.phoneOnly, this.serverOnly, this.both, {this.serverOwners = const {}});
   bool get onPhone => phoneOnly.isNotEmpty || both.isNotEmpty;
   bool get onServer => serverOnly.isNotEmpty || both.isNotEmpty;
   bool get tracksInSync => phoneOnly.isEmpty && serverOnly.isEmpty;
@@ -105,8 +108,45 @@ class ServerSync {
     return j.whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
   }
 
+  /// Make the phone's and the server's venue lists match. Returns how many changed.
+  /// Missing on either side: copied across (same id). Both have it: a named venue beats an automatic
+  /// "New venue near…"; if both are named differently, the server's name wins.
+  Future<int> syncVenues() async {
+    final sj = await _getJson('/api/venues');
+    if (sj is! List) throw const SyncException('That address answered, but it isn\'t a WakeBack server');
+    final server = {for (final v in sj.whereType<Map>()) '${v['id']}': v.cast<String, dynamic>()};
+    final phone = {for (final v in await store.venues()) '${v['id']}': v};
+    var changed = 0;
+    for (final v in phone.values) {
+      final s = server[v['id']];
+      if (s == null) {
+        await _go(http.post(_u('/api/venues'), headers: {'Content-Type': 'application/json'}, body: jsonEncode(v)));
+        changed++;
+      } else if (s['name'] != v['name']) {
+        if (s['auto'] == true && v['auto'] != true) {
+          await _putJson('/api/venues/${Uri.encodeComponent('${v['id']}')}', {'name': v['name']});
+        } else {
+          await store.upsertVenue(s);
+        }
+        changed++;
+      }
+    }
+    for (final s in server.values) {
+      if (!phone.containsKey(s['id'])) {
+        await store.upsertVenue(s);
+        changed++;
+      }
+    }
+    return changed;
+  }
+
   Future<List<DayCompare>> compare() async {
-    final server = {for (final s in await serverSessions()) '${s['id']}': ((s['files'] as List?) ?? const []).map((e) => '$e').toSet()};
+    await syncVenues();
+    final ss = await serverSessions();
+    final server = {for (final s in ss) '${s['id']}': ((s['files'] as List?) ?? const []).map((e) => '$e').toSet()};
+    final owners = {
+      for (final s in ss) '${s['id']}': {for (final e in ((s['owners'] as Map?) ?? const {}).entries) '${e.key}': '${e.value}'}
+    };
     final phone = {for (final s in await store.sessions()) '${s['id']}': ((s['files'] as List?) ?? const []).map((e) => '$e').toSet()};
     final days = {...server.keys, ...phone.keys}.toList()..sort((a, b) => b.compareTo(a));
     return [
@@ -116,14 +156,20 @@ class ServerSync {
           ((phone[d] ?? <String>{}).difference(server[d] ?? <String>{})).toList()..sort(),
           ((server[d] ?? <String>{}).difference(phone[d] ?? <String>{})).toList()..sort(),
           ((phone[d] ?? <String>{}).intersection(server[d] ?? <String>{})).toList()..sort(),
+          serverOwners: owners[d] ?? const {},
         ),
     ];
   }
 
   Future<void> _uploadTrack(String day, String name) async {
     final f = await store.trackFile(day, name);
+    final owner = await store.ownerOf(day, name);
     final req = http.MultipartRequest('POST', _u('/api/upload'))
       ..files.add(http.MultipartFile.fromBytes('file', await f.readAsBytes(), filename: name));
+    if (owner != null && '${owner['name'] ?? ''}'.isNotEmpty) {
+      req.fields['owner_name'] = '${owner['name']}';
+      if ('${owner['email'] ?? ''}'.isNotEmpty) req.fields['owner_email'] = '${owner['email']}';
+    }
     final r = await _go(req.send().then(http.Response.fromStream), timeout: const Duration(minutes: 3));
     // The server files by the track's own timestamp; if it put it somewhere else (e.g. a track with no
     // timestamp lands on "today"), move ours to match so it isn't uploaded again next time.
@@ -150,7 +196,11 @@ class ServerSync {
     }
     for (final f in c.serverOnly) {
       progress?.call('Downloading $f');
-      if (await store.putTrack(day, f, await _downloadTrack(day, f))) rep.down++;
+      if (await store.putTrack(day, f, await _downloadTrack(day, f))) {
+        rep.down++;
+        final who = c.serverOwners[f];
+        if (who != null && who.isNotEmpty) await store.setOwner(day, f, {'name': who});
+      }
     }
 
     progress?.call('Names and course');

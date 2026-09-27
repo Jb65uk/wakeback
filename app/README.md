@@ -2,7 +2,8 @@
 
 **The dock in your pocket.** The app runs the same API as `server/app.py` on the phone and shows the
 **real viewer** (`viewer/index.html`) — races, marks, start/finish lines, tacks & gybes, wind, big screen,
-crew names, the Dock page, phone-upload QR codes — all saved on the phone.
+crew names, venues, weather, the Dock page — all saved on the phone. Every session is a date + venue, and everything
+your phone records is marked as yours (Setup → You).
 
 - **No dock Pi yet?** Turn on the phone's hotspot. Pucks join it and upload to the phone exactly as they
   would to the Pi (same `/api/pucks/checkin` and `/api/upload`).

@@ -1,22 +1,19 @@
 // The dock, on the phone. Same URLs and replies as server/app.py, so:
 //   - the real viewer (index.html), Dock page and phone-upload page run unchanged in the app
 //   - pucks on the phone's hotspot check in and upload exactly as they would to the Pi
-//   - mates on the hotspot can open http://<phone>:5000/upload and send their phone GPX
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:mime/mime.dart';
-import 'package:qr/qr.dart';
 
 import 'store.dart';
 
 typedef AssetLoader = Future<Uint8List?> Function(String name);
 
 class DockSettings {
-  String wifi = 'wakeback'; // the phone hotspot name pucks/phones join
-  String wifiPass = '';
+  String wifi = 'wakeback'; // the phone hotspot name pucks join
   String hostname = 'WakeBack phone';
 }
 
@@ -102,7 +99,7 @@ class PocketDock {
 
   static const _leafletCss = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css';
   static const _leafletJs = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js';
-  static const _pages = {'index.html', 'dock.html', 'upload.html', 'leaflet.js', 'leaflet.css'};
+  static const _pages = {'index.html', 'dock.html', 'leaflet.js', 'leaflet.css'};
 
   Future<void> _page(HttpRequest req, String name) async {
     if (!_pages.contains(name)) throw const DockError(404, 'not found');
@@ -124,7 +121,6 @@ class PocketDock {
 
     if (m == 'GET' && seg.isEmpty) return _page(req, 'index.html');
     if (m == 'GET' && seg.length == 1 && seg[0] == 'dock') return _page(req, 'dock.html');
-    if (m == 'GET' && seg.length == 1 && seg[0] == 'upload') return _page(req, 'upload.html');
     if (m == 'GET' && seg.length == 2 && seg[0] == 'viewer') return _page(req, seg[1]);
     if (seg.isEmpty || seg[0] != 'api') throw const DockError(404, 'not found');
 
@@ -153,26 +149,22 @@ class PocketDock {
         await store.deleteTrack(day, what);
         return _json(req, {'ok': true});
       }
+      if (m == 'POST' && what == 'move') return _json(req, {'session': await store.moveSession(day, await _body(req))});
     }
+
+    // venues
+    if (m == 'GET' && path == 'venues') {
+      final vs = await store.venues();
+      vs.sort((a, b) => '${a['name']}'.toLowerCase().compareTo('${b['name']}'.toLowerCase()));
+      return _json(req, vs);
+    }
+    if (m == 'POST' && path == 'venues') {
+      final (status, v) = await store.addVenue(await _body(req));
+      return _json(req, v, status);
+    }
+    if (m == 'PUT' && api.length == 2 && api[0] == 'venues') return _json(req, await store.putVenue(api[1], await _body(req)));
     if (m == 'POST' && path == 'upload') return _upload(req);
     if (m == 'GET' && path == 'sailors') return _json(req, await store.sailors());
-
-    // phone uploads
-    if (m == 'GET' && path == 'dockinfo') {
-      return _json(req, {'wifi': settings.wifi, 'password': settings.wifiPass, 'upload_url': await _uploadUrl(req)});
-    }
-    if (m == 'GET' && api.length == 2 && api[0] == 'qr') {
-      final what = api[1];
-      String data;
-      if (what == 'wifi.svg') {
-        data = _wifiQrText();
-      } else if (what == 'upload.svg') {
-        data = await _uploadUrl(req);
-      } else {
-        throw const DockError(404, 'not found');
-      }
-      return _send(req, 200, utf8.encode(qrSvg(data)), 'image/svg+xml', noStore: true);
-    }
 
     // pucks
     if (m == 'POST' && path == 'pucks/checkin') return _json(req, await store.checkin(await _body(req)));
@@ -214,7 +206,8 @@ class PocketDock {
       }
     }
     if (fileName == null || fileName.isEmpty || fileBytes == null) throw const DockError(400, 'no file');
-    return _json(req, await store.upload(fileName, fileBytes, puck: fields['puck'] ?? '', sailor: fields['sailor'] ?? ''));
+    return _json(req, await store.upload(fileName, fileBytes,
+        puck: fields['puck'] ?? '', sailor: fields['sailor'] ?? '', ownerName: fields['owner_name'] ?? '', ownerEmail: fields['owner_email'] ?? ''));
   }
 
   // ------------------------------------------------------------------ phone-specific bits
@@ -243,22 +236,6 @@ class PocketDock {
     } catch (_) {
       return [];
     }
-  }
-
-  Future<String> _uploadUrl(HttpRequest req) async {
-    final host = req.headers.host ?? '';
-    // opened from another device (mate on the hotspot): use the address they used
-    if (host.isNotEmpty && host != '127.0.0.1' && host != 'localhost') {
-      return 'http://$host${req.headers.port != 80 ? ':${req.headers.port}' : ''}/upload';
-    }
-    final ips = await lanAddresses();
-    return ips.isEmpty ? 'http://<phone>:$port/upload' : 'http://${ips.first}:$port/upload';
-  }
-
-  String _wifiQrText() {
-    String esc(String v) => v.replaceAllMapped(RegExp(r'([\\;,:"])'), (m) => '\\${m[1]}');
-    final pass = settings.wifiPass;
-    return 'WIFI:T:${pass.isNotEmpty ? 'WPA' : 'nopass'};S:${esc(settings.wifi)};${pass.isNotEmpty ? 'P:${esc(pass)};' : ''};';
   }
 
   Future<bool> _online() async {
@@ -290,22 +267,4 @@ class PocketDock {
       'phone': true,
     };
   }
-}
-
-/// A QR code as a standalone SVG (with xmlns, so an <img> shows it). Same colours as app.py.
-String qrSvg(String data, {int scale = 8, int border = 2}) {
-  final code = QrCode.fromData(data: data, errorCorrectLevel: QrErrorCorrectLevel.M);
-  final img = QrImage(code);
-  final n = img.moduleCount;
-  final size = (n + border * 2) * scale;
-  final sb = StringBuffer('<?xml version="1.0" encoding="utf-8"?>\n'
-      '<svg xmlns="http://www.w3.org/2000/svg" width="$size" height="$size" viewBox="0 0 $size $size">'
-      '<rect width="$size" height="$size" fill="#FFFFFF"/><path fill="#13293A" d="');
-  for (var r = 0; r < n; r++) {
-    for (var c = 0; c < n; c++) {
-      if (img.isDark(r, c)) sb.write('M${(c + border) * scale} ${(r + border) * scale}h${scale}v${scale}h-${scale}z');
-    }
-  }
-  sb.write('"/></svg>');
-  return sb.toString();
 }

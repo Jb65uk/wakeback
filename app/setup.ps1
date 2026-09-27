@@ -19,7 +19,7 @@ if (-not (Get-Command flutter -ErrorAction SilentlyContinue)) {
 }
 
 # ---- 1. latest viewer into the app
-foreach ($p in 'index.html', 'dock.html', 'upload.html') {
+foreach ($p in 'index.html', 'dock.html') {
     $src = Join-Path $PSScriptRoot "..\viewer\$p"
     if (Test-Path $src) { Copy-Item $src (Join-Path $PSScriptRoot "assets\web\$p") -Force }
 }

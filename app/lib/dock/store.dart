@@ -1,11 +1,14 @@
 // Session storage + all the dock's rules, ported line for line from server/app.py
 // so the phone files, cleans and reports things exactly like the dock Pi.
 //
-// Layout (same as the dock):  <data>/sessions/<YYYY-MM-DD>/<puckN_HHMMSS.csv | *.gpx | races.json | meta.json | crew.json>
-//                             <data>/pucks.json
+// Layout (same as the dock):  <data>/sessions/<YYYY-MM-DD>_<venue>/<puckN_HHMMSS.csv | *.gpx | races.json | meta.json | crew.json | owners.json>
+//                             <data>/pucks.json, <data>/venues.json
+// A session is a sailing date + venue. Each track has an owner (whose puck/phone sent it) as well as a
+// sailor (who was in the boat, crew.json).
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 final RegExp _safeRe = RegExp(r'^[A-Za-z0-9._ -]+$');
@@ -158,6 +161,56 @@ int? cleanGun(Object? v) {
   }
 }
 
+// ------------------------------------------------------------------ venues (app.py)
+
+const String unknownVenue = 'unknown';
+final List<Map<String, dynamic>> defaultVenues = [
+  {'id': 'southport-sc', 'name': 'Southport SC (Marine Lake)', 'lat': 53.6503, 'lon': -3.0102, 'radius_m': 1500, 'auto': false},
+];
+final RegExp sessionRe = RegExp(r'^(\d{4}-\d{2}-\d{2})(?:_([a-z0-9-]+))?$');
+
+double havM(double la1, double lo1, double la2, double lo2) {
+  double r(double d) => d * math.pi / 180;
+  final h = math.pow(math.sin(r(la2 - la1) / 2), 2) + math.cos(r(la1)) * math.cos(r(la2)) * math.pow(math.sin(r(lo2 - lo1) / 2), 2);
+  return 2 * 6371000 * math.asin(math.sqrt(h));
+}
+
+String slug(String name) {
+  var s = name.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-').replaceAll(RegExp(r'-+'), '-');
+  s = s.replaceAll(RegExp(r'^-+|-+$'), '');
+  s = cut(s, 30);
+  return s.isEmpty ? 'venue' : s;
+}
+
+String autoVenueId(double lat, double lon) {
+  String f(double v) => v.abs().toStringAsFixed(2).replaceAll('.', '');
+  return 'near-${f(lat)}${lat >= 0 ? 'n' : 's'}-${f(lon)}${lon >= 0 ? 'e' : 'w'}';
+}
+
+/// (lat, lon) of the first position in a CSV or GPX, to work out the venue.
+List<double>? firstFix(Uint8List bytes, String name) {
+  try {
+    final head = latin1.decode(bytes.length > 6000 ? bytes.sublist(0, 6000) : bytes);
+    if (name.toLowerCase().endsWith('.gpx')) {
+      final m = RegExp(r'<trkpt\b([^>]*)>').firstMatch(head);
+      if (m == null) return null;
+      final la = RegExp(r'\blat="([-0-9.]+)"').firstMatch(m.group(1)!), lo = RegExp(r'\blon="([-0-9.]+)"').firstMatch(m.group(1)!);
+      return la != null && lo != null ? [double.parse(la.group(1)!), double.parse(lo.group(1)!)] : null;
+    }
+    final lines = const LineSplitter().convert(head);
+    final cols = lines[0].split(',').map((c) => c.trim().toLowerCase()).toList();
+    final ila = cols.indexOf('lat'), ilo = cols.indexOf('lon');
+    if (ila < 0 || ilo < 0) return null;
+    for (final ln in lines.skip(1)) {
+      final c = ln.split(',');
+      final lat = ila < c.length ? double.tryParse(c[ila]) : null, lon = ilo < c.length ? double.tryParse(c[ilo]) : null;
+      if (lat == null || lon == null) continue;
+      if (lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180 && !(lat == 0 && lon == 0)) return [lat, lon];
+    }
+  } catch (_) {}
+  return null;
+}
+
 // LiPo resting voltage -> rough %
 const List<List<double>> _lipo = [
   [4.20, 100], [4.10, 90], [4.00, 78], [3.90, 62], [3.80, 45], [3.75, 35],
@@ -190,12 +243,22 @@ class DockStore {
 
   Directory get sessionsDir => Directory('${data.path}/sessions');
   File get _pucksFile => File('${data.path}/pucks.json');
+  File get _venuesFile => File('${data.path}/venues.json');
+
+  /// Who owns tracks this dock records when the puck has no owner of its own. On a phone that's you
+  /// (a person, so your boat gets your name); on a club dock it's the club (WAKEBACK_OWNER).
+  String ownerName = '';
+  String ownerEmail = '';
+  bool ownerIsPerson = true;
   Directory dayDir(String day) => Directory('${sessionsDir.path}/$day');
 
   /// How many pucks the club has, so ones never seen still get a row (WAKEBACK_FLEET).
   int fleet = 0;
 
-  Future<void> init() => sessionsDir.create(recursive: true);
+  Future<void> init() async {
+    await sessionsDir.create(recursive: true);
+    await locked(migrateDateFolders);
+  }
 
   // one writer at a time (app.py uses a threading.Lock)
   Future<void> _lock = Future.value();
@@ -245,7 +308,7 @@ class DockStore {
   // ---- GET /api/sessions
   Future<List<Map<String, dynamic>>> sessions() async {
     final days = await _days();
-    days.sort((a, b) => b.compareTo(a)); // newest first, like sorted(..., reverse=True)
+    final vs = await venues();
     final out = <Map<String, dynamic>>[];
     for (final day in days) {
       final files = await trackFiles(day);
@@ -253,8 +316,25 @@ class DockStore {
       var races = 0;
       final r = await _readJson(File('${dayDir(day).path}/races.json'));
       if (r is List) races = r.length;
-      out.add({'id': day, 'files': files, 'count': files.length, 'races': races});
+      final m = sessionRe.firstMatch(day);
+      final vid = m?.group(2) ?? unknownVenue;
+      final ow = await _readJson(File('${dayDir(day).path}/owners.json'));
+      final owners = <String, dynamic>{};
+      if (ow is Map) {
+        ow.forEach((f, o) {
+          if (o is Map && files.contains(f)) owners['$f'] = pyStr(o['name'] ?? ''); // names only: emails stay here
+        });
+      }
+      out.add({
+        'id': day, 'date': m?.group(1) ?? cut(day, 10), 'venue': vid, 'venue_name': venueName(vid, vs), 'venue_new': venueIsNew(vid, vs),
+        'files': files, 'count': files.length, 'races': races, 'owners': owners,
+      });
     }
+    // newest date first, then venue name (sorted(key=(date, venue_name), reverse=True))
+    out.sort((a, b) {
+      final c = (b['date'] as String).compareTo(a['date'] as String);
+      return c != 0 ? c : (b['venue_name'] as String).compareTo(a['venue_name'] as String);
+    });
     return out;
   }
 
@@ -316,14 +396,18 @@ class DockStore {
   }
 
   // ---- POST /api/upload
-  Future<Map<String, dynamic>> upload(String filename, Uint8List bytes, {String puck = '', String sailor = ''}) async {
+  Future<Map<String, dynamic>> upload(String filename, Uint8List bytes,
+      {String puck = '', String sailor = '', String ownerName = '', String ownerEmail = ''}) async {
     var name = tidyName(filename);
     if (!isTrack(name)) {
       throw const DockError(400, 'That file isn\'t a GPX or CSV track. In your sailing app, look for "Export GPX".');
     }
     if (puck.isNotEmpty && !name.toLowerCase().startsWith(puck.toLowerCase())) name = '${puck}_$name';
-    final day = firstDay(bytes, name) ?? dayOf(DateTime.now().toUtc());
+    final date = firstDay(bytes, name) ?? dayOf(DateTime.now().toUtc());
+    var oName = cut(ownerName.trim(), 40), oEmail = cut(ownerEmail.trim(), 120);
     return locked(() async {
+      final vid = await _venueFor(firstFix(bytes, name));
+      final day = '${date}_$vid';
       final dir = dayDir(day);
       await dir.create(recursive: true);
       final dot = name.lastIndexOf('.');
@@ -339,13 +423,43 @@ class DockStore {
       await tmp.rename(dest.path);
       final fname = baseName(dest.path);
       final pm = _puckRe.firstMatch(fname);
-      if (pm != null) {
-        final key = 'puck${int.parse(pm.group(1)!)}';
+      final pk = pm != null ? 'puck${int.parse(pm.group(1)!)}' : null;
+      if (pk != null) {
         final m = await _loadPucks();
-        final r = (m[key] as Map<String, dynamic>?) ?? <String, dynamic>{};
+        final r = (m[pk] as Map<String, dynamic>?) ?? <String, dynamic>{};
         r['last_upload'] = {'time': DateTime.now().millisecondsSinceEpoch, 'session': day, 'file': fname, 'bytes': bytes.length};
-        m[key] = r;
+        m[pk] = r;
         await _writeJson(_pucksFile, m);
+        final po = r['owner'];
+        if (oName.isEmpty && po is Map) {
+          oName = pyStr(po['name'] ?? '');
+          oEmail = pyStr(po['email'] ?? '');
+        }
+      }
+      var person = true;
+      if (oName.isEmpty && this.ownerName.isNotEmpty) {
+        oName = this.ownerName;
+        oEmail = this.ownerEmail;
+        person = ownerIsPerson;
+      }
+      // owner: whose puck/phone sent it (can edit/delete it later). Sailor: who was in the boat (crew).
+      if (oName.isNotEmpty) {
+        final of = File('${dir.path}/owners.json');
+        final j = await _readJson(of);
+        final owners = j is Map ? j.cast<String, dynamic>() : <String, dynamic>{};
+        owners[fname] = {'name': oName, if (oEmail.isNotEmpty) 'email': oEmail};
+        await _writeJson(of, owners);
+        if (person) {
+          // the owner's own track: name the boat after them unless someone's said otherwise
+          final cf = File('${dir.path}/crew.json');
+          final cj = await _readJson(cf);
+          final crew = cj is Map ? cj.cast<String, dynamic>() : <String, dynamic>{};
+          final key = pk ?? fname;
+          if (!pyTruthy(crew[key])) {
+            crew[key] = oName;
+            await _writeJson(cf, crew);
+          }
+        }
       }
       final who = cut(sailor.trim(), 40);
       if (who.isNotEmpty) {
@@ -355,7 +469,7 @@ class DockStore {
         crew[fname] = who;
         await _writeJson(cf, crew);
       }
-      return {'ok': true, 'session': day, 'file': fname};
+      return {'ok': true, 'session': day, 'file': fname, 'venue': vid, 'venue_name': venueName(vid, await venues())};
     });
   }
 
@@ -385,7 +499,244 @@ class DockStore {
       } else {
         await f.rename(dest.path);
       }
+      // the owner record follows the track
+      final of = File('${dayDir(day).path}/owners.json');
+      final j = await _readJson(of);
+      if (j is Map && j.containsKey(name)) {
+        final rec = j.remove(name);
+        await _writeJson(of, j);
+        final tf = File('${dayDir(toDay).path}/owners.json');
+        final tj = await _readJson(tf);
+        final to = tj is Map ? tj.cast<String, dynamic>() : <String, dynamic>{};
+        to.putIfAbsent(toName, () => rec);
+        await _writeJson(tf, to);
+      }
     });
+  }
+
+  // ------------------------------------------------------------------ venues
+
+  Future<List<Map<String, dynamic>>> venues() async {
+    final j = await _readJson(_venuesFile);
+    if (j is List) return j.whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
+    return defaultVenues.map((v) => Map<String, dynamic>.from(v)).toList();
+  }
+
+  Future<void> _saveVenues(List<Map<String, dynamic>> vs) => _writeJson(_venuesFile, vs);
+
+  /// Add or replace a venue exactly as given (sync from the server).
+  Future<void> upsertVenue(Map<String, dynamic> v) => locked(() async {
+        final vs = await venues();
+        final i = vs.indexWhere((x) => x['id'] == v['id']);
+        if (i < 0) {
+          vs.add(v);
+        } else {
+          vs[i] = v;
+        }
+        await _saveVenues(vs);
+      });
+
+  /// Record who sent a track (sync: a mate's track downloaded from the server keeps their name).
+  Future<void> setOwner(String day, String file, Map<String, dynamic> owner) => locked(() async {
+        final f = File('${dayDir(day).path}/owners.json');
+        final j = await _readJson(f);
+        final m = j is Map ? j.cast<String, dynamic>() : <String, dynamic>{};
+        m[file] = owner;
+        await _writeJson(f, m);
+      });
+
+  /// {name, email} of whoever sent this track, if known.
+  Future<Map<String, dynamic>?> ownerOf(String day, String file) async {
+    final j = await _readJson(File('${dayDir(day).path}/owners.json'));
+    final o = j is Map ? j[file] : null;
+    return o is Map ? o.cast<String, dynamic>() : null;
+  }
+
+  static String venueName(String vid, List<Map<String, dynamic>> vs) {
+    if (vid == unknownVenue) return 'Unknown venue';
+    for (final v in vs) {
+      if (v['id'] == vid) return pyStr(v['name']);
+    }
+    return vid;
+  }
+
+  static bool venueIsNew(String vid, List<Map<String, dynamic>> vs) =>
+      vid == unknownVenue || vs.any((v) => v['id'] == vid && v['auto'] == true);
+
+  /// Venue id for a position, adding an automatic venue if it's somewhere new. Call inside `locked`.
+  Future<String> _venueFor(List<double>? pos) async {
+    if (pos == null) return unknownVenue;
+    final vs = await venues();
+    Map<String, dynamic>? best;
+    var bestD = double.infinity;
+    for (final v in vs) {
+      if (v['lat'] is! num || v['lon'] is! num) continue;
+      final d = havM(pos[0], pos[1], (v['lat'] as num).toDouble(), (v['lon'] as num).toDouble());
+      if (d < bestD) {
+        bestD = d;
+        best = v;
+      }
+    }
+    if (best != null && bestD <= ((best['radius_m'] as num?) ?? 1500)) return '${best['id']}';
+    final vid = autoVenueId(pos[0], pos[1]);
+    if (!vs.any((v) => v['id'] == vid)) {
+      vs.add({
+        'id': vid, 'name': 'New venue near ${pos[0].toStringAsFixed(2)}, ${pos[1].toStringAsFixed(2)}',
+        'lat': double.parse(pos[0].toStringAsFixed(4)), 'lon': double.parse(pos[1].toStringAsFixed(4)), 'radius_m': 1500, 'auto': true,
+      });
+      await _saveVenues(vs);
+    }
+    return vid;
+  }
+
+  Map<String, dynamic> _cleanVenue(Map b, Map<String, dynamic> old) {
+    final v = Map<String, dynamic>.from(old);
+    if (b.containsKey('name')) {
+      final n = cut(pyStr(b['name']).trim(), 60);
+      if (n.isEmpty) throw const DockError(400, 'a venue needs a name');
+      v['name'] = n;
+      v['auto'] = false;
+    }
+    for (final (k, lo, hi) in [('lat', -90.0, 90.0), ('lon', -180.0, 180.0), ('radius_m', 100.0, 20000.0)]) {
+      if (!b.containsKey(k)) continue;
+      double x;
+      try {
+        x = pyFloat(b[k]);
+      } catch (_) {
+        throw DockError(400, 'bad $k');
+      }
+      if (x < lo || x > hi) throw DockError(400, '$k out of range');
+      v[k] = k == 'radius_m' ? x.truncate() : double.parse(x.toStringAsFixed(5));
+    }
+    return v;
+  }
+
+  // ---- POST /api/venues (returns [status, venue])
+  Future<(int, Map<String, dynamic>)> addVenue(Object? body) async {
+    if (body is! Map || !pyTruthy(body['name']) || !body.containsKey('lat') || !body.containsKey('lon')) {
+      throw const DockError(400, 'name, lat and lon needed');
+    }
+    return locked(() async {
+      final vs = await venues();
+      final want = pyStr(body['id'] ?? '');
+      final ok = RegExp(r'^[a-z0-9-]{1,40}$').hasMatch(want);
+      if (want.isNotEmpty && ok) {
+        for (final v in vs) {
+          if (v['id'] == want) return (200, v); // already here (sync sends it again)
+        }
+      }
+      var vid = ok ? want : slug(pyStr(body['name']));
+      final base = vid;
+      var n = 1;
+      while (vs.any((v) => v['id'] == vid) || vid == unknownVenue) {
+        n++;
+        vid = '$base-$n';
+      }
+      final v = _cleanVenue(body, {'id': vid, 'radius_m': 1500});
+      v['auto'] = pyTruthy(body['auto'] ?? false);
+      vs.add(v);
+      await _saveVenues(vs);
+      return (201, v);
+    });
+  }
+
+  // ---- PUT /api/venues/<id>
+  Future<Map<String, dynamic>> putVenue(String vid, Object? body) async {
+    if (body is! Map) throw const DockError(400, 'expected an object');
+    return locked(() async {
+      final vs = await venues();
+      final i = vs.indexWhere((v) => v['id'] == vid);
+      if (i < 0) throw const DockError(404, 'not found');
+      vs[i] = _cleanVenue(body, vs[i]);
+      await _saveVenues(vs);
+      return vs[i];
+    });
+  }
+
+  // ---- POST /api/sessions/<id>/move  (wrong venue: move the session, merging if needed)
+  Future<String> moveSession(String day, Object? body) async {
+    if (!safeName.hasMatch(day)) throw const DockError(400, 'bad day');
+    final vid = pyStr(body is Map ? (body['venue'] ?? '') : '');
+    final m = sessionRe.firstMatch(day);
+    if (m == null || !await dayDir(day).exists()) throw const DockError(404, 'not found');
+    if (vid != unknownVenue && !(await venues()).any((v) => v['id'] == vid)) throw const DockError(400, 'no such venue');
+    final to = '${m.group(1)}_$vid';
+    if (to == day) return day;
+    await locked(() async {
+      final src = dayDir(day), dst = dayDir(to);
+      await dst.create(recursive: true);
+      final entries = await src.list().toList(); // list first: we rename as we go
+      for (final e in entries) {
+        if (e is! File) continue;
+        final f = baseName(e.path);
+        var target = File('${dst.path}/$f');
+        if (f.endsWith('.json')) {
+          if ((f == 'crew.json' || f == 'owners.json') && await target.exists()) {
+            final a = await _readJson(e), b = await _readJson(target);
+            await _writeJson(target, {if (a is Map) ...a, if (b is Map) ...b});
+            await e.delete();
+          } else if (await target.exists()) {
+            await e.delete();
+          } else {
+            await e.rename(target.path);
+          }
+          continue;
+        }
+        final dot = f.lastIndexOf('.');
+        final base = dot > 0 ? f.substring(0, dot) : f, ext = dot > 0 ? f.substring(dot) : '';
+        var n = 1;
+        while (await target.exists()) {
+          n++;
+          target = File('${dst.path}/$base-$n$ext');
+        }
+        await e.rename(target.path);
+      }
+      await src.delete(recursive: true);
+    });
+    return to;
+  }
+
+  /// Older layouts filed sessions by date only ("2026-09-20"). Split each into date + venue folders.
+  Future<int> migrateDateFolders() async {
+    final moved = <String, String>{}; // "day|file" -> new session
+    final days = await _days();
+    days.sort();
+    for (final day in days) {
+      if (!RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(day)) continue;
+      final src = dayDir(day);
+      final groups = <String, List<File>>{};
+      for (final e in await src.list().toList()) {
+        if (e is File && isTrack(baseName(e.path))) {
+          final vid = await _venueFor(firstFix(await e.readAsBytes(), baseName(e.path)));
+          groups.putIfAbsent(vid, () => []).add(e);
+        }
+      }
+      for (final g in groups.entries) {
+        final dst = dayDir('${day}_${g.key}');
+        await dst.create(recursive: true);
+        for (final f in g.value) {
+          await f.rename('${dst.path}/${baseName(f.path)}');
+          moved['$day|${baseName(f.path)}'] = '${day}_${g.key}';
+        }
+        for (final j in ['races.json', 'meta.json', 'crew.json', 'owners.json']) {
+          final a = File('${src.path}/$j'), b = File('${dst.path}/$j');
+          if (await a.exists() && !await b.exists()) await a.copy(b.path);
+        }
+      }
+      await src.delete(recursive: true);
+    }
+    if (moved.isNotEmpty) {
+      final m = await _loadPucks();
+      for (final r in m.values) {
+        final lu = r is Map ? r['last_upload'] : null;
+        if (lu is Map) {
+          final k = '${lu['session']}|${lu['file']}';
+          if (moved.containsKey(k)) lu['session'] = moved[k];
+        }
+      }
+      await _writeJson(_pucksFile, m);
+    }
+    return moved.length;
   }
 
   // ---- DELETE /api/sessions/<day>/<name>

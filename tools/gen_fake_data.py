@@ -107,7 +107,7 @@ def main():
 
     # Sunday: two back-to-back races in one log per puck, plus one phone track. Try "Auto split" on this one.
     day = datetime(2026, 9, 20, 10, 30, tzinfo=timezone.utc)
-    d = os.path.join(a.out, day.strftime('%Y-%m-%d')); os.makedirs(d, exist_ok=True)
+    d = os.path.join(a.out, day.strftime('%Y-%m-%d') + '_southport-sc'); os.makedirs(d, exist_ok=True)   # sessions are date + venue
     fleet = [('puck1', 4.6, 11,  0, 12), ('puck2', 4.4, 23,  8,  5), ('puck3', 4.2, 37, -8, 24)]
     for puck, kn, seed, off, heel in fleet:
         write_csv(os.path.join(d, f'{puck}_{day.strftime("%H%M%S")}.csv'), two_races(kn, seed, off, heel, day))
@@ -133,7 +133,7 @@ def main():
 
     # Tuesday training: one puck, a couple of laps on its own, different wind
     day2 = datetime(2026, 9, 22, 17, 45, tzinfo=timezone.utc)
-    d2 = os.path.join(a.out, day2.strftime('%Y-%m-%d')); os.makedirs(d2, exist_ok=True)
+    d2 = os.path.join(a.out, day2.strftime('%Y-%m-%d') + '_southport-sc'); os.makedirs(d2, exist_ok=True)
     write_csv(os.path.join(d2, f'puck1_{day2.strftime("%H%M%S")}.csv'), sim_boat(4.7, 71, 0, 10, wind=300, t0=day2, laps=2))
     print('wrote fake sessions to', os.path.abspath(a.out))
 

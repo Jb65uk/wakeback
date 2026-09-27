@@ -32,9 +32,11 @@ class AppState extends ChangeNotifier {
     store = DockStore(Directory('${docs.path}/wakeback'));
     await store.init();
     store.fleet = fleet;
-    dockSettings
-      ..wifi = hotspotName
-      ..wifiPass = hotspotPass;
+    store
+      ..ownerName = profileName
+      ..ownerEmail = profileEmail
+      ..ownerIsPerson = true;
+    dockSettings.wifi = hotspotName;
     dock = PocketDock(store, _asset, dockSettings);
     try {
       await dock.start(port: 5000);
@@ -80,10 +82,25 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Kept for setting up pucks to join this phone's hotspot (stage 4).
   String get hotspotPass => _p.getString('hotspotPass') ?? '';
   set hotspotPass(String v) {
     _p.setString('hotspotPass', v);
-    dockSettings.wifiPass = v;
+    notifyListeners();
+  }
+
+  /// You: owner of everything this phone records or imports. Your email is never shown to other sailors.
+  String get profileName => _p.getString('profileName') ?? '';
+  set profileName(String v) {
+    _p.setString('profileName', v.trim());
+    store.ownerName = v.trim();
+    notifyListeners();
+  }
+
+  String get profileEmail => _p.getString('profileEmail') ?? '';
+  set profileEmail(String v) {
+    _p.setString('profileEmail', v.trim());
+    store.ownerEmail = v.trim();
     notifyListeners();
   }
 

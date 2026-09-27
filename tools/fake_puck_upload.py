@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pretend to be a puck landing on the dock: POST a log file to the server.
 
-Usage: python tools/fake_puck_upload.py data/sessions/2026-09-22/puck1_174500.csv [--puck puck1] [--dock http://localhost:5000]
+Usage: python tools/fake_puck_upload.py data/sessions/2026-09-22_southport-sc/puck1_174500.csv [--puck puck1] [--dock http://localhost:5000]
 """
 import argparse, os, sys, urllib.request, uuid
 

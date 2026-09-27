@@ -7,7 +7,10 @@ Runs on the dock Pi (or your laptop for development). It:
   - serves track files from data/sessions/<date>/<file>
   - accepts uploads from pucks at POST /api/upload (multipart, field "file")
   - accepts uploads from the browser (drag-drop in the viewer) the same way
-  - stores who sailed which puck, per session, at /api/sessions/<day>/crew
+  - stores who sailed which puck, per session, at /api/sessions/<session>/crew
+  - files each track under a session = sailing date + venue ("2026-09-20_southport-sc"),
+    with the venue found from where the track starts (data/venues.json), and records its
+    owner (whose puck/phone sent it) separately from the sailor (who was in the boat)
 
 Run:  python server/app.py            (http://localhost:5000)
 """
@@ -24,6 +27,15 @@ PUCKS = os.path.join(ROOT, 'data', 'pucks.json')
 BOOT = time.time()
 
 app = Flask(__name__, static_folder=None)
+
+from werkzeug.exceptions import HTTPException
+
+@app.errorhandler(HTTPException)
+def api_errors(e):
+    """API errors as JSON ({"error": "..."}), like the phone app's dock; pages keep Flask's HTML."""
+    if request.path.startswith('/api/'):
+        return jsonify(error=e.description if e.description and not e.description.startswith('The ') else e.name), e.code
+    return e
 SAFE_RE = re.compile(r'^[A-Za-z0-9._ -]+$')
 
 class _Safe:
@@ -49,6 +61,120 @@ def first_timestamp(path):
     except Exception:
         return None
 
+def first_fix(path):
+    """(lat, lon) of the first position in a CSV or GPX, to work out the venue."""
+    try:
+        with open(path, 'r', errors='ignore') as f:
+            head = f.read(6000)
+        if path.lower().endswith('.gpx'):
+            m = re.search(r'<trkpt\b([^>]*)>', head)
+            la = re.search(r'\blat="([-0-9.]+)"', m.group(1)) if m else None
+            lo = re.search(r'\blon="([-0-9.]+)"', m.group(1)) if m else None
+            return (float(la.group(1)), float(lo.group(1))) if la and lo else None
+        lines = head.splitlines()
+        cols = [c.strip().lower() for c in lines[0].split(',')]
+        la, lo = cols.index('lat'), cols.index('lon')
+        for ln in lines[1:]:
+            c = ln.split(',')
+            try:
+                lat, lon = float(c[la]), float(c[lo])
+            except (ValueError, IndexError):
+                continue
+            if -90 <= lat <= 90 and -180 <= lon <= 180 and (lat, lon) != (0.0, 0.0): return lat, lon
+    except Exception:
+        pass
+    return None
+
+# ---------- venues ----------
+# Where people sail. A track is filed under the nearest venue within its radius; somewhere new gets an
+# automatic venue ("New venue near 53.65, -3.01") that you name once.
+VENUES = os.path.join(ROOT, 'data', 'venues.json')
+DEFAULT_VENUES = [{'id': 'southport-sc', 'name': 'Southport SC (Marine Lake)', 'lat': 53.6503, 'lon': -3.0102, 'radius_m': 1500, 'auto': False}]
+UNKNOWN_VENUE = 'unknown'
+
+def load_venues():
+    try:
+        with open(VENUES) as f: vs = json.load(f)
+        if isinstance(vs, list): return vs
+    except (OSError, ValueError): pass
+    return [dict(v) for v in DEFAULT_VENUES]
+
+def save_venues(vs):
+    os.makedirs(os.path.dirname(VENUES), exist_ok=True)
+    tmp = VENUES + '.tmp'
+    with open(tmp, 'w') as f: json.dump(vs, f, indent=1)
+    os.replace(tmp, VENUES)
+
+def hav_m(la1, lo1, la2, lo2):
+    import math
+    r = math.radians
+    h = math.sin(r(la2 - la1) / 2) ** 2 + math.cos(r(la1)) * math.cos(r(la2)) * math.sin(r(lo2 - lo1) / 2) ** 2
+    return 2 * 6371000 * math.asin(math.sqrt(h))
+
+def slug(name):
+    return re.sub(r'-+', '-', re.sub(r'[^a-z0-9]+', '-', name.lower())).strip('-')[:30] or 'venue'
+
+def auto_venue_id(lat, lon):
+    return 'near-%s%s-%s%s' % (('%.2f' % abs(lat)).replace('.', ''), 'n' if lat >= 0 else 's', ('%.2f' % abs(lon)).replace('.', ''), 'e' if lon >= 0 else 'w')
+
+def venue_for(pos):
+    """Venue id for a position, adding an automatic venue if it's somewhere new. Call with `lock` held."""
+    if not pos: return UNKNOWN_VENUE
+    vs = load_venues()
+    best = min(((hav_m(pos[0], pos[1], v['lat'], v['lon']), v) for v in vs if 'lat' in v and 'lon' in v), default=None, key=lambda x: x[0])
+    if best and best[0] <= best[1].get('radius_m', 1500): return best[1]['id']
+    vid = auto_venue_id(*pos)
+    if not any(v['id'] == vid for v in vs):
+        vs.append({'id': vid, 'name': 'New venue near %.2f, %.2f' % pos, 'lat': round(pos[0], 4), 'lon': round(pos[1], 4), 'radius_m': 1500, 'auto': True})
+        save_venues(vs)
+    return vid
+
+def venue_name(vid, vs=None):
+    if vid == UNKNOWN_VENUE: return 'Unknown venue'
+    return next((v['name'] for v in (vs or load_venues()) if v['id'] == vid), vid)
+
+def venue_is_new(vid, vs):
+    """Found automatically and not named yet (or no position at all)."""
+    return vid == UNKNOWN_VENUE or any(v['id'] == vid and v.get('auto') for v in vs)
+
+SESSION_RE = re.compile(r'^(\d{4}-\d{2}-\d{2})(?:_([a-z0-9-]+))?$')
+
+def read_json(path, default):
+    try:
+        with open(path) as f: return json.load(f)
+    except (OSError, ValueError): return default
+
+def write_json(path, value):
+    tmp = path + '.tmp'
+    with open(tmp, 'w') as f: json.dump(value, f, indent=1)
+    os.replace(tmp, path)
+
+def migrate_date_folders():
+    """Older docks filed sessions by date only ("2026-09-20"). Split each into date + venue folders."""
+    moved = {}
+    for day in sorted(os.listdir(SESSIONS)):
+        src = os.path.join(SESSIONS, day)
+        if not (os.path.isdir(src) and re.match(r'^\d{4}-\d{2}-\d{2}$', day)): continue
+        tracks = [f for f in os.listdir(src) if f.lower().endswith(('.csv', '.gpx'))]
+        groups = {}
+        for f in tracks: groups.setdefault(venue_for(first_fix(os.path.join(src, f))), []).append(f)
+        for vid, files in groups.items():
+            dst = os.path.join(SESSIONS, f'{day}_{vid}'); os.makedirs(dst, exist_ok=True)
+            for f in files:
+                os.replace(os.path.join(src, f), os.path.join(dst, f)); moved[(day, f)] = f'{day}_{vid}'
+            for j in ('races.json', 'meta.json', 'crew.json', 'owners.json'):   # the day's course and names go with every part
+                if os.path.exists(os.path.join(src, j)) and not os.path.exists(os.path.join(dst, j)):
+                    shutil.copyfile(os.path.join(src, j), os.path.join(dst, j))
+        for f in os.listdir(src): os.remove(os.path.join(src, f))
+        os.rmdir(src)
+    if moved:
+        m = load_pucks()
+        for r in m.values():
+            lu = r.get('last_upload')
+            if lu and (lu.get('session'), lu.get('file')) in moved: lu['session'] = moved[(lu['session'], lu['file'])]
+        save_pucks(m)
+    return len(moved)
+
 # ---------- viewer ----------
 @app.get('/')
 def index():
@@ -61,17 +187,21 @@ def viewer_static(p):
 # ---------- sessions ----------
 @app.get('/api/sessions')
 def sessions():
-    out = []
+    out, vs = [], load_venues()
     for day in sorted(os.listdir(SESSIONS), reverse=True):
         d = os.path.join(SESSIONS, day)
         if not os.path.isdir(d): continue
         files = sorted(f for f in os.listdir(d) if f.lower().endswith(('.csv', '.gpx')))
         if files:
-            races = 0
-            try:
-                with open(os.path.join(d, 'races.json')) as f: races = len(json.load(f))
-            except (OSError, ValueError): pass
-            out.append({'id': day, 'files': files, 'count': len(files), 'races': races})
+            races = read_json(os.path.join(d, 'races.json'), [])
+            m = SESSION_RE.match(day)
+            vid = (m.group(2) if m else None) or UNKNOWN_VENUE
+            owners = read_json(os.path.join(d, 'owners.json'), {})
+            out.append({'id': day, 'date': m.group(1) if m else day[:10], 'venue': vid, 'venue_name': venue_name(vid, vs), 'venue_new': venue_is_new(vid, vs),
+                        'files': files, 'count': len(files), 'races': len(races) if isinstance(races, list) else 0,
+                        # names only: owners' emails stay on the server
+                        'owners': {f: o.get('name', '') for f, o in owners.items() if isinstance(o, dict) and f in files}})
+    out.sort(key=lambda s: (s['date'], s['venue_name']), reverse=True)
     return jsonify(out)
 
 @app.get('/api/sessions/<day>/<name>')
@@ -89,25 +219,40 @@ def upload():
     if not name.lower().endswith(('.csv', '.gpx')):
         return jsonify(error='That file isn\'t a GPX or CSV track. In your sailing app, look for "Export GPX".'), 400
     puck = request.form.get('puck', '')
+    owner_name = request.form.get('owner_name', '').strip()[:40]
+    owner_email = request.form.get('owner_email', '').strip()[:120]
     if puck and not name.lower().startswith(puck.lower()):
         name = f'{puck}_{name}'
     tmp = os.path.join(SESSIONS, '.incoming_' + name)
     f.save(tmp)
     when = first_timestamp(tmp) or datetime.now(timezone.utc)
-    day = when.strftime('%Y-%m-%d')
-    dest_dir = os.path.join(SESSIONS, day); os.makedirs(dest_dir, exist_ok=True)
-    dest = os.path.join(dest_dir, name)
     with lock:
+        vid = venue_for(first_fix(tmp))
+        day = f"{when.strftime('%Y-%m-%d')}_{vid}"
+        dest_dir = os.path.join(SESSIONS, day); os.makedirs(dest_dir, exist_ok=True)
+        dest = os.path.join(dest_dir, name)
         base, ext = os.path.splitext(name); n = 1
         while os.path.exists(dest):
             n += 1; dest = os.path.join(dest_dir, f'{base}-{n}{ext}')
         os.replace(tmp, dest)
-        pm = re.match(r'puck[_ -]?(\d+)', os.path.basename(dest), re.I)
-        if pm:
-            pk = f'puck{int(pm.group(1))}'
+        fname = os.path.basename(dest)
+        pm = re.match(r'puck[_ -]?(\d+)', fname, re.I)
+        pk = f'puck{int(pm.group(1))}' if pm else None
+        if pk:
             m = load_pucks(); r = m.setdefault(pk, {})
-            r['last_upload'] = {'time': int(time.time() * 1000), 'session': day, 'file': os.path.basename(dest), 'bytes': os.path.getsize(dest)}
+            r['last_upload'] = {'time': int(time.time() * 1000), 'session': day, 'file': fname, 'bytes': os.path.getsize(dest)}
             save_pucks(m)
+            if not owner_name and r.get('owner'): owner_name, owner_email = r['owner'].get('name', ''), r['owner'].get('email', '')
+        if not owner_name and DOCK_OWNER: owner_name = DOCK_OWNER
+        # owner: whose puck/phone sent it (can edit/delete it later). Sailor: who was in the boat (crew).
+        if owner_name:
+            op = os.path.join(dest_dir, 'owners.json'); owners = read_json(op, {})
+            owners[fname] = {'name': owner_name, **({'email': owner_email} if owner_email else {})}
+            write_json(op, owners)
+            # the owner's own track: name the boat after them unless someone's said otherwise
+            if owner_name != DOCK_OWNER:
+                cp = os.path.join(dest_dir, 'crew.json'); crew = read_json(cp, {})
+                if not crew.get(pk or fname): crew[pk or fname] = owner_name; write_json(cp, crew)
         # uploaded from the phone page with a name: that's who sailed it
         sailor = request.form.get('sailor', '').strip()[:40]
         if sailor:
@@ -117,7 +262,7 @@ def upload():
             except (OSError, ValueError): crew = {}
             crew[os.path.basename(dest)] = sailor
             with open(cp, 'w') as fh: json.dump(crew, fh, indent=1)
-    return jsonify(ok=True, session=day, file=os.path.basename(dest))
+    return jsonify(ok=True, session=day, file=os.path.basename(dest), venue=vid, venue_name=venue_name(vid))
 
 @app.delete('/api/sessions/<day>/<name>')
 def delete_track(day, name):
@@ -262,38 +407,83 @@ def sailors():
         except (OSError, ValueError, AttributeError): pass
     return jsonify(sorted(names, key=str.lower))
 
-# ---------- phone uploads: QR codes for the projector, and a simple upload page ----------
-# Set these to match the dock's own WiFi (the Pi access point). Defaults suit a dev laptop.
-WIFI_SSID = os.environ.get('WAKEBACK_WIFI', 'wakeback')
-WIFI_PASS = os.environ.get('WAKEBACK_WIFI_PASS', '')
-PUBLIC_URL = os.environ.get('WAKEBACK_URL', '')          # e.g. http://wakeback.local  (blank: use whatever address the browser used)
+# ---------- venues ----------
+WIFI_SSID = os.environ.get('WAKEBACK_WIFI', 'wakeback')          # the dock's own WiFi pucks join
+DOCK_OWNER = os.environ.get('WAKEBACK_OWNER', '')                  # owner for pucks with none set, e.g. "Southport SC"
 
-def upload_url():
-    return (PUBLIC_URL.rstrip('/') or request.host_url.rstrip('/')) + '/upload'
+@app.get('/api/venues')
+def venues():
+    return jsonify(sorted(load_venues(), key=lambda v: v['name'].lower()))
 
-def wifi_qr_text():
-    esc = lambda v: re.sub(r'([\\;,:"])', r'\\\1', v)
-    return f'WIFI:T:{"WPA" if WIFI_PASS else "nopass"};S:{esc(WIFI_SSID)};' + (f'P:{esc(WIFI_PASS)};' if WIFI_PASS else '') + ';'
+def clean_venue(b, old=None):
+    v = dict(old or {})
+    if 'name' in b:
+        n = str(b['name']).strip()[:60]
+        if not n: abort(400, 'a venue needs a name')
+        v['name'] = n; v['auto'] = False
+    for k, lo, hi in (('lat', -90, 90), ('lon', -180, 180), ('radius_m', 100, 20000)):
+        if k in b:
+            try: x = float(b[k])
+            except (TypeError, ValueError): abort(400, f'bad {k}')
+            if not lo <= x <= hi: abort(400, f'{k} out of range')
+            v[k] = round(x, 5) if k != 'radius_m' else int(x)
+    return v
 
-@app.get('/api/dockinfo')
-def dockinfo():
-    return jsonify(wifi=WIFI_SSID, password=WIFI_PASS, upload_url=upload_url())
+@app.post('/api/venues')
+def add_venue():
+    b = request.get_json(silent=True)
+    if not isinstance(b, dict) or not b.get('name') or 'lat' not in b or 'lon' not in b:
+        return jsonify(error='name, lat and lon needed'), 400
+    with lock:
+        vs = load_venues()
+        want = str(b.get('id') or '')
+        if want and re.match(r'^[a-z0-9-]{1,40}$', want) and any(v['id'] == want for v in vs):
+            return jsonify(next(v for v in vs if v['id'] == want))      # already here (sync sends it again)
+        vid = want if re.match(r'^[a-z0-9-]{1,40}$', want) else slug(str(b['name']))
+        base, n = vid, 1
+        while any(v['id'] == vid for v in vs) or vid == UNKNOWN_VENUE: n += 1; vid = f'{base}-{n}'
+        v = clean_venue(b, {'id': vid, 'radius_m': 1500}); v['auto'] = bool(b.get('auto', False))
+        vs.append(v); save_venues(vs)
+    return jsonify(v), 201
 
-@app.get('/api/qr/<what>.svg')
-def qr(what):
-    import segno
-    if what == 'wifi': data = wifi_qr_text()
-    elif what == 'upload': data = upload_url()
-    else: abort(404)
-    import io
-    buf = io.BytesIO()
-    # a full SVG document (with xmlns), so browsers will show it in an <img>
-    segno.make(data, error='m').save(buf, kind='svg', scale=8, border=2, dark='#13293A', light='#FFFFFF')
-    return app.response_class(buf.getvalue(), mimetype='image/svg+xml', headers={'Cache-Control': 'no-store'})
+@app.put('/api/venues/<vid>')
+def put_venue(vid):
+    b = request.get_json(silent=True)
+    if not isinstance(b, dict): return jsonify(error='expected an object'), 400
+    with lock:
+        vs = load_venues()
+        i = next((k for k, v in enumerate(vs) if v['id'] == vid), None)
+        if i is None: abort(404)
+        vs[i] = clean_venue(b, vs[i]); save_venues(vs)
+    return jsonify(vs[i])
 
-@app.get('/upload')
-def upload_page():
-    return send_from_directory(VIEWER, 'upload.html')
+@app.post('/api/sessions/<day>/move')
+def move_session(day):
+    """Wrong venue? Move the whole session to another one (merging if that session exists)."""
+    if not SAFE.match(day): abort(400)
+    b = request.get_json(silent=True) or {}
+    vid = str(b.get('venue', ''))
+    m = SESSION_RE.match(day)
+    if not m or not os.path.isdir(os.path.join(SESSIONS, day)): abort(404)
+    if vid != UNKNOWN_VENUE and not any(v['id'] == vid for v in load_venues()): return jsonify(error='no such venue'), 400
+    new = f'{m.group(1)}_{vid}'
+    if new == day: return jsonify(session=day)
+    with lock:
+        src, dst = os.path.join(SESSIONS, day), os.path.join(SESSIONS, new)
+        os.makedirs(dst, exist_ok=True)
+        for f in os.listdir(src):
+            a, b2 = os.path.join(src, f), os.path.join(dst, f)
+            if f.endswith('.json'):
+                if f in ('crew.json', 'owners.json') and os.path.exists(b2):
+                    merged = {**read_json(a, {}), **read_json(b2, {})}; write_json(b2, merged); os.remove(a)
+                elif os.path.exists(b2): os.remove(a)
+                else: os.replace(a, b2)
+                continue
+            base, ext = os.path.splitext(f); n = 1
+            while os.path.exists(b2): n += 1; b2 = os.path.join(dst, f'{base}-{n}{ext}')
+            os.replace(a, b2)
+        os.rmdir(src)
+    return jsonify(session=new)
 
 # ---------- dock: puck check-ins, status, internet ----------
 def load_pucks():
@@ -465,6 +655,11 @@ def dock_page():
 @app.get('/api/hello')
 def hello():
     return jsonify(dock='wakeback', time_ms=int(datetime.now(timezone.utc).timestamp() * 1000))
+
+with lock:
+    os.makedirs(SESSIONS, exist_ok=True)
+    _n = migrate_date_folders()
+    if _n: print(f'Moved {_n} track(s) from date-only folders into date + venue sessions')
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))

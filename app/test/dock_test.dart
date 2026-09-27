@@ -94,7 +94,7 @@ void main() {
     expect(body, isNot(contains('cdnjs.cloudflare.com/ajax/libs/leaflet')));
     expect((await d.req('GET', '/viewer/leaflet.js')).$1, 200);
     expect((await d.req('GET', '/dock')).$1, 200);
-    expect((await d.req('GET', '/upload')).$1, 200);
+    expect((await d.req('GET', '/upload')).$1, 404); // phone-upload page removed
     expect((await d.req('GET', '/viewer/secret.txt')).$1, 404);
   });
 
@@ -102,7 +102,8 @@ void main() {
     final t0 = DateTime.utc(2026, 9, 20, 10, 30);
     final (s, j) = await d.upload('puck4_103000.csv', shortCsv(t0), fields: {'puck': 'puck4'});
     expect(s, 200);
-    expect(j['session'], '2026-09-20');
+    expect(j['session'], '2026-09-20_southport-sc');
+    expect(j['venue_name'], 'Southport SC (Marine Lake)');
     expect(j['file'], 'puck4_103000.csv');
     final (_, j2) = await d.upload('puck4_103000.csv', shortCsv(t0));
     expect(j2['file'], 'puck4_103000-2.csv');
@@ -112,14 +113,17 @@ void main() {
 
     final (_, sessions) = await d.req('GET', '/api/sessions');
     expect(sessions, [
-      {'id': '2026-09-20', 'files': ['puck4_103000-2.csv', 'puck4_103000.csv', 'puck7_log.csv'], 'count': 3, 'races': 0}
+      {
+        'id': '2026-09-20_southport-sc', 'date': '2026-09-20', 'venue': 'southport-sc', 'venue_name': 'Southport SC (Marine Lake)',
+        'venue_new': false, 'files': ['puck4_103000-2.csv', 'puck4_103000.csv', 'puck7_log.csv'], 'count': 3, 'races': 0, 'owners': {},
+      }
     ]);
     final (_, pk) = await d.req('GET', '/api/pucks');
     final p4 = (pk['pucks'] as List).firstWhere((p) => p['puck'] == 4);
-    expect(p4['last_upload']['session'], '2026-09-20');
-    final (s404, _) = await d.req('GET', '/api/sessions/2026-09-20/nope.csv');
+    expect(p4['last_upload']['session'], '2026-09-20_southport-sc');
+    final (s404, _) = await d.req('GET', '/api/sessions/2026-09-20_southport-sc/nope.csv');
     expect(s404, 404);
-    final (sGet, csv) = await d.req('GET', '/api/sessions/2026-09-20/puck4_103000.csv');
+    final (sGet, csv) = await d.req('GET', '/api/sessions/2026-09-20_southport-sc/puck4_103000.csv');
     expect(sGet, 200);
     expect(csv as String, startsWith('t_ms,lat,lon,sog_kn,hdg,heel,pitch'));
   });
@@ -132,8 +136,8 @@ void main() {
     final (s2, j2) = await d.upload('Morning sail (2).GPX', gpx, fields: {'sailor': 'Steve'});
     expect(s2, 200);
     expect(j2['file'], 'Morning sail _2_.GPX');
-    expect(j2['session'], '2026-09-21');
-    final (_, crew) = await d.req('GET', '/api/sessions/2026-09-21/crew');
+    expect(j2['session'], '2026-09-21_southport-sc');
+    final (_, crew) = await d.req('GET', '/api/sessions/2026-09-21_southport-sc/crew');
     expect(crew, {'Morning sail _2_.GPX': 'Steve'});
     expect((await d.req('GET', '/api/sailors')).$2, ['Steve']);
   });
@@ -220,18 +224,65 @@ void main() {
     expect((await d.req('GET', '/api/hello')).$2['dock'], 'wakeback');
   });
 
-  test('QR codes for the phone-upload page', () async {
-    final (s, svg) = await d.req('GET', '/api/qr/wifi.svg');
-    expect(s, 200);
-    expect(svg as String, contains('xmlns="http://www.w3.org/2000/svg"'));
-    final (_, info) = await d.req('GET', '/api/dockinfo');
-    expect(info['wifi'], 'wakeback');
-    expect(info['upload_url'], endsWith('/upload'));
+  // fixed tracks so the answers can be checked against server/app.py word for word
+  const south = 't_ms,lat,lon,sog_kn,hdg,heel,pitch\n1789900200000,53.6510000,-3.0110000,4.00,90,5.0,0.0\n1789900201000,53.6510100,-3.0109900,4.10,90,5.0,0.0\n';
+  const far = 't_ms,lat,lon,sog_kn,hdg,heel,pitch\n1790150400000,53.3900000,-3.1900000,4.00,90,5.0,0.0\n1790150401000,53.3900100,-3.1899900,4.10,90,5.0,0.0\n';
+
+  test('venues: found from where you sailed, somewhere new gets named, sessions can move (same answers as app.py)', () async {
+    final (_, a) = await d.upload('puck4_103000.csv', south, fields: {'puck': 'puck4', 'owner_name': 'James', 'owner_email': 'j@example.com'});
+    expect(a, {'file': 'puck4_103000.csv', 'ok': true, 'session': '2026-09-20_southport-sc', 'venue': 'southport-sc', 'venue_name': 'Southport SC (Marine Lake)'});
+    expect((await d.req('GET', '/api/sessions/2026-09-20_southport-sc/crew')).$2, {'puck4': 'James'}); // owner's own boat gets their name
+    final (_, dd) = await d.upload('Mate.csv', far, fields: {'owner_name': 'Dave'});
+    expect(dd, {'file': 'Mate.csv', 'ok': true, 'session': '2026-09-23_near-5339n-319w', 'venue': 'near-5339n-319w', 'venue_name': 'New venue near 53.39, -3.19'});
+    final (_, list) = await d.req('GET', '/api/sessions');
+    expect(list, [
+      {'count': 1, 'date': '2026-09-23', 'files': ['Mate.csv'], 'id': '2026-09-23_near-5339n-319w', 'owners': {'Mate.csv': 'Dave'}, 'races': 0,
+        'venue': 'near-5339n-319w', 'venue_name': 'New venue near 53.39, -3.19', 'venue_new': true},
+      {'count': 1, 'date': '2026-09-20', 'files': ['puck4_103000.csv'], 'id': '2026-09-20_southport-sc', 'owners': {'puck4_103000.csv': 'James'}, 'races': 0,
+        'venue': 'southport-sc', 'venue_name': 'Southport SC (Marine Lake)', 'venue_new': false},
+    ]);
+    expect(jsonEncode(list), isNot(contains('example.com'))); // emails never leave the dock
+    expect((await d.req('GET', '/api/venues')).$2, [
+      {'auto': true, 'id': 'near-5339n-319w', 'lat': 53.39, 'lon': -3.19, 'name': 'New venue near 53.39, -3.19', 'radius_m': 1500},
+      {'auto': false, 'id': 'southport-sc', 'lat': 53.6503, 'lon': -3.0102, 'name': 'Southport SC (Marine Lake)', 'radius_m': 1500},
+    ]);
+    final (sPut, put) = await d.req('PUT', '/api/venues/near-5339n-319w', json: {'name': 'West Kirby SC'});
+    expect(sPut, 200);
+    expect(put, {'auto': false, 'id': 'near-5339n-319w', 'lat': 53.39, 'lon': -3.19, 'name': 'West Kirby SC', 'radius_m': 1500});
+    expect((await d.req('PUT', '/api/venues/near-5339n-319w', json: {'name': '  '})).$1, 400);
+    final (sAdd, add) = await d.req('POST', '/api/venues', json: {'name': 'Hollingworth Lake', 'lat': 53.64, 'lon': -2.09});
+    expect(sAdd, 201);
+    expect(add, {'auto': false, 'id': 'hollingworth-lake', 'lat': 53.64, 'lon': -2.09, 'name': 'Hollingworth Lake', 'radius_m': 1500});
+    expect((await d.req('POST', '/api/venues', json: {'id': 'hollingworth-lake', 'name': 'Other', 'lat': 1, 'lon': 1})).$2['name'], 'Hollingworth Lake');
+    expect((await d.req('POST', '/api/venues', json: {'name': 'Hollingworth Lake', 'lat': 53.7, 'lon': -2.1})).$2['id'], 'hollingworth-lake-2');
+    final (sMove, mv) = await d.req('POST', '/api/sessions/2026-09-23_near-5339n-319w/move', json: {'venue': 'southport-sc'});
+    expect(sMove, 200);
+    expect(mv, {'session': '2026-09-23_southport-sc'});
+    expect((await d.req('POST', '/api/sessions/2026-09-20_southport-sc/move', json: {'venue': 'nope'})).$1, 400);
+    expect((await d.req('GET', '/api/sessions/2026-09-23_southport-sc/crew')).$2, {'Mate.csv': 'Dave'});
+    final (_, st) = await d.req('GET', '/api/dock/status');
+    expect(st['phone'], true);
+    expect((await d.req('GET', '/api/qr/wifi.svg')).$1, 404); // phone-upload QR page is gone
+  });
+
+  test('old date-only folders are split into date + venue sessions', () async {
+    final old = Directory('${d.dir.path}/sessions/2026-09-19');
+    await old.create(recursive: true);
+    await File('${old.path}/puck1_090000.csv').writeAsString(
+        't_ms,lat,lon,sog_kn,hdg,heel,pitch\n1789812000000,53.6500000,-3.0100000,4.00,90,5.0,0.0\n1789812001000,53.6500100,-3.0099900,4.10,90,5.0,0.0\n');
+    await File('${old.path}/meta.json').writeAsString('{"marks": [], "fixes": [], "lines": []}');
+    await d.store.init(); // what happens when the app starts
+    expect((await d.req('GET', '/api/sessions')).$2, [
+      {'count': 1, 'date': '2026-09-19', 'files': ['puck1_090000.csv'], 'id': '2026-09-19_southport-sc', 'owners': {}, 'races': 0,
+        'venue': 'southport-sc', 'venue_name': 'Southport SC (Marine Lake)', 'venue_new': false},
+    ]);
+    expect(await File('${d.dir.path}/sessions/2026-09-19_southport-sc/meta.json').exists(), true);
+    expect(await old.exists(), false);
   });
 
   test('delete a track', () async {
     await d.upload('puck1_100000.csv', shortCsv(DateTime.utc(2026, 9, 22, 10)));
-    expect((await d.req('DELETE', '/api/sessions/2026-09-22/puck1_100000.csv')).$1, 200);
+    expect((await d.req('DELETE', '/api/sessions/2026-09-22_southport-sc/puck1_100000.csv')).$1, 200);
     expect((await d.req('GET', '/api/sessions')).$2, isEmpty);
   });
 
@@ -248,7 +299,10 @@ void main() {
     final server = Dock();
     await server.start();
     try {
-      final day = '2026-09-20';
+      d.store.ownerName = 'James'; // this phone's profile
+      server.store.ownerName = 'Southport SC';
+      server.store.ownerIsPerson = false; // a club dock
+      final day = '2026-09-20_southport-sc';
       final t0 = DateTime.utc(2026, 9, 20, 10, 30);
       await d.upload('puck1_103000.csv', shortCsv(t0, seed: 1)); // on the phone
       await server.upload('puck2_103000.csv', shortCsv(t0, seed: 2)); // mate's, on the server
@@ -271,6 +325,8 @@ void main() {
       for (final dock in [d, server]) {
         expect(((await dock.req('GET', '/api/sessions')).$2 as List).single['files'], ['puck1_103000.csv', 'puck2_103000.csv']);
         expect((await dock.req('GET', '/api/sessions/$day/crew')).$2, {'puck1': 'James', 'puck2': 'Dave'});
+        // the phone's track keeps its owner on the server; the club's keeps the club
+        expect(((await dock.req('GET', '/api/sessions')).$2 as List).single['owners'], {'puck1_103000.csv': 'James', 'puck2_103000.csv': 'Southport SC'});
         expect(((await dock.req('GET', '/api/sessions/$day/races')).$2 as List).single['name'], 'Race 1');
         expect((await dock.req('GET', '/api/sessions/$day/meta')).$2['weather']['pts'], [[1789898400000, 225.0, 15.5, 21.2]]);
       }
@@ -285,6 +341,25 @@ void main() {
       expect(r2.up + r2.down, 0);
       await sync.syncDay(again, resolve: {'races': 'server'});
       expect(((await d.req('GET', '/api/sessions/$day/races')).$2 as List).single['name'], 'Server race');
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('sync: venues match up both ways before tracks move', () async {
+    final server = Dock();
+    await server.start();
+    try {
+      await d.upload('Mate.csv', far); // phone finds a new venue and you name it
+      await d.req('PUT', '/api/venues/near-5339n-319w', json: {'name': 'West Kirby SC'});
+      await server.req('POST', '/api/venues', json: {'name': 'Hollingworth Lake', 'lat': 53.64, 'lon': -2.09});
+      final sync = ServerSync(server.url, d.store);
+      final days = await sync.compare(); // syncs venues first
+      expect(((await server.req('GET', '/api/venues')).$2 as List).map((v) => v['name']), containsAll(['West Kirby SC', 'Hollingworth Lake']));
+      expect(((await d.req('GET', '/api/venues')).$2 as List).map((v) => v['name']), containsAll(['West Kirby SC', 'Hollingworth Lake']));
+      await sync.syncDay(days.single);
+      expect(((await server.req('GET', '/api/sessions')).$2 as List).single['id'], '2026-09-23_near-5339n-319w');
+      expect(((await server.req('GET', '/api/sessions')).$2 as List).single['venue_name'], 'West Kirby SC');
     } finally {
       await server.stop();
     }

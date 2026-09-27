@@ -17,6 +17,7 @@ jobs:
     defaults:
       run:
         working-directory: app
+        shell: bash   # -eo pipefail, so a failure inside "| tee" still fails the step
     steps:
       - uses: actions/checkout@v4
 
@@ -31,7 +32,7 @@ jobs:
           cache: true
 
       - name: Latest viewer into the app
-        run: cp ../viewer/index.html ../viewer/dock.html ../viewer/upload.html assets/web/
+        run: cp ../viewer/index.html ../viewer/dock.html assets/web/
 
       - name: Android project + permissions
         run: |
@@ -49,18 +50,34 @@ jobs:
           open(p, 'w').write(s)
           PY
 
-      - run: flutter pub get
+      - run: flutter pub get 2>&1 | tee -a ci.log
 
       - name: App icon
         run: dart run flutter_launcher_icons
 
       - name: Tests (phone dock behaves like app.py, sync)
-        run: flutter test
+        run: flutter test --reporter expanded 2>&1 | tee -a ci.log
 
       - name: Build APK
         run: |
-          flutter build apk --release
+          flutter build apk --release 2>&1 | tee -a ci.log
           cp build/app/outputs/flutter-apk/app-release.apk WakeBack.apk
+
+      # If anything above failed, put the important lines on the run as error notes, which can be read
+      # through the GitHub API (and show on the run's page) without downloading the full log.
+      - name: Report what failed
+        if: failure()
+        run: |
+          python3 - <<'PY'
+          import os, re
+          lines = open('ci.log', errors='ignore').read().splitlines() if os.path.exists('ci.log') else ['no log captured']
+          pick = re.compile(r'error|Error|FAILED|failed|Expected:|Actual:|Which:|Exception|\.dart:\d+|\[E\]|Some tests')
+          keep = [l.strip()[:300] for l in lines if pick.search(l)] or lines[-40:]
+          keep = keep[-80:]
+          esc = lambda t: t.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
+          for i in range(0, len(keep), 20):
+              print('::error title=WakeBack build (part %d)::%s' % (i // 20 + 1, esc('\n'.join(keep[i:i + 20]))))
+          PY
 
       - uses: actions/upload-artifact@v4
         with:

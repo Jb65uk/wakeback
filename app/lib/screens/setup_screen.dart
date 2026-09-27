@@ -22,6 +22,8 @@ Map<String, String> _demoFiles(int t0ms) => demoDayFiles(DateTime.fromMillisecon
 class _SetupScreenState extends State<SetupScreen> {
   late final TextEditingController _ssid = TextEditingController(text: app.hotspotName);
   late final TextEditingController _pass = TextEditingController(text: app.hotspotPass);
+  late final TextEditingController _name = TextEditingController(text: app.profileName);
+  late final TextEditingController _email = TextEditingController(text: app.profileEmail);
   List<String> _ips = [];
   bool _makingDemo = false;
 
@@ -40,6 +42,8 @@ class _SetupScreenState extends State<SetupScreen> {
   void dispose() {
     _ssid.dispose();
     _pass.dispose();
+    _name.dispose();
+    _email.dispose();
     super.dispose();
   }
 
@@ -72,7 +76,7 @@ class _SetupScreenState extends State<SetupScreen> {
       final now = DateTime.now().toUtc();
       final t0 = DateTime.utc(now.year, now.month, now.day, 10, 30);
       final files = await compute(_demoFiles, t0.millisecondsSinceEpoch);
-      final day = DockStore.dayOf(t0);
+      final day = '${DockStore.dayOf(t0)}_southport-sc'; // sessions are date + venue; the demo is sailed on the Marine Lake
       var n = 0;
       for (final e in files.entries) {
         if (await app.store.putTrack(day, e.key, utf8.encode(e.value))) n++;
@@ -95,6 +99,33 @@ class _SetupScreenState extends State<SetupScreen> {
       builder: (context, _) => Scaffold(
         appBar: AppBar(title: const Text('Setup')),
         body: ListView(padding: const EdgeInsets.fromLTRB(12, 0, 12, 24), children: [
+          // ------------------------------------------------ you
+          const SectionLabel('You'),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                TextField(
+                  controller: _name,
+                  textCapitalization: TextCapitalization.words,
+                  decoration: const InputDecoration(labelText: 'Your name', hintText: 'e.g. James', prefixIcon: Icon(Icons.person_outline)),
+                  onChanged: (v) => app.profileName = v,
+                ),
+                TextField(
+                  controller: _email,
+                  keyboardType: TextInputType.emailAddress,
+                  autocorrect: false,
+                  decoration: const InputDecoration(labelText: 'Email (optional)', prefixIcon: Icon(Icons.alternate_email)),
+                  onChanged: (v) => app.profileEmail = v,
+                ),
+                const SizedBox(height: 8),
+                const Hint('Everything this phone records or imports is yours: your name goes on your boat, and it\'s '
+                    'marked as sent by you when it syncs. Your email is how the server will know you (sign-in comes '
+                    'next) and is never shown to other sailors.'),
+              ]),
+            ),
+          ),
+
           // ------------------------------------------------ this phone as the dock
           const SectionLabel('This phone is the dock'),
           Card(
@@ -114,8 +145,7 @@ class _SetupScreenState extends State<SetupScreen> {
                 const Hint('With no dock Pi, pucks upload to this phone instead — the same way they would to the dock:\n'
                     '1. Android Settings → Hotspot: set the name and password below and turn it on.\n'
                     '2. Keep WakeBack open (screen on is safest) while pucks are on their charging pads.\n'
-                    '3. Pucks join the hotspot, check in and upload. Watch them on the viewer\'s Dock tab.\n'
-                    'Mates on the hotspot can send their phone\'s GPX from the viewer\'s "Phone upload" QR code.'),
+                    '3. Pucks join the hotspot, check in and upload. Watch them on the viewer\'s Dock tab.'),
                 const SizedBox(height: 12),
                 TextField(
                   controller: _ssid,

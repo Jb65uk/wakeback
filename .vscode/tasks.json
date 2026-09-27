@@ -28,7 +28,7 @@
     {
       "label": "Fake puck upload (training session)",
       "type": "shell",
-      "command": "python tools/fake_puck_upload.py data/sessions/2026-09-22/puck1_174500.csv --puck puck1",
+      "command": "python tools/fake_puck_upload.py data/sessions/2026-09-22_southport-sc/puck1_174500.csv --puck puck1",
       "problemMatcher": []
     },
     {

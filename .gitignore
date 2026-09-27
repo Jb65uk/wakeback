@@ -11,3 +11,4 @@ app/.flutter-plugins*
 __pycache__/
 data/pucks.json
 data/sessions/.incoming_*
+ci.log

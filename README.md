@@ -11,7 +11,9 @@ wakeback/
 ├── tools/gen_fake_data.py    makes demo sessions in the exact puck CSV format
 ├── tools/fake_puck_upload.py pretends to be a puck landing on the dock
 ├── tools/fake_pucks.py       a dock full of pretend pucks checking in (for the Dock page)
-├── data/sessions/<date>/     one folder per sailing day, one file per boat
+├── data/sessions/<date>_<venue>/  one folder per session (sailing date + venue), one file per boat
+├── data/venues.json      venues (Southport SC to start; new places are added as they're sailed)
+├── docs/ROADMAP.md       where this is heading: your own sailing, friends, events
 ├── BUILD.md              build one puck on a breadboard: shopping list, wiring in stages, first track
 ├── hardware/carrier/     60 mm carrier PCB: Gerbers for JLCPCB, previews, assembly notes, generator
 ├── hardware/case/        3D-printed puck case: base, screw lid (O-ring), GPS shelf, deck cradle. STLs + generator
@@ -25,7 +27,7 @@ wakeback/
 1. Open this folder in VS Code. Install the recommended extensions when prompted.
 2. `Terminal > Run Task > Install requirements` (or `pip install -r server/requirements.txt`).
 3. Press F5 with **Run dock server** selected, then open http://localhost:5000.
-4. The panel shows two demo sessions from the fake data: click **2026-09-20** to load Sunday (three pucks plus Steve's phone, two races back to back in one log), press **Play**, then **B** for the big-screen projector view.
+4. The panel shows two demo sessions from the fake data: click **Sun 20 Sep, Southport SC** to load Sunday (three pucks plus Steve's phone, two races back to back in one log), press **Play**, then **B** for the big-screen projector view.
 5. The course is already laid for the demo day (three marks, left to starboard). Click **Auto split** under Races: it finds the gap between the races. Pick **Race 1**, then **Estimate** next to Wind. Tap **Tacks & gybes** under a boat, then filter to Tacks or Gybes, sort Worst first, and tap any one to jump the replay there.
 6. `Run Task > Fake puck upload` to watch a session appear on the dock as a puck would post it.
 
@@ -45,10 +47,10 @@ Dock settings (environment variables):
 | Variable | What | Default |
 |---|---|---|
 | `WAKEBACK_FLEET` | how many pucks the club has, so ones never seen still get a row | 0 |
-| `WAKEBACK_WIFI` / `WAKEBACK_WIFI_PASS` | the dock's own WiFi, shown to phones | wakeback / none |
+| `WAKEBACK_WIFI` | the dock's own WiFi name, shown on the Dock page | wakeback |
+| `WAKEBACK_OWNER` | owner of tracks from pucks with no owner set, e.g. `Southport SC` | none |
 | `WAKEBACK_UPLINK_IF` | WiFi adapter used to reach the internet (USB dongle; onboard wlan0 runs the dock WiFi) | wlan1 |
 | `WAKEBACK_PIN` | PIN needed to change the dock's WiFi | none |
-| `WAKEBACK_URL` | address phones should use, e.g. http://wakeback.local | whatever the browser used |
 
 ## Phone / tablet app
 
@@ -101,13 +103,16 @@ Phone/watch GPX files are accepted too; they just lack heel and pitch.
 
 | Method | Path | What |
 |---|---|---|
-| GET | `/api/sessions` | list sessions (one per day) and their files |
-| GET | `/api/sessions/<day>/<file>` | fetch one track |
-| POST | `/api/upload` | multipart `file` (+ optional `puck`); filed by the first timestamp in the file |
-| DELETE | `/api/sessions/<day>/<file>` | remove a track |
-| GET / PUT | `/api/sessions/<day>/races` | race windows for that day: `[{"name","start","end","gun","marks":[...],"lines":[{"kind":"start"/"finish"/"both","a":{lat,lon},"b":{lat,lon}}]}]`, times in epoch ms, a = committee boat end, b = pin |
-| GET / PUT | `/api/sessions/<day>/meta` | whole-session marks, your corrections and the day's weather: `{"marks":[{"name","lat","lon","side":"port"/"stbd"}],"fixes":[...],"weather":{"src","lat","lon","got","pts":[[t_ms,dir,kn,gust],...]}}` |
-| GET / PUT | `/api/sessions/<day>/crew` | who had which puck that day: `{"puck3": "Dave"}` |
+| GET | `/api/sessions` | list sessions: `[{"id":"2026-09-20_southport-sc","date","venue","venue_name","venue_new","files","count","races","owners":{"file":"name"}}]` (owners' emails are never listed) |
+| GET | `/api/sessions/<session>/<file>` | fetch one track |
+| POST | `/api/upload` | multipart `file` (+ optional `puck`, `owner_name`, `owner_email`, `sailor`); filed under the date of its first timestamp and the venue of its first position → `{session, file, venue, venue_name}` |
+| GET / POST | `/api/venues` | list venues / add one `{"name","lat","lon","radius_m"}` (an `id` that already exists is returned as-is, for sync) |
+| PUT | `/api/venues/<id>` | rename or move a venue, e.g. name an automatic "New venue near …" |
+| POST | `/api/sessions/<session>/move` | `{"venue": id}`: a session filed at the wrong venue; merges into that venue's session for the day |
+| DELETE | `/api/sessions/<session>/<file>` | remove a track |
+| GET / PUT | `/api/sessions/<session>/races` | race windows for that day: `[{"name","start","end","gun","marks":[...],"lines":[{"kind":"start"/"finish"/"both","a":{lat,lon},"b":{lat,lon}}]}]`, times in epoch ms, a = committee boat end, b = pin |
+| GET / PUT | `/api/sessions/<session>/meta` | whole-session marks, your corrections and the day's weather: `{"marks":[{"name","lat","lon","side":"port"/"stbd"}],"fixes":[...],"weather":{"src","lat","lon","got","pts":[[t_ms,dir,kn,gust],...]}}` |
+| GET / PUT | `/api/sessions/<session>/crew` | who had which puck that day: `{"puck3": "Dave"}` |
 | GET | `/api/sailors` | every name used in any session (for the name picker) |
 | POST | `/api/pucks/checkin` | puck check-in every ~30 s on the pad: `{"puck":3,"battery_mv":4012,"charging":"charging"/"full"/"not","on_pad":true,"free_kb":12000,"total_kb":14336,"fw":"0.3.1","pending":1}`; reply carries dock time |
 | GET | `/api/pucks` | every puck's status for the Dock page |
@@ -121,17 +126,16 @@ Same server. Set the Pi up as a WiFi access point (`wakeback`, no internet neede
 
 ## Later list
 
-Agreed, not built yet. Roughly in the order they'd make sense.
+Agreed, not built yet. Roughly in the order they'd make sense. The bigger direction (your own puck and phone, friends, events) is in `docs/ROADMAP.md`.
 
 1. **Puck firmware** (ESP32-S3): 10 Hz GPS + IMU logging to the CSV format above, auto start/stop (see below), Dock check-in every ~30 s on the pad (and one as it's lifted off), upload to `/api/upload` when on the pad. The dock is found at the WiFi gateway, port 5000 — the Pi on its own WiFi, or a phone running the app on its hotspot (`docs/PHONE_DOCK.md`).
    - **Auto on/off:** asleep on the pad (never records there). Lifted → IMU wakes it → GPS fix. Records after >1.5 kn for 20 s; stops after ~10 min still, then sleeps.
    - **Travel-proof:** (a) over ~25 kn for a minute = not sailing, stop and discard; (b) needs boat-like heel/pitch rocking, not car motion; (c) only records near known venues (Southport + clubs added on the dock; dock asks "new venue?" first time somewhere new); (d) travel mode, set by triple-tap or from the dock page, sleeps until next put on a pad (use for long trips and flying).
    - Dock double-checks on upload and drops anything with road speeds or no boat motion.
    - GPS off while asleep, so a full charge lasts weeks in a bag.
-2. **Phone upload via QR codes**: code is in (`/upload` page, QR codes from the dock, new tracks appear on the projector by themselves) but paused; needs a proper test on real phones.
-3. **Home viewing, read-only**: dock syncs sessions to the home server (NAS/Tower) when online; published through a Cloudflare tunnel (e.g. puck.bridgesolutions.uk). Public copy runs the viewer locked: replay, races, colours, chart, focus a boat, tack list, big/full screen, download a track. No editing of names, races, marks or corrections; server refuses all changes. Choose per session whether it's published. Decide: club members only (Cloudflare Access email code) or anyone with the link.
-4. **Up to 16 pucks**: 16 distinct colours (no red/green), compact one-row-per-boat projector view, stress test with a fake 16-boat race, bigger pad tray and power supply.
-5. **Weather data**: ~~Open-Meteo~~ done — **Get weather** fills in wind direction, speed and gusts per race (hourly model). Next: the SSC weather station when it's running (log direction/speed every few seconds with a timestamp) for real shifts, lifts and headers — same `meta.weather.pts` format, just finer.
-6. **Offline map backgrounds**: dock keeps the satellite/chart tiles for each venue it's been online at, so away venues work without internet.
-7. **Leg analysis**: with marks placed, split each race into legs and show who gained or lost on each beat and run.
-8. **NAS backup** of sessions from the dock.
+2. **Home viewing, read-only**: dock syncs sessions to the home server (NAS/Tower) when online; published through a Cloudflare tunnel (e.g. puck.bridgesolutions.uk). Public copy runs the viewer locked: replay, races, colours, chart, focus a boat, tack list, big/full screen, download a track. No editing of names, races, marks or corrections; server refuses all changes. Choose per session whether it's published. Decide: club members only (Cloudflare Access email code) or anyone with the link.
+3. **Up to 16 pucks**: 16 distinct colours (no red/green), compact one-row-per-boat projector view, stress test with a fake 16-boat race, bigger pad tray and power supply.
+4. **Weather data**: ~~Open-Meteo~~ done — **Get weather** fills in wind direction, speed and gusts per race (hourly model). Next: the SSC weather station when it's running (log direction/speed every few seconds with a timestamp) for real shifts, lifts and headers — same `meta.weather.pts` format, just finer.
+5. **Offline map backgrounds**: dock keeps the satellite/chart tiles for each venue it's been online at, so away venues work without internet.
+6. **Leg analysis**: with marks placed, split each race into legs and show who gained or lost on each beat and run.
+7. **NAS backup** of sessions from the dock.
