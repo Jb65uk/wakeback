@@ -175,6 +175,7 @@ function newestVersion(list) {
 async function refresh() {
   try {
     const [pr, dr] = await Promise.all([fetch('/api/pucks', { cache: 'no-store' }), fetch('/api/dock/status', { cache: 'no-store' })]);
+    if (pr.status === 401 || dr.status === 401) { $('#summary').innerHTML = '<span class="w">Please <a href="/" style="color:var(--signal)">sign in on the Replay page</a> first.</span>'; return; }
     const pj = await pr.json(), d = await dr.json();
     serverOffset = d.time_ms - Date.now();
     const list = pj.pucks, fw = newestVersion(list);

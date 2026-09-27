@@ -319,15 +319,24 @@ class DockStore {
       final m = sessionRe.firstMatch(day);
       final vid = m?.group(2) ?? unknownVenue;
       final ow = await _readJson(File('${dayDir(day).path}/owners.json'));
-      final owners = <String, dynamic>{};
-      if (ow is Map) {
-        ow.forEach((f, o) {
-          if (o is Map && files.contains(f)) owners['$f'] = pyStr(o['name'] ?? ''); // names only: emails stay here
-        });
+      final owners = <String, dynamic>{}, sharing = <String, dynamic>{};
+      final mine = <String>[];
+      final myEmail = ownerEmail.toLowerCase(), myName = ownerName;
+      for (final f in files) {
+        final o = ow is Map ? ow[f] : null;
+        if (o is Map) {
+          owners[f] = pyStr(o['name'] ?? ''); // names only: emails stay here
+          sharing[f] = pyStr(o['visibility'] ?? 'friends');
+          final e = pyStr(o['email'] ?? '').toLowerCase();
+          // mine: my account's, or (no email known) my name's, or nobody's; never one that came down from the server
+          if (o['remote'] != true && (e.isEmpty ? (owners[f] == myName || owners[f] == '') : e == myEmail)) mine.add(f);
+        } else {
+          mine.add(f);
+        }
       }
       out.add({
         'id': day, 'date': m?.group(1) ?? cut(day, 10), 'venue': vid, 'venue_name': venueName(vid, vs), 'venue_new': venueIsNew(vid, vs),
-        'files': files, 'count': files.length, 'races': races, 'owners': owners,
+        'files': files, 'count': files.length, 'races': races, 'owners': owners, 'sharing': sharing, 'mine': mine,
       });
     }
     // newest date first, then venue name (sorted(key=(date, venue_name), reverse=True))
@@ -447,7 +456,7 @@ class DockStore {
         final of = File('${dir.path}/owners.json');
         final j = await _readJson(of);
         final owners = j is Map ? j.cast<String, dynamic>() : <String, dynamic>{};
-        owners[fname] = {'name': oName, if (oEmail.isNotEmpty) 'email': oEmail};
+        owners[fname] = {'name': oName, if (oEmail.isNotEmpty) 'email': oEmail, 'visibility': 'friends'};
         await _writeJson(of, owners);
         if (person) {
           // the owner's own track: name the boat after them unless someone's said otherwise
@@ -535,6 +544,24 @@ class DockStore {
         }
         await _saveVenues(vs);
       });
+
+  /// Sharing for one of your tracks: {visibility: friends|private}. Kept in owners.json; sync sends it up.
+  Future<Map<String, dynamic>> trackSettings(String day, String file, Object? body) async {
+    if (!safeName.hasMatch(day) || !safeName.hasMatch(file)) throw const DockError(400, 'bad name');
+    if (!await File('${dayDir(day).path}/$file').exists()) throw const DockError(404, 'not found');
+    final vis = body is Map ? body['visibility'] : null;
+    if (vis != 'friends' && vis != 'private') throw const DockError(400, 'nothing to change');
+    return locked(() async {
+      final f = File('${dayDir(day).path}/owners.json');
+      final j = await _readJson(f);
+      final m = j is Map ? j.cast<String, dynamic>() : <String, dynamic>{};
+      final o = m[file] is Map ? (m[file] as Map).cast<String, dynamic>() : <String, dynamic>{'name': ownerName, if (ownerEmail.isNotEmpty) 'email': ownerEmail};
+      o['visibility'] = vis;
+      m[file] = o;
+      await _writeJson(f, m);
+      return {'name': pyStr(o['name'] ?? ''), 'visibility': vis};
+    });
+  }
 
   /// Record who sent a track (sync: a mate's track downloaded from the server keeps their name).
   Future<void> setOwner(String day, String file, Map<String, dynamic> owner) => locked(() async {

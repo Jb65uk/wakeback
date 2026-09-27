@@ -26,11 +26,20 @@ class _SyncScreenState extends State<SyncScreen> {
     super.dispose();
   }
 
-  ServerSync? get _sync => app.serverUrl.isEmpty ? null : ServerSync(app.serverUrl, app.store);
+  ServerSync? get _sync => app.serverUrl.isEmpty || app.demoMode ? null : ServerSync(app.serverUrl, app.store, token: app.token);
+
+  Future<void> _lostSession(Object e) async {
+    if (e is SyncException && e.signedOut && app.signedIn) {
+      await app.signOut(tellServer: false);
+      if (mounted) toast(context, 'Your sign-in has expired. Log in again from Setup → You.', error: true);
+    }
+  }
 
   Future<void> _check() async {
-    app.serverUrl = _url.text;
-    _url.text = app.serverUrl;
+    if (!app.signedIn) {
+      app.serverUrl = _url.text;
+      _url.text = app.serverUrl;
+    }
     final s = _sync;
     if (s == null) return;
     setState(() {
@@ -42,6 +51,7 @@ class _SyncScreenState extends State<SyncScreen> {
       if (mounted) setState(() => _days = d);
     } catch (e) {
       if (mounted) setState(() => _error = '$e');
+      await _lostSession(e);
     }
     if (mounted) setState(() => _checking = false);
   }
@@ -70,6 +80,7 @@ class _SyncScreenState extends State<SyncScreen> {
       }
     } catch (e) {
       if (mounted) setState(() => _done[c.day] = 'Failed: $e');
+      await _lostSession(e);
     }
     if (mounted) setState(() => _busy.remove(c.day));
     await _refreshQuietly();
@@ -122,39 +133,60 @@ class _SyncScreenState extends State<SyncScreen> {
   Future<void> _invite() async {
     final url = app.serverUrl;
     await Share.share(
-      'WakeBack replays — watch any session in your browser:\n$url\n\n'
-      'Got the WakeBack app? Sync tab → server address: $url → Check, then Sync to add your tracks.',
+      'Join me on WakeBack — record your sailing and replay our races together.\n\n'
+      'Get the app, create an account, then add me as a friend (Setup → Friends): ${app.account?.email ?? ''}\n'
+      'Server: $url',
       subject: 'WakeBack',
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    return ListenableBuilder(listenable: app, builder: (context, _) => _build(context));
+  }
+
+  Widget _build(BuildContext context) {
     final t = Theme.of(context);
     final hasServer = app.serverUrl.isNotEmpty;
     return Scaffold(
-      appBar: AppBar(title: const Text('Sync with your server')),
-      body: RefreshIndicator(
+      appBar: AppBar(title: Text(app.signedIn ? 'Sync' : 'Sync with a server')),
+      body: app.demoMode
+          ? const Center(
+              child: Padding(
+                padding: EdgeInsets.all(32),
+                child: Hint('Sync is off in demo mode, so pretend data never reaches your account. Leave the demo in Setup to sync your real sailing.'),
+              ),
+            )
+          : RefreshIndicator(
         onRefresh: _check,
         child: ListView(padding: const EdgeInsets.fromLTRB(12, 0, 12, 24), children: [
           Card(
             child: Padding(
               padding: const EdgeInsets.all(14),
               child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                TextField(
-                  controller: _url,
-                  keyboardType: TextInputType.url,
-                  autocorrect: false,
-                  decoration: const InputDecoration(
-                    labelText: 'Server address',
-                    hintText: 'https://puck.bridgesolutions.uk',
-                    prefixIcon: Icon(Icons.dns_outlined),
+                if (app.signedIn)
+                  Row(children: [
+                    Icon(Icons.verified_user_outlined, color: t.colorScheme.primary),
+                    const SizedBox(width: 8),
+                    Expanded(child: Text('Signed in as ${app.account!.name} · ${Uri.parse(app.serverUrl).host}', style: t.textTheme.bodyMedium)),
+                  ])
+                else ...[
+                  TextField(
+                    controller: _url,
+                    keyboardType: TextInputType.url,
+                    autocorrect: false,
+                    decoration: const InputDecoration(
+                      labelText: 'Server address',
+                      hintText: 'https://wakeback.bridgesolutions.uk',
+                      prefixIcon: Icon(Icons.dns_outlined),
+                    ),
+                    onSubmitted: (_) => _check(),
                   ),
-                  onSubmitted: (_) => _check(),
-                ),
+                  const SizedBox(height: 6),
+                  const Hint('Not signed in: sync works with a dock Pi or a server without accounts. For your WakeBack account, sign in from Setup → You.'),
+                ],
                 const SizedBox(height: 8),
-                const Hint('Your WakeBack server (server/app.py) — at home, or the dock Pi at the club. '
-                    'Sync copies each day\'s tracks, names, races and course both ways.'),
+                const Hint('Sync copies each session\'s tracks, names, races and course both ways, and brings down your friends\' sails.'),
                 const SizedBox(height: 12),
                 Wrap(spacing: 8, runSpacing: 8, children: [
                   FilledButton.icon(

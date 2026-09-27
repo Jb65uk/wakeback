@@ -5,10 +5,13 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
+import '../auth/auth_api.dart';
 import '../demo/fake_race.dart';
 import '../dock/pocket_dock.dart';
 import '../dock/store.dart';
 import '../widgets/common.dart';
+import 'friends_section.dart';
+import 'welcome_screen.dart';
 
 class SetupScreen extends StatefulWidget {
   const SetupScreen({super.key});
@@ -23,7 +26,6 @@ class _SetupScreenState extends State<SetupScreen> {
   late final TextEditingController _ssid = TextEditingController(text: app.hotspotName);
   late final TextEditingController _pass = TextEditingController(text: app.hotspotPass);
   late final TextEditingController _name = TextEditingController(text: app.profileName);
-  late final TextEditingController _email = TextEditingController(text: app.profileEmail);
   List<String> _ips = [];
   bool _makingDemo = false;
 
@@ -43,7 +45,6 @@ class _SetupScreenState extends State<SetupScreen> {
     _ssid.dispose();
     _pass.dispose();
     _name.dispose();
-    _email.dispose();
     super.dispose();
   }
 
@@ -99,32 +100,23 @@ class _SetupScreenState extends State<SetupScreen> {
       builder: (context, _) => Scaffold(
         appBar: AppBar(title: const Text('Setup')),
         body: ListView(padding: const EdgeInsets.fromLTRB(12, 0, 12, 24), children: [
+          // ------------------------------------------------ demo banner
+          if (app.demoMode)
+            Card(
+              color: t.colorScheme.primary.withValues(alpha: 0.15),
+              child: ListTile(
+                leading: Icon(Icons.science_outlined, color: t.colorScheme.primary),
+                title: const Text('Demo mode'),
+                subtitle: const Text('Pretend pucks and demo data. Leaving the demo wipes it all and takes you back to your own sailing.'),
+                isThreeLine: true,
+                trailing: FilledButton(onPressed: _exitDemo, child: const Text('Exit demo')),
+              ),
+            ),
+
           // ------------------------------------------------ you
           const SectionLabel('You'),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(14),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                TextField(
-                  controller: _name,
-                  textCapitalization: TextCapitalization.words,
-                  decoration: const InputDecoration(labelText: 'Your name', hintText: 'e.g. James', prefixIcon: Icon(Icons.person_outline)),
-                  onChanged: (v) => app.profileName = v,
-                ),
-                TextField(
-                  controller: _email,
-                  keyboardType: TextInputType.emailAddress,
-                  autocorrect: false,
-                  decoration: const InputDecoration(labelText: 'Email (optional)', prefixIcon: Icon(Icons.alternate_email)),
-                  onChanged: (v) => app.profileEmail = v,
-                ),
-                const SizedBox(height: 8),
-                const Hint('Everything this phone records or imports is yours: your name goes on your boat, and it\'s '
-                    'marked as sent by you when it syncs. Your email is how the server will know you (sign-in comes '
-                    'next) and is never shown to other sailors.'),
-              ]),
-            ),
-          ),
+          if (app.signedIn) _accountCard(t) else _noAccountCard(t),
+          if (app.signedIn) const FriendsSection(),
 
           // ------------------------------------------------ this phone as the dock
           const SectionLabel('This phone is the dock'),
@@ -192,8 +184,9 @@ class _SetupScreenState extends State<SetupScreen> {
             ),
           ),
 
-          // ------------------------------------------------ demo
-          const SectionLabel('Try it without pucks'),
+          // ------------------------------------------------ demo (only in demo mode)
+          if (app.demoMode) const SectionLabel('Demo'),
+          if (app.demoMode)
           Card(
             child: Column(children: [
               SwitchListTile(
@@ -215,10 +208,141 @@ class _SetupScreenState extends State<SetupScreen> {
               ),
             ]),
           ),
+          if (!app.demoMode) ...[
+            const SectionLabel('Advanced'),
+            Card(
+              child: Column(children: [
+                ListTile(
+                  leading: const Icon(Icons.dns_outlined),
+                  title: const Text('Server'),
+                  subtitle: Text(app.serverUrl),
+                  trailing: const Icon(Icons.edit_outlined),
+                  onTap: () async {
+                    final c = TextEditingController(text: app.serverUrl);
+                    final v = await showDialog<String>(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        title: const Text('WakeBack server'),
+                        content: TextField(controller: c, keyboardType: TextInputType.url, autocorrect: false, decoration: const InputDecoration(helperText: 'Only change this if you run your own server')),
+                        actions: [
+                          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+                          FilledButton(onPressed: () => Navigator.pop(ctx, c.text), child: const Text('Save')),
+                        ],
+                      ),
+                    );
+                    if (v != null) app.serverUrl = v;
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.science_outlined),
+                  title: const Text('Try the demo'),
+                  subtitle: const Text('Pretend pucks and a demo race, kept separate from your data'),
+                  onTap: () async {
+                    await app.setDemoMode(true);
+                    if (context.mounted) toast(context, 'Demo mode on: add a demo race morning, or turn on Demo pucks');
+                  },
+                ),
+              ]),
+            ),
+          ],
           const SizedBox(height: 16),
-          const Center(child: Hint('WakeBack app 0.2 · runs the dock API on this phone')),
+          const Center(child: Hint('WakeBack app 0.5')),
         ]),
       ),
     );
+  }
+
+  Future<void> _exitDemo() async {
+    if (!await confirm(context, 'Leave the demo?', 'The demo sessions and pretend pucks are deleted. Your own sailing is untouched.', ok: 'Exit demo', danger: true)) return;
+    await app.setDemoMode(false);
+    if (mounted) toast(context, 'Demo cleared');
+  }
+
+  Widget _accountCard(ThemeData t) {
+    final a = app.account!;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            CircleAvatar(radius: 22, backgroundColor: t.colorScheme.primary, child: Text(a.name.isEmpty ? '?' : a.name[0].toUpperCase(), style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w700, fontSize: 18))),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(a.name, style: t.textTheme.titleMedium),
+                Text(a.email, style: t.textTheme.bodySmall?.copyWith(color: t.colorScheme.onSurfaceVariant)),
+                if (a.isAdmin) Text('Admin', style: t.textTheme.labelSmall?.copyWith(color: t.colorScheme.primary)),
+              ]),
+            ),
+          ]),
+          const SizedBox(height: 8),
+          const Hint('Everything this phone records is yours and syncs to your account. Your email is never shown to other sailors.'),
+          const SizedBox(height: 8),
+          Wrap(spacing: 8, children: [
+            OutlinedButton.icon(onPressed: _changePassword, icon: const Icon(Icons.key, size: 18), label: const Text('Change password')),
+            OutlinedButton.icon(
+              onPressed: () async {
+                if (await confirm(context, 'Log out?', 'Your sessions stay on this phone. Sync needs you signed in.', ok: 'Log out')) await app.signOut();
+              },
+              icon: const Icon(Icons.logout, size: 18),
+              label: const Text('Log out'),
+            ),
+          ]),
+        ]),
+      ),
+    );
+  }
+
+  Widget _noAccountCard(ThemeData t) {
+    if (_name.text != app.profileName) _name.text = app.profileName; // e.g. after signing out
+    return Card(
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            TextField(
+              controller: _name,
+              textCapitalization: TextCapitalization.words,
+              decoration: const InputDecoration(labelText: 'Your name', hintText: 'e.g. James', prefixIcon: Icon(Icons.person_outline)),
+              onChanged: (v) => app.profileName = v,
+            ),
+            const SizedBox(height: 8),
+            const Hint('Not signed in: this phone works on its own with your pucks. Sign in to sync with the server and share with friends.'),
+            const SizedBox(height: 10),
+            FilledButton.icon(
+              onPressed: () async {
+                final ok = await Navigator.push<bool>(context, MaterialPageRoute(builder: (_) => const WelcomeScreen(fromSetup: true)));
+                if (ok == true && mounted) setState(() {});
+              },
+              icon: const Icon(Icons.login),
+              label: const Text('Log in or create account'),
+            ),
+          ]),
+        ),
+      );
+  }
+
+  Future<void> _changePassword() async {
+    final oldC = TextEditingController(), newC = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Change password'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(controller: oldC, obscureText: true, decoration: const InputDecoration(labelText: 'Current password')),
+          TextField(controller: newC, obscureText: true, decoration: const InputDecoration(labelText: 'New password', helperText: 'At least 8 characters')),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Change')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await app.auth.changePassword(oldC.text, newC.text);
+      if (mounted) toast(context, 'Password changed');
+    } on AuthException catch (e) {
+      if (mounted) toast(context, e.message, error: true);
+    }
   }
 }

@@ -148,6 +148,15 @@ class WakeWebViewState extends State<WakeWebView> with AutomaticKeepAliveClientM
 
   Future<void> reload() => _c.reload();
 
+  @override
+  void didUpdateWidget(covariant WakeWebView old) {
+    super.didUpdateWidget(old);
+    if (old.url != widget.url) {
+      setState(() => _loading = true);
+      _c.loadRequest(Uri.parse(widget.url));
+    }
+  }
+
   /// Back button: leave full screen, else go back a page (Dock -> Replay). Returns false if there's nowhere to go.
   Future<bool> handleBack() async {
     if (app.fullscreen.value) {

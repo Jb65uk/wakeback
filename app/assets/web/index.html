@@ -119,6 +119,23 @@ body.addmark #map{cursor:crosshair}
 .sess.on{border-color:var(--signal)}
 #sessList{display:flex;flex-direction:column;gap:6px}
 #sessList .sess{width:100%}
+.friendsbar{display:flex;align-items:center;gap:10px;padding:8px 4px 2px;font-size:13px;color:var(--muted)}
+.friendsbar .sw2{display:inline-flex;align-items:center;gap:8px;cursor:pointer;user-select:none;color:var(--ink);font-weight:600}
+.friendsbar .sw2 i{width:36px;height:20px;border-radius:10px;background:rgba(234,242,245,.18);position:relative;transition:background .15s;flex:0 0 auto}
+.friendsbar .sw2 i::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:left .15s}
+.friendsbar .sw2 input{display:none}
+.friendsbar .sw2 input:checked+i{background:var(--signal)}
+.friendsbar .sw2 input:checked+i::after{left:18px}
+.boat .share{background:none;border:1px solid var(--line);border-radius:4px;color:var(--muted);font-size:11px;padding:1px 6px;cursor:pointer;margin-left:4px}
+.boat .share.priv{color:var(--signal);border-color:var(--signal)}
+#loginBox{position:fixed;inset:0;background:rgba(10,24,34,.94);z-index:3000;display:flex;align-items:center;justify-content:center;padding:20px}
+#loginBox[hidden]{display:none}
+#loginBox .box{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px;max-width:380px;width:100%;display:flex;flex-direction:column;gap:10px}
+#loginBox h2{font-family:var(--num);font-size:28px;margin:0;line-height:1}
+#loginBox input{background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:9px 10px;color:var(--ink)}
+#loginBox .err{color:var(--danger);font-weight:600;min-height:1.2em}
+body.appmode #demo{display:none}
+body.nodemo #demo{display:none}
 .venuebar{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;background:var(--panel-2);border-radius:6px;padding:8px 10px;font-size:14px;margin-top:8px}
 .venuebar.new{border:1px solid var(--signal)}
 .venuebar b{font-weight:600}
@@ -258,6 +275,10 @@ body.big #togglePanel,body.big #trailOnlyWrap{display:none}
       <div id="sessList"></div>
       <div id="venueBar" class="venuebar" hidden></div>
     </div>
+    <div class="friendsbar" id="friendsBar" hidden>
+      <label class="sw2"><input type="checkbox" id="friendsToggle" checked><i></i><span>Friends' boats</span></label>
+      <span id="friendsNote"></span>
+    </div>
     <div id="boats"></div>
     <div class="opt"><span>Track colour</span>
       <div class="seg" data-opt="colour"><button data-v="boat" class="on">By boat</button><button data-v="speed">By speed</button><button data-v="tack">By tack</button></div>
@@ -329,6 +350,18 @@ body.big #togglePanel,body.big #trailOnlyWrap{display:none}
     <details id="fieldBox"><summary>Choose data</summary><div class="chips" id="fieldChips" style="margin-top:8px"></div></details>
     <div id="cardList" style="display:contents"></div>
   </aside>
+
+  <div id="loginBox" hidden role="dialog" aria-modal="true" aria-labelledby="loginTitle">
+    <div class="box">
+      <h2 id="loginTitle">Wake<span style="color:var(--signal)">Back</span></h2>
+      <div class="hint" style="color:var(--muted)">Sign in to see your sailing and your friends'.</div>
+      <input id="lemail" type="email" placeholder="Email" autocomplete="username">
+      <input id="lpass" type="password" placeholder="Password" autocomplete="current-password">
+      <button class="btn primary" id="lgo">Sign in</button>
+      <div class="err" id="lerr"></div>
+      <div class="hint" style="color:var(--muted);font-size:13px">No account? Create one in the WakeBack app.</div>
+    </div>
+  </div>
 
   <section id="replay" class="disabled" aria-label="Replay">
     <div class="row">
@@ -1580,13 +1613,58 @@ windCtl.update = () => {
 windCtl.addTo(map);
 if (wind != null) $('#wind').value = wind;
 
-// ---------- dock server (optional: only when served by server/app.py) ----------
-const dock = { on: false, session: null, list: [], owners: {} };
+// ---------- dock server (optional: only when served by server/app.py or the phone app) ----------
+const dock = { on: false, session: null, list: [], owners: {}, sharing: {}, mine: null, me: null };
+let showFriends = true;
+try { showFriends = localStorage.getItem('wakeback-friends') !== '0'; } catch {}
+// Whose boat is this? 'mine' = mine (or the club's, editable), 'friend' = someone else's
+function boatSide(b) { return !dock.on || !dock.mine || dock.mine.includes(b.file) ? 'mine' : 'friend'; }
+function applyFriends() {
+  const bar = $('#friendsBar');
+  const friends = boats.filter(b => boatSide(b) === 'friend');
+  bar.hidden = !friends.length;
+  if (friends.length) {
+    $('#friendsToggle').checked = showFriends;
+    $('#friendsNote').textContent = `${friends.length} boat${friends.length === 1 ? '' : 's'} from friends`;
+  }
+  boats.forEach(b => { if (boatSide(b) === 'friend') b.visible = showFriends; });
+}
+$('#friendsToggle').addEventListener('change', e => {
+  showFriends = e.target.checked; try { localStorage.setItem('wakeback-friends', showFriends ? '1' : '0'); } catch {}
+  boats.forEach(b => { if (boatSide(b) === 'friend') { b.visible = showFriends; buildBoat(b); } });
+  recomputeTimeline(); renderList(); renderCards(); render();
+});
+async function whoAmI() {
+  try {
+    const r = await fetch('/api/auth/me', { cache: 'no-store' });
+    const j = await r.json().catch(() => ({}));
+    dock.me = j.user || null;
+    dock.accounts = !!j.accounts;
+    return r.status !== 401;
+  } catch { return true; }
+}
+function needLogin() {
+  $('#loginBox').hidden = false; $('#lemail').focus();
+  return new Promise(res => { loginDone = res; });
+}
+let loginDone = null;
+$('#lgo').addEventListener('click', async () => {
+  $('#lerr').textContent = '';
+  try {
+    const r = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: $('#lemail').value.trim(), password: $('#lpass').value, cookie: true, device: 'browser' }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || 'Sign-in failed');
+    dock.me = j.user; $('#loginBox').hidden = true; if (loginDone) loginDone(true);
+  } catch (e) { $('#lerr').textContent = e.message; }
+});
+$('#lpass').addEventListener('keydown', e => { if (e.key === 'Enter') $('#lgo').click(); });
 async function dockInit() {
   try {
+    if (!await whoAmI()) await needLogin();          // the server wants a sign-in (accounts on)
     const r = await fetch('/api/sessions', { cache: 'no-store' });
     if (!r.ok) return;
     dock.on = true;
+    if (dock.accounts) document.body.classList.add('nodemo');   // real data: no demo button
     $('#dock').classList.add('on'); document.body.classList.add('dockon'); $('#tabs').hidden = false;
     const dockBadge = async () => {
       try {
@@ -1599,7 +1677,7 @@ async function dockInit() {
     loadSailors();
     renderSessions(await r.json());
     setInterval(async () => {
-      try { const list = await (await fetch('/api/sessions', { cache: 'no-store' })).json(); renderSessions(list); pickUpNewTracks(list); } catch {}
+      try { const rr = await fetch('/api/sessions', { cache: 'no-store' }); if (rr.status === 401) { await needLogin(); return; } const list = await rr.json(); renderSessions(list); pickUpNewTracks(list); } catch {}
     }, 5000);
   } catch {}
 }
@@ -1679,7 +1757,7 @@ $('#sessList').addEventListener('click', async e => {
   try {
     const list = await (await fetch('/api/sessions', { cache: 'no-store' })).json();
     const sx = list.find(x => x.id === id); if (!sx) return;
-    $('#clear').click(); dock.session = id; dock.owners = sx.owners || {}; venueEdit = null; if (!unsaved.size) $('#saveState').hidden = true;
+    $('#clear').click(); dock.session = id; dock.owners = sx.owners || {}; dock.sharing = sx.sharing || {}; dock.mine = sx.mine || null; venueEdit = null; if (!unsaved.size) $('#saveState').hidden = true;
     renderSessions.last = null; renderSessions(list);
     const files = await Promise.all(sx.files.map(async f => new File([await (await fetch(`/api/sessions/${id}/${f}`)).blob()], f)));
     await loadFiles(files);
@@ -1726,10 +1804,20 @@ function renderList() {
       <button class="sw" data-vis="${b.id}" aria-label="Show or hide ${esc(b.name)}"></button>
       <div class="nmrow">${badge(b)}<input class="name" data-name="${b.id}" value="${esc(b.name)}" list="sailors" placeholder="Who's sailing?" aria-label="Who sailed ${puckNum(b) ? 'puck ' + puckNum(b) : 'this track'}"></div>
       <div class="live" data-live="${b.id}">–</div>
-      <div class="meta"><span>Max <b>${b.stats.max.toFixed(1)}</b></span><span>Avg <b>${b.stats.avg.toFixed(1)}</b></span><span><b>${b.stats.dist.toFixed(2)}</b> nm</span><span>${fmtDur(b.stats.dur)}</span>${dock.owners && dock.owners[b.file] && dock.owners[b.file] !== b.name ? `<span>from <b>${esc(dock.owners[b.file])}</b></span>` : ''}${b.stats.up != null ? `<span>Up <b>${b.stats.up.toFixed(1)}</b></span>` : ''}${wind != null && b.stats.loss != null ? `<span>Tack loss <b>${b.stats.loss.toFixed(0)}</b> m</span>` : ''}${wind != null && b.stats.gloss != null ? `<span>Gybe loss <b>${b.stats.gloss.toFixed(0)}</b> m</span>` : ''}<button class="lnk" data-an="${b.id}">${wind != null ? `${b.stats.tacks || 0} tacks, ${b.stats.gybes || 0} gybes` : 'Tacks & gybes'}</button><button class="rm" data-rm="${b.id}">Remove</button></div>
+      <div class="meta"><span>Max <b>${b.stats.max.toFixed(1)}</b></span><span>Avg <b>${b.stats.avg.toFixed(1)}</b></span><span><b>${b.stats.dist.toFixed(2)}</b> nm</span><span>${fmtDur(b.stats.dur)}</span>${dock.owners && dock.owners[b.file] && dock.owners[b.file] !== b.name ? `<span>from <b>${esc(dock.owners[b.file])}</b></span>` : ''}${dock.on && dock.mine && boatSide(b) === 'mine' && dock.sharing && dock.sharing[b.file] ? `<button class="share${dock.sharing[b.file] === 'private' ? ' priv' : ''}" data-share="${b.id}" title="Who can see this track">${dock.sharing[b.file] === 'private' ? '🔒 Private' : '👥 Friends'}</button>` : ''}${b.stats.up != null ? `<span>Up <b>${b.stats.up.toFixed(1)}</b></span>` : ''}${wind != null && b.stats.loss != null ? `<span>Tack loss <b>${b.stats.loss.toFixed(0)}</b> m</span>` : ''}${wind != null && b.stats.gloss != null ? `<span>Gybe loss <b>${b.stats.gloss.toFixed(0)}</b> m</span>` : ''}<button class="lnk" data-an="${b.id}">${wind != null ? `${b.stats.tacks || 0} tacks, ${b.stats.gybes || 0} gybes` : 'Tacks & gybes'}</button><button class="rm" data-rm="${b.id}">Remove</button></div>
     </div>`).join('');
 }
-$('#boats').addEventListener('click', e => {
+$('#boats').addEventListener('click', async e => {
+  const sh = e.target.closest('[data-share]');
+  if (sh) {
+    const b = boats.find(x => x.id === sh.dataset.share); const to = dock.sharing[b.file] === 'private' ? 'friends' : 'private';
+    try {
+      const r = await fetch(`/api/sessions/${encodeURIComponent(dock.session)}/tracks/${encodeURIComponent(b.file)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ visibility: to }) });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'HTTP ' + r.status);
+      dock.sharing[b.file] = to; renderList(); toast(to === 'private' ? `${label(b)} is private: friends won't see it` : `${label(b)} is shared with your friends`);
+    } catch (err) { toast('Couldn\'t change sharing: ' + err.message); }
+    return;
+  }
   const v = e.target.closest('[data-vis]'), r = e.target.closest('[data-rm]'), an = e.target.closest('[data-an]');
   if (an) { focusBoat(an.dataset.an); $('.train').scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
   if (v) { const b = boats.find(x => x.id === v.dataset.vis); b.visible = !b.visible; buildBoat(b); recomputeTimeline(); renderList(); renderCards(); render(); }
@@ -1755,6 +1843,7 @@ async function addBoats(list) {
   computeStartFinish();
   renderMarks();
   renderWx();
+  applyFriends();
   recomputeTimeline(); T = tMin; renderList(); renderCards(); renderTacks(); renderRaces(); rebuildAll(); fit();
 }
 function fit() {
@@ -1901,6 +1990,8 @@ $('#demo').addEventListener('click', async () => {
   toast('Demo loaded: three Solos, three laps. Press Play, then B for big screen.');
 });
 
+// inside the WakeBack app the demo only shows in demo mode (the app adds ?demo=1)
+if (window.WakeBackApp && !new URLSearchParams(location.search).has('demo')) document.body.classList.add('nodemo');
 renderList(); renderChips(); renderRaces(); renderMarks(); recomputeTimeline(); render(); dockInit();
 })();
 </script>

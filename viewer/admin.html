@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Admin · WakeBack</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#13293A; --card:#1C3A4F; --card-2:#24475F; --ink:#EAF2F5; --muted:#8FAAB8; --line:rgba(234,242,245,.13);
+  --signal:#FFC72C; --bad:#FF6B6B; --good:#51CF66;
+  --num:'Barlow Condensed','Arial Narrow',sans-serif; --body:'Barlow',system-ui,-apple-system,'Segoe UI',sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+[hidden]{display:none !important}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15px;line-height:1.45}
+button,input,select{font:inherit;color:inherit}
+.wrap{max-width:1180px;margin:0 auto;padding:calc(18px + env(safe-area-inset-top)) 16px calc(40px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:22px}
+header{display:flex;align-items:center;gap:22px;flex-wrap:wrap}
+h1{font-family:var(--num);font-weight:700;font-size:32px;line-height:1;margin:0}
+h1 span{color:var(--signal)}
+nav{display:flex;gap:4px;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:3px}
+nav a,nav button{padding:6px 16px;border-radius:6px;color:var(--muted);text-decoration:none;font-weight:600;background:none;border:0;cursor:pointer}
+nav a.on,nav button.on{background:var(--ink);color:var(--bg)}
+.me{margin-left:auto;color:var(--muted);display:flex;gap:10px;align-items:center}
+h2{font-family:var(--num);font-weight:600;font-size:22px;margin:0}
+.box{background:var(--card);border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:12px}
+.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.spacer{flex:1}
+.btn{background:transparent;border:1px solid var(--line);border-radius:6px;padding:7px 12px;cursor:pointer;font-weight:600;white-space:nowrap}
+.btn.primary{background:var(--signal);border-color:var(--signal);color:#13293A}
+.btn.danger{color:var(--bad);border-color:var(--bad)}
+.btn.sm{padding:4px 9px;font-size:13px}
+.btn:disabled{opacity:.5;cursor:default}
+input,select{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px 10px;min-width:0}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:left;padding:8px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
+th{color:var(--muted);font-weight:600;font-size:12.5px;text-transform:uppercase;letter-spacing:.04em}
+td.num{font-variant-numeric:tabular-nums;color:var(--muted);white-space:nowrap}
+.pill{font-size:12px;font-weight:700;border-radius:999px;padding:2px 9px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+.pill.active{color:var(--good);border-color:var(--good)}
+.pill.pending{color:var(--signal);border-color:var(--signal)}
+.pill.disabled{color:var(--bad);border-color:var(--bad)}
+.pill.admin{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.acts{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.switch{display:inline-flex;align-items:center;gap:10px;cursor:pointer;user-select:none}
+.switch i{width:44px;height:24px;border-radius:12px;background:rgba(234,242,245,.18);position:relative;transition:background .15s}
+.switch i::after{content:"";position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:left .15s}
+.switch input{display:none}
+.switch input:checked+i{background:var(--good)}
+.switch input:checked+i::after{left:23px}
+.hint{color:var(--muted);font-size:13.5px}
+.tag{display:inline-block;background:var(--card-2);border-radius:4px;padding:1px 6px;font-size:12px;color:var(--muted);margin-right:4px}
+.pending-badge{background:var(--signal);color:#13293A;border-radius:999px;padding:0 7px;font-size:12px;font-weight:700;margin-left:6px}
+#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 14px;border-radius:6px;font-weight:500;display:none;z-index:50;max-width:90vw}
+#login{max-width:380px;margin:60px auto;display:flex;flex-direction:column;gap:10px}
+#login h2{font-size:26px}
+.err{color:var(--bad);font-weight:600}
+.empty{color:var(--muted);padding:20px;text-align:center}
+.filt{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+@media (max-width:760px){
+  th:nth-child(4),td:nth-child(4),th:nth-child(5),td:nth-child(5){display:none}
+  .wrap{padding-left:10px;padding-right:10px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Wake<span>Back</span> <span style="color:var(--muted);font-weight:500;font-size:20px">admin</span></h1>
+    <nav id="tabs" hidden>
+      <button class="on" data-tab="users">Users<span id="pendN" class="pending-badge" hidden></span></button>
+      <button data-tab="tracks">Tracks</button>
+      <button data-tab="audit">Changes</button>
+      <a href="/">Replay</a><a href="/dock">Dock</a>
+    </nav>
+    <div class="me" id="me" hidden><span id="meName"></span><button class="btn sm" id="logout">Log out</button></div>
+  </header>
+
+  <section id="login" class="box">
+    <h2>Admin sign in</h2>
+    <input id="lemail" type="email" placeholder="Email" autocomplete="username">
+    <input id="lpass" type="password" placeholder="Password" autocomplete="current-password">
+    <button class="btn primary" id="lgo">Sign in</button>
+    <div class="err" id="lerr"></div>
+    <div class="hint">First time? Create your account in the app (or via <code>/api/auth/signup</code>) using the admin email set on the server; it becomes the admin automatically.</div>
+  </section>
+
+  <!-- ---------------- users ---------------- -->
+  <section id="tab-users" hidden style="display:flex;flex-direction:column;gap:14px">
+    <div class="box">
+      <div class="row">
+        <label class="switch"><input type="checkbox" id="autoApprove"><i></i><span><b>Auto-approve new accounts</b></span></label>
+        <span class="hint" id="autoHint"></span>
+      </div>
+      <div class="hint">Off: new sign-ups wait here until you approve them. On: anyone with the app who signs up is in straight away.</div>
+    </div>
+    <div class="box">
+      <div class="row"><h2>Users</h2><span class="spacer"></span>
+        <select id="ufilter"><option value="">All</option><option value="pending">Waiting for approval</option><option value="active">Active</option><option value="disabled">Disabled</option></select>
+      </div>
+      <div style="overflow-x:auto"><table id="users"><thead><tr><th>Name</th><th>Email</th><th>Status</th><th>Friends</th><th>Last login</th><th></th></tr></thead><tbody></tbody></table></div>
+    </div>
+  </section>
+
+  <!-- ---------------- tracks ---------------- -->
+  <section id="tab-tracks" hidden class="box">
+    <div class="row"><h2>All tracks</h2><span class="spacer"></span>
+      <div class="filt"><input id="tsearch" placeholder="Filter: name, venue, date, file"><span class="hint" id="tcount"></span></div>
+    </div>
+    <div class="hint">Everyone's tracks, including private ones. Change who owns a track, whether friends can see it, or remove it. Open a session in <a href="/" style="color:var(--signal)">Replay</a> to see it.</div>
+    <div style="overflow-x:auto"><table id="tracks"><thead><tr><th>Session</th><th>Track</th><th>Owner</th><th>Sharing</th><th></th></tr></thead><tbody></tbody></table></div>
+  </section>
+
+  <!-- ---------------- audit ---------------- -->
+  <section id="tab-audit" hidden class="box">
+    <div class="row"><h2>Recent changes</h2><span class="spacer"></span><button class="btn sm" id="auditRefresh">Refresh</button></div>
+    <div style="overflow-x:auto"><table id="audit"><thead><tr><th>When</th><th>Who</th><th>What</th><th>Target</th><th>Details</th></tr></thead><tbody></tbody></table></div>
+  </section>
+</div>
+<div id="toast" role="status"></div>
+
+<script>
+(() => {
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+let toastT; function toast(m, ms = 3500) { const t = $('#toast'); t.textContent = m; t.style.display = 'block'; clearTimeout(toastT); toastT = setTimeout(() => t.style.display = 'none', ms); }
+const when = ms => ms ? new Date(ms).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }) : '–';
+async function api(path, opts = {}) {
+  const r = await fetch(path, { credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, ...opts, body: opts.body ? JSON.stringify(opts.body) : undefined });
+  const j = await r.json().catch(() => ({}));
+  if (r.status === 401) { showLogin(); throw new Error(j.error || 'Please sign in'); }
+  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  return j;
+}
+let me = null, users = [], allSessions = [];
+
+// ---------- sign in ----------
+function showLogin() { $('#login').hidden = false; $('#tabs').hidden = true; $('#me').hidden = true; document.querySelectorAll('[id^=tab-]').forEach(t => t.hidden = true); }
+async function start() {
+  try {
+    const j = await api('/api/auth/me');
+    if (!j.accounts) { $('#login').innerHTML = '<h2>Accounts are off</h2><div class="hint">Set WAKEBACK_ADMIN=&lt;your email&gt; on the server to turn on accounts and this page.</div>'; return; }
+    if (j.user.role !== 'admin') { $('#login').innerHTML = `<h2>Admin only</h2><div class="hint">You're signed in as ${esc(j.user.name)}, who isn't an admin.</div><button class="btn" id="logout2">Log out</button>`; $('#logout2').onclick = logout; return; }
+    me = j.user; $('#login').hidden = true; $('#tabs').hidden = false; $('#me').hidden = false; $('#meName').textContent = me.name;
+    showTab('users');
+  } catch { showLogin(); }
+}
+$('#lgo').onclick = async () => {
+  $('#lerr').textContent = '';
+  try { await api('/api/auth/login', { method: 'POST', body: { email: $('#lemail').value.trim(), password: $('#lpass').value, cookie: true, device: 'admin page' } }); await start(); }
+  catch (e) { $('#lerr').textContent = e.message; }
+};
+$('#lpass').addEventListener('keydown', e => { if (e.key === 'Enter') $('#lgo').click(); });
+async function logout() { try { await api('/api/auth/logout', { method: 'POST' }); } catch {} location.reload(); }
+$('#logout').onclick = logout;
+
+// ---------- tabs ----------
+function showTab(name) {
+  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === name));
+  document.querySelectorAll('[id^=tab-]').forEach(t => t.hidden = t.id !== 'tab-' + name);
+  ({ users: loadUsers, tracks: loadTracks, audit: loadAudit })[name]();
+}
+$('#tabs').addEventListener('click', e => { const b = e.target.closest('button[data-tab]'); if (b) showTab(b.dataset.tab); });
+
+// ---------- users ----------
+async function loadUsers() {
+  const j = await api('/api/admin/users');
+  users = j.users;
+  $('#autoApprove').checked = !!j.auto_approve;
+  $('#autoHint').textContent = j.auto_approve ? 'New sign-ups are active straight away.' : 'New sign-ups wait for you.';
+  const pend = users.filter(u => u.status === 'pending').length;
+  $('#pendN').hidden = !pend; $('#pendN').textContent = pend;
+  renderUsers();
+}
+function renderUsers() {
+  const f = $('#ufilter').value;
+  const rows = users.filter(u => !f || u.status === f);
+  $('#users tbody').innerHTML = rows.length ? rows.map(u => `
+    <tr data-uid="${u.id}">
+      <td><b>${esc(u.name)}</b>${u.role === 'admin' ? ' <span class="pill admin">admin</span>' : ''}</td>
+      <td>${esc(u.email)}</td>
+      <td><span class="pill ${u.status}">${u.status === 'pending' ? 'waiting' : u.status}</span></td>
+      <td class="num">${u.friends}</td>
+      <td class="num">${when(u.last_login)}</td>
+      <td><div class="acts">
+        ${u.status === 'pending' ? '<button class="btn sm primary" data-act="approve">Approve</button>' : ''}
+        ${u.status === 'disabled' ? '<button class="btn sm" data-act="enable">Enable</button>' : ''}
+        <button class="btn sm" data-act="rename">Rename</button>
+        <button class="btn sm" data-act="password">Reset password</button>
+        ${u.id !== me.id ? (u.status !== 'disabled' ? '<button class="btn sm danger" data-act="disable">Disable</button>' : '') + '<button class="btn sm danger" data-act="delete">Delete</button>' : ''}
+      </div></td>
+    </tr>`).join('') : '<tr><td colspan="6" class="empty">Nobody here yet.</td></tr>';
+}
+$('#ufilter').onchange = renderUsers;
+$('#autoApprove').onchange = async e => {
+  try { const j = await api('/api/admin/settings', { method: 'PUT', body: { auto_approve: e.target.checked } }); toast(j.auto_approve ? 'New accounts are approved automatically' : 'New accounts now wait for you'); loadUsers(); }
+  catch (err) { toast(err.message); e.target.checked = !e.target.checked; }
+};
+$('#users').addEventListener('click', async e => {
+  const b = e.target.closest('[data-act]'); if (!b) return;
+  const uid = +b.closest('tr').dataset.uid, u = users.find(x => x.id === uid), act = b.dataset.act;
+  try {
+    if (act === 'approve' || act === 'enable') await api(`/api/admin/users/${uid}`, { method: 'POST', body: { status: 'active' } });
+    else if (act === 'disable') { if (!confirm(`Disable ${u.name}? They'll be signed out everywhere and can't log in until you enable them again.`)) return; await api(`/api/admin/users/${uid}`, { method: 'POST', body: { status: 'disabled' } }); }
+    else if (act === 'rename') { const n = prompt('Name', u.name); if (!n || !n.trim()) return; await api(`/api/admin/users/${uid}`, { method: 'POST', body: { name: n.trim() } }); }
+    else if (act === 'password') { const p = prompt(`New password for ${u.name} (8+ characters). Tell them, then they can change it in the app.`); if (!p) return; await api(`/api/admin/users/${uid}`, { method: 'POST', body: { password: p, sign_out: true } }); toast(`Password set for ${u.name}; they've been signed out everywhere.`); }
+    else if (act === 'delete') { if (!confirm(`Delete ${u.name}'s account? Their tracks stay (owned by their name) but they can't sign in. This can't be undone.`)) return; await api(`/api/admin/users/${uid}`, { method: 'DELETE' }); }
+    loadUsers();
+  } catch (err) { toast(err.message); }
+});
+
+// ---------- tracks ----------
+async function loadTracks() {
+  allSessions = await api('/api/sessions');
+  if (!users.length) users = (await api('/api/admin/users')).users;
+  renderTracks();
+}
+function renderTracks() {
+  const q = $('#tsearch').value.trim().toLowerCase();
+  const rows = [];
+  for (const sx of allSessions) for (const f of sx.files) {
+    const owner = sx.owners[f] || '', share = sx.sharing[f] || (sx.owners[f] ? 'friends' : 'everyone');
+    const hay = `${sx.date} ${sx.venue_name} ${f} ${owner}`.toLowerCase();
+    if (q && !hay.includes(q)) continue;
+    rows.push({ sx, f, owner, share });
+  }
+  $('#tcount').textContent = `${rows.length} track${rows.length === 1 ? '' : 's'}`;
+  const opts = users.filter(u => u.status !== 'pending').map(u => `<option value="${esc(u.email)}">${esc(u.name)}</option>`).join('');
+  $('#tracks tbody').innerHTML = rows.length ? rows.map(({ sx, f, owner, share }) => `
+    <tr data-s="${esc(sx.id)}" data-f="${esc(f)}">
+      <td><b>${esc(sx.date)}</b><br><span class="hint">${esc(sx.venue_name)}</span></td>
+      <td>${esc(f)}</td>
+      <td><select data-owner><option value="">${owner ? esc(owner) + ' (no account)' : 'Club / nobody'}</option>${opts}</select></td>
+      <td>${owner ? `<select data-share><option value="friends"${share === 'friends' ? ' selected' : ''}>Friends</option><option value="private"${share === 'private' ? ' selected' : ''}>Private</option></select>` : '<span class="tag">everyone</span>'}</td>
+      <td><div class="acts"><button class="btn sm danger" data-del>Remove</button></div></td>
+    </tr>`).join('') : '<tr><td colspan="5" class="empty">No tracks match.</td></tr>';
+  // select the current owner where we can match by name
+  document.querySelectorAll('#tracks tbody tr').forEach(tr => {
+    const sx = allSessions.find(x => x.id === tr.dataset.s), name = sx.owners[tr.dataset.f];
+    const u = users.find(x => x.name === name); const sel = tr.querySelector('[data-owner]');
+    if (u && sel) sel.value = u.email;
+  });
+}
+$('#tsearch').oninput = renderTracks;
+$('#tracks').addEventListener('change', async e => {
+  const tr = e.target.closest('tr'); if (!tr) return;
+  const s = tr.dataset.s, f = tr.dataset.f;
+  try {
+    if (e.target.matches('[data-owner]')) { await api(`/api/sessions/${encodeURIComponent(s)}/tracks/${encodeURIComponent(f)}`, { method: 'POST', body: { owner_email: e.target.value } }); toast('Owner changed'); }
+    if (e.target.matches('[data-share]')) { await api(`/api/sessions/${encodeURIComponent(s)}/tracks/${encodeURIComponent(f)}`, { method: 'POST', body: { visibility: e.target.value } }); toast('Sharing changed'); }
+    loadTracks();
+  } catch (err) { toast(err.message); loadTracks(); }
+});
+$('#tracks').addEventListener('click', async e => {
+  const b = e.target.closest('[data-del]'); if (!b) return;
+  const tr = b.closest('tr');
+  if (!confirm(`Remove ${tr.dataset.f} from ${tr.dataset.s}? The file is deleted from the server.`)) return;
+  try { await api(`/api/sessions/${encodeURIComponent(tr.dataset.s)}/${encodeURIComponent(tr.dataset.f)}`, { method: 'DELETE' }); toast('Removed'); loadTracks(); }
+  catch (err) { toast(err.message); }
+});
+
+// ---------- audit ----------
+const ACTIONS = { signup: 'Signed up', login: 'Logged in', upload: 'Uploaded a track', delete_track: 'Removed a track', track_settings: 'Changed a track',
+  friend_request: 'Asked to be friends with', friend_accept: 'Became friends with', friend_decline: 'Declined a friend request', unfriend: 'Unfriended',
+  admin_user: 'Changed a user', admin_delete_user: 'Deleted a user', setting: 'Changed a setting', password_changed: 'Changed their password' };
+async function loadAudit() {
+  const rows = await api('/api/admin/audit');
+  $('#audit tbody').innerHTML = rows.length ? rows.map(r => `
+    <tr><td class="num">${when(r.ts)}</td><td>${esc(r.who || '–')}</td><td>${esc(ACTIONS[r.action] || r.action)}</td><td>${esc(r.target || '')}</td>
+    <td class="hint">${r.details == null ? '' : esc(typeof r.details === 'object' ? Object.entries(r.details).map(([k, v]) => `${k}: ${v}`).join(', ') : r.details)}</td></tr>`).join('')
+    : '<tr><td colspan="5" class="empty">Nothing yet.</td></tr>';
+}
+$('#auditRefresh').onclick = loadAudit;
+
+start();
+})();
+</script>
+</body>
+</html>

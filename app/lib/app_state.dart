@@ -1,21 +1,29 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+
+import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'auth/auth_api.dart';
 import 'demo/demo_pucks.dart';
 import 'dock/pocket_dock.dart';
 import 'dock/store.dart';
+
+/// Your WakeBack server. Change in Setup → Advanced if you run your own.
+const String kDefaultServer = 'https://wakeback.bridgesolutions.uk';
 
 class AppState extends ChangeNotifier {
   AppState._();
   static final AppState instance = AppState._();
 
   late final SharedPreferences _p;
-  late final DockStore store;
+  late Directory _docs;
+  late DockStore store;
   late final PocketDock dock;
   late final DemoPucks demo;
   final DockSettings dockSettings = DockSettings();
@@ -28,16 +36,12 @@ class AppState extends ChangeNotifier {
 
   Future<void> init() async {
     _p = await SharedPreferences.getInstance();
-    final docs = await getApplicationDocumentsDirectory();
-    store = DockStore(Directory('${docs.path}/wakeback'));
-    await store.init();
-    store.fleet = fleet;
-    store
-      ..ownerName = profileName
-      ..ownerEmail = profileEmail
-      ..ownerIsPerson = true;
+    _docs = await getApplicationDocumentsDirectory();
+    store = await _openStore(demoMode);
     dockSettings.wifi = hotspotName;
     dock = PocketDock(store, _asset, dockSettings);
+    dock.me = () => {'name': profileName, 'email': profileEmail};
+    dock.demoMode = () => demoMode;
     try {
       await dock.start(port: 5000);
     } catch (e) {
@@ -45,6 +49,18 @@ class AppState extends ChangeNotifier {
       await dock.start(port: 0, address: InternetAddress.loopbackIPv4);
     }
     demo = DemoPucks(dock.localUrl);
+  }
+
+  /// Real data lives in wakeback/; the demo in its own folder so leaving the demo can wipe it cleanly.
+  Future<DockStore> _openStore(bool demo) async {
+    final s = DockStore(Directory('${_docs.path}/${demo ? 'wakeback-demo' : 'wakeback'}'));
+    await s.init();
+    s.fleet = fleet;
+    s
+      ..ownerName = profileName
+      ..ownerEmail = profileEmail
+      ..ownerIsPerson = true;
+    return s;
   }
 
   static Future<Uint8List?> _asset(String name) async {
@@ -56,8 +72,30 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  // ---- settings
-  String get serverUrl => _p.getString('serverUrl') ?? '';
+  // ------------------------------------------------------------------ demo mode
+
+  bool get demoMode => _p.getBool('demoMode') ?? false;
+
+  Future<void> setDemoMode(bool on) async {
+    if (on == demoMode) return;
+    final old = store;
+    if (!on) demo.stop();
+    await _p.setBool('demoMode', on);
+    store = await _openStore(on);
+    dock.store = store; // new requests go to the right data from here on
+    notifyListeners();
+    if (!on) {
+      // leaving the demo: throw the demo data away once anything in flight on the old store has finished
+      await old.locked(() async {
+        final d = Directory('${_docs.path}/wakeback-demo');
+        if (await d.exists()) await d.delete(recursive: true);
+      });
+    }
+  }
+
+  // ------------------------------------------------------------------ account
+
+  String get serverUrl => _p.getString('serverUrl') ?? kDefaultServer;
   set serverUrl(String v) {
     var u = v.trim();
     while (u.endsWith('/')) {
@@ -69,11 +107,57 @@ class AppState extends ChangeNotifier {
       final lan = RegExp(r'^\d{1,3}(\.\d{1,3}){3}(:\d+)?$').hasMatch(host) || host.contains('.local') || host.contains(':') || !host.contains('.');
       u = '${lan ? 'http' : 'https'}://$u';
     }
-    _p.setString('serverUrl', u);
+    _p.setString('serverUrl', u.isEmpty ? kDefaultServer : u);
     notifyListeners();
   }
 
-  /// The phone hotspot pucks and mates join (shown on the Dock page and in its WiFi QR code).
+  String? get token => _p.getString('token');
+  Account? get account {
+    final s = _p.getString('account');
+    if (s == null) return null;
+    try {
+      return Account.fromJson((jsonDecode(s) as Map).cast<String, dynamic>());
+    } catch (_) {
+      return null;
+    }
+  }
+
+  bool get signedIn => token != null && account != null;
+
+  /// Seen the welcome screen (signed in, or chose demo / no account)?
+  bool get welcomed => _p.getBool('welcomed') ?? false;
+  Future<void> setWelcomed() async {
+    await _p.setBool('welcomed', true);
+    notifyListeners();
+  }
+
+  AuthApi get auth => AuthApi(serverUrl, token: token);
+
+  Future<void> signedInAs(String token, Account user) async {
+    await _p.setString('token', token);
+    await _p.setString('account', jsonEncode(user.toJson()));
+    await _p.setBool('welcomed', true);
+    // your account is who owns what this phone records
+    await _p.setString('profileName', user.name);
+    await _p.setString('profileEmail', user.email);
+    store
+      ..ownerName = user.name
+      ..ownerEmail = user.email;
+    notifyListeners();
+  }
+
+  Future<void> signOut({bool tellServer = true}) async {
+    if (tellServer && token != null) unawaited(auth.logout()); // best effort, never blocks the button
+    await _p.remove('token');
+    await _p.remove('account');
+    await _p.remove('profileEmail');
+    store.ownerEmail = '';
+    notifyListeners();
+  }
+
+  // ------------------------------------------------------------------ settings
+
+  /// The phone hotspot pucks join (shown on the Dock page).
   String get hotspotName => _p.getString('hotspotName') ?? 'wakeback';
   set hotspotName(String v) {
     final s = v.trim().isEmpty ? 'wakeback' : v.trim();
@@ -89,7 +173,7 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// You: owner of everything this phone records or imports. Your email is never shown to other sailors.
+  /// You: owner of everything this phone records or imports (your account when signed in).
   String get profileName => _p.getString('profileName') ?? '';
   set profileName(String v) {
     _p.setString('profileName', v.trim());

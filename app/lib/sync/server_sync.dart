@@ -16,7 +16,8 @@ import '../dock/store.dart';
 
 class SyncException implements Exception {
   final String message;
-  const SyncException(this.message);
+  final bool signedOut; // the server no longer accepts our token
+  const SyncException(this.message, {this.signedOut = false});
   @override
   String toString() => message;
 }
@@ -25,9 +26,9 @@ class DayCompare {
   final String day;
   final List<String> phoneOnly, serverOnly, both;
 
-  /// Who sent each of the server's tracks (names only), so downloads keep their owner.
-  final Map<String, String> serverOwners;
-  const DayCompare(this.day, this.phoneOnly, this.serverOnly, this.both, {this.serverOwners = const {}});
+  /// Who sent each of the server's tracks (names only) and how they're shared, so downloads keep both.
+  final Map<String, String> serverOwners, serverSharing;
+  const DayCompare(this.day, this.phoneOnly, this.serverOnly, this.both, {this.serverOwners = const {}, this.serverSharing = const {}});
   bool get onPhone => phoneOnly.isNotEmpty || both.isNotEmpty;
   bool get onServer => serverOnly.isNotEmpty || both.isNotEmpty;
   bool get tracksInSync => phoneOnly.isEmpty && serverOnly.isEmpty;
@@ -69,13 +70,17 @@ bool _metaEmpty(Map m) =>
 class ServerSync {
   final String base;
   final DockStore store;
-  ServerSync(String url, this.store) : base = url.trim().replaceAll(RegExp(r'/+$'), '');
+  final String? token;
+  ServerSync(String url, this.store, {this.token}) : base = url.trim().replaceAll(RegExp(r'/+$'), '');
 
   Uri _u(String p) => Uri.parse('$base$p');
+  Map<String, String> get _auth => token == null ? const {} : {'Authorization': 'Bearer $token'};
+  Map<String, String> get _authJson => {..._auth, 'Content-Type': 'application/json'};
 
   Future<http.Response> _go(Future<http.Response> f, {Duration timeout = const Duration(seconds: 20)}) async {
     try {
       final r = await f.timeout(timeout);
+      if (r.statusCode == 401) throw const SyncException('Please sign in to your WakeBack account (Setup → You)', signedOut: true);
       if (r.statusCode >= 400) {
         String msg;
         try {
@@ -95,11 +100,10 @@ class ServerSync {
     }
   }
 
-  Future<Object?> _getJson(String p) async => jsonDecode(utf8.decode((await _go(http.get(_u(p)))).bodyBytes));
+  Future<Object?> _getJson(String p) async => jsonDecode(utf8.decode((await _go(http.get(_u(p), headers: _auth))).bodyBytes));
 
-  Future<Object?> _putJson(String p, Object value) async => jsonDecode(utf8.decode((await _go(
-          http.put(_u(p), headers: {'Content-Type': 'application/json'}, body: jsonEncode(value))))
-      .bodyBytes));
+  Future<Object?> _putJson(String p, Object value) async =>
+      jsonDecode(utf8.decode((await _go(http.put(_u(p), headers: _authJson, body: jsonEncode(value)))).bodyBytes));
 
   /// Is this a WakeBack dock/server? Returns its session list.
   Future<List<Map<String, dynamic>>> serverSessions() async {
@@ -120,7 +124,7 @@ class ServerSync {
     for (final v in phone.values) {
       final s = server[v['id']];
       if (s == null) {
-        await _go(http.post(_u('/api/venues'), headers: {'Content-Type': 'application/json'}, body: jsonEncode(v)));
+        await _go(http.post(_u('/api/venues'), headers: _authJson, body: jsonEncode(v)));
         changed++;
       } else if (s['name'] != v['name']) {
         if (s['auto'] == true && v['auto'] != true) {
@@ -147,6 +151,9 @@ class ServerSync {
     final owners = {
       for (final s in ss) '${s['id']}': {for (final e in ((s['owners'] as Map?) ?? const {}).entries) '${e.key}': '${e.value}'}
     };
+    final sharing = {
+      for (final s in ss) '${s['id']}': {for (final e in ((s['sharing'] as Map?) ?? const {}).entries) '${e.key}': '${e.value}'}
+    };
     final phone = {for (final s in await store.sessions()) '${s['id']}': ((s['files'] as List?) ?? const []).map((e) => '$e').toSet()};
     final days = {...server.keys, ...phone.keys}.toList()..sort((a, b) => b.compareTo(a));
     return [
@@ -157,6 +164,7 @@ class ServerSync {
           ((server[d] ?? <String>{}).difference(phone[d] ?? <String>{})).toList()..sort(),
           ((phone[d] ?? <String>{}).intersection(server[d] ?? <String>{})).toList()..sort(),
           serverOwners: owners[d] ?? const {},
+          serverSharing: sharing[d] ?? const {},
         ),
     ];
   }
@@ -165,10 +173,12 @@ class ServerSync {
     final f = await store.trackFile(day, name);
     final owner = await store.ownerOf(day, name);
     final req = http.MultipartRequest('POST', _u('/api/upload'))
+      ..headers.addAll(_auth)
       ..files.add(http.MultipartFile.fromBytes('file', await f.readAsBytes(), filename: name));
     if (owner != null && '${owner['name'] ?? ''}'.isNotEmpty) {
       req.fields['owner_name'] = '${owner['name']}';
       if ('${owner['email'] ?? ''}'.isNotEmpty) req.fields['owner_email'] = '${owner['email']}';
+      if (owner['visibility'] == 'private') req.fields['visibility'] = 'private';
     }
     final r = await _go(req.send().then(http.Response.fromStream), timeout: const Duration(minutes: 3));
     // The server files by the track's own timestamp; if it put it somewhere else (e.g. a track with no
@@ -181,7 +191,7 @@ class ServerSync {
   }
 
   Future<Uint8List> _downloadTrack(String day, String name) async =>
-      (await _go(http.get(_u('/api/sessions/${Uri.encodeComponent(day)}/${Uri.encodeComponent(name)}')), timeout: const Duration(minutes: 3))).bodyBytes;
+      (await _go(http.get(_u('/api/sessions/${Uri.encodeComponent(day)}/${Uri.encodeComponent(name)}'), headers: _auth), timeout: const Duration(minutes: 3))).bodyBytes;
 
   /// Sync one day. [resolve] picks a side for a course that differs: {'races': 'phone'|'server', 'meta': ...}.
   Future<SyncReport> syncDay(DayCompare c, {Map<String, String> resolve = const {}, void Function(String)? progress}) async {
@@ -190,6 +200,8 @@ class ServerSync {
 
     // ---- tracks
     for (final f in c.phoneOnly) {
+      final o = await store.ownerOf(day, f);
+      if (o != null && o['remote'] == true) continue; // a friend's track we downloaded: theirs to manage, not ours to re-upload
       progress?.call('Uploading $f');
       await _uploadTrack(day, f);
       rep.up++;
@@ -199,7 +211,8 @@ class ServerSync {
       if (await store.putTrack(day, f, await _downloadTrack(day, f))) {
         rep.down++;
         final who = c.serverOwners[f];
-        if (who != null && who.isNotEmpty) await store.setOwner(day, f, {'name': who});
+        // remember it came from the server, so it's never uploaded back as ours
+        await store.setOwner(day, f, {'name': who ?? '', 'visibility': c.serverSharing[f] ?? 'friends', 'remote': true});
       }
     }
 

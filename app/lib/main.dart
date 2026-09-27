@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'app_state.dart';
 import 'screens/home.dart';
+import 'screens/welcome_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -30,7 +31,8 @@ class WakeBackApp extends StatelessWidget {
         cardTheme: CardThemeData(color: const Color(0xFF1A3850), elevation: 0, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
       ),
       theme: ThemeData(useMaterial3: true, colorScheme: ColorScheme.fromSeed(seedColor: yellow)),
-      home: const HomeScreen(),
+      routes: {'/home': (_) => const HomeScreen()},
+      home: app.welcomed ? const HomeScreen() : const WelcomeScreen(),
     );
   }
 }

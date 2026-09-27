@@ -17,6 +17,8 @@ Run:  python server/app.py            (http://localhost:5000)
 import os, re, json, threading, time, shutil, socket, subprocess
 from datetime import datetime, timezone
 from flask import Flask, request, jsonify, send_from_directory, abort
+import accounts
+from accounts import require_user, require_admin, current_user, can_see, can_edit, friend_emails, is_admin
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SESSIONS = os.path.join(ROOT, 'data', 'sessions')
@@ -27,6 +29,8 @@ PUCKS = os.path.join(ROOT, 'data', 'pucks.json')
 BOOT = time.time()
 
 app = Flask(__name__, static_folder=None)
+accounts.init(os.path.join(ROOT, 'data'))
+app.register_blueprint(accounts.bp)
 
 from werkzeug.exceptions import HTTPException
 
@@ -185,31 +189,48 @@ def viewer_static(p):
     return send_from_directory(VIEWER, p)
 
 # ---------- sessions ----------
+def visible_files(d, files, user, friends):
+    """The tracks in a session folder this viewer may see, plus who owns them and how they're shared."""
+    owners = read_json(os.path.join(d, 'owners.json'), {})
+    owners = {f: o for f, o in owners.items() if isinstance(o, dict)}
+    seen = [f for f in files if can_see(owners.get(f), user, friends)]
+    me = (user or {}).get('email')
+    return seen, {
+        # names only: owners' emails stay on the server
+        'owners': {f: owners[f].get('name', '') for f in seen if f in owners},
+        'sharing': {f: (owners[f].get('visibility') or 'friends') for f in seen if f in owners},
+        'mine': [f for f in seen if f not in owners or not owners[f].get('email') or owners[f].get('email', '').lower() == me] if accounts.ENABLED else seen,
+    }
+
 @app.get('/api/sessions')
+@require_user
 def sessions():
     out, vs = [], load_venues()
+    user = current_user(); friends = friend_emails(user)
     for day in sorted(os.listdir(SESSIONS), reverse=True):
         d = os.path.join(SESSIONS, day)
         if not os.path.isdir(d): continue
         files = sorted(f for f in os.listdir(d) if f.lower().endswith(('.csv', '.gpx')))
+        files, share = visible_files(d, files, user, friends)
         if files:
             races = read_json(os.path.join(d, 'races.json'), [])
             m = SESSION_RE.match(day)
             vid = (m.group(2) if m else None) or UNKNOWN_VENUE
-            owners = read_json(os.path.join(d, 'owners.json'), {})
             out.append({'id': day, 'date': m.group(1) if m else day[:10], 'venue': vid, 'venue_name': venue_name(vid, vs), 'venue_new': venue_is_new(vid, vs),
-                        'files': files, 'count': len(files), 'races': len(races) if isinstance(races, list) else 0,
-                        # names only: owners' emails stay on the server
-                        'owners': {f: o.get('name', '') for f, o in owners.items() if isinstance(o, dict) and f in files}})
+                        'files': files, 'count': len(files), 'races': len(races) if isinstance(races, list) else 0, **share})
     out.sort(key=lambda s: (s['date'], s['venue_name']), reverse=True)
     return jsonify(out)
 
 @app.get('/api/sessions/<day>/<name>')
+@require_user
 def track(day, name):
     if not (SAFE.match(day) and SAFE.match(name)): abort(400)
+    owner = read_json(os.path.join(SESSIONS, day, 'owners.json'), {}).get(name)
+    if not can_see(owner, current_user(), friend_emails(current_user())): abort(404)
     return send_from_directory(os.path.join(SESSIONS, day), name)
 
 @app.post('/api/upload')
+@require_user
 def upload():
     """Pucks and the browser both post here. Field: file. Optional: puck (e.g. 'puck3')."""
     f = request.files.get('file')
@@ -220,7 +241,15 @@ def upload():
         return jsonify(error='That file isn\'t a GPX or CSV track. In your sailing app, look for "Export GPX".'), 400
     puck = request.form.get('puck', '')
     owner_name = request.form.get('owner_name', '').strip()[:40]
-    owner_email = request.form.get('owner_email', '').strip()[:120]
+    owner_email = request.form.get('owner_email', '').strip()[:120].lower()
+    visibility = 'private' if request.form.get('visibility') == 'private' else 'friends'
+    if accounts.ENABLED:
+        # the track belongs to whoever's signed in, unless it's a friend's own puck (a known account)
+        u, known = current_user(), accounts.users_by_email()
+        if not (owner_email and owner_email in known and owner_email != u['email']):
+            owner_name, owner_email = u['name'], u['email']
+        else:
+            owner_name = known[owner_email]['name']
     if puck and not name.lower().startswith(puck.lower()):
         name = f'{puck}_{name}'
     tmp = os.path.join(SESSIONS, '.incoming_' + name)
@@ -247,7 +276,7 @@ def upload():
         # owner: whose puck/phone sent it (can edit/delete it later). Sailor: who was in the boat (crew).
         if owner_name:
             op = os.path.join(dest_dir, 'owners.json'); owners = read_json(op, {})
-            owners[fname] = {'name': owner_name, **({'email': owner_email} if owner_email else {})}
+            owners[fname] = {'name': owner_name, **({'email': owner_email} if owner_email else {}), 'visibility': visibility}
             write_json(op, owners)
             # the owner's own track: name the boat after them unless someone's said otherwise
             if owner_name != DOCK_OWNER:
@@ -262,15 +291,51 @@ def upload():
             except (OSError, ValueError): crew = {}
             crew[os.path.basename(dest)] = sailor
             with open(cp, 'w') as fh: json.dump(crew, fh, indent=1)
+    if accounts.ENABLED: accounts.audit('upload', f'{day}/{os.path.basename(dest)}', {'owner': owner_email})
     return jsonify(ok=True, session=day, file=os.path.basename(dest), venue=vid, venue_name=venue_name(vid))
 
 @app.delete('/api/sessions/<day>/<name>')
+@require_user
 def delete_track(day, name):
     if not (SAFE.match(day) and SAFE.match(name)): abort(400)
     p = os.path.join(SESSIONS, day, name)
     if not os.path.exists(p): abort(404)
-    os.remove(p)
+    op = os.path.join(SESSIONS, day, 'owners.json'); owners = read_json(op, {})
+    if not can_edit(owners.get(name)): return jsonify(error='Only the owner (or the admin) can remove this track'), 403
+    with lock:
+        os.remove(p)
+        if name in owners: owners.pop(name); write_json(op, owners)
+    if accounts.ENABLED: accounts.audit('delete_track', f'{day}/{name}')
     return jsonify(ok=True)
+
+@app.post('/api/sessions/<day>/tracks/<name>')
+@require_user
+def track_settings(day, name):
+    """Sharing (friends/private) — owner or admin. Admin may also hand a track to another user."""
+    if not (SAFE.match(day) and SAFE.match(name)): abort(400)
+    if not os.path.exists(os.path.join(SESSIONS, day, name)): abort(404)
+    b = request.get_json(silent=True) or {}
+    op = os.path.join(SESSIONS, day, 'owners.json')
+    with lock:
+        owners = read_json(op, {}); o = dict(owners.get(name) or {})
+        if not can_edit(owners.get(name)): return jsonify(error='Only the owner (or the admin) can change this track'), 403
+        changes = {}
+        if b.get('visibility') in ('friends', 'private'): o['visibility'] = b['visibility']; changes['visibility'] = b['visibility']
+        if 'owner_email' in b:
+            if not is_admin(): return jsonify(error='Only the admin can change who owns a track'), 403
+            email = str(b['owner_email'] or '').strip().lower()
+            if email:
+                known = accounts.users_by_email()
+                if email not in known: return jsonify(error='No account with that email'), 400
+                o['email'], o['name'] = email, known[email]['name']
+            else:
+                o.pop('email', None); o['name'] = str(b.get('owner_name') or o.get('name') or '')[:40]
+            changes['owner'] = email or o.get('name')
+        if not changes: return jsonify(error='nothing to change'), 400
+        o.setdefault('visibility', 'friends'); o.setdefault('name', '')
+        owners[name] = o; write_json(op, owners)
+    if accounts.ENABLED: accounts.audit('track_settings', f'{day}/{name}', changes)
+    return jsonify({'name': o.get('name', ''), 'visibility': o.get('visibility', 'friends'), **({'email': o['email']} if is_admin() and o.get('email') else {})})
 
 def clean_marks(ms):
     """Course marks: name, position, and which side to leave them (port = red, stbd = green)."""
@@ -324,6 +389,7 @@ def clean_gun(v):
 
 # ---------- session meta: whole-session marks and your corrections to tacks/gybes/marks ----------
 @app.get('/api/sessions/<day>/meta')
+@require_user
 def get_meta(day):
     if not SAFE.match(day): abort(400)
     try:
@@ -331,6 +397,7 @@ def get_meta(day):
     except (OSError, ValueError): return jsonify({})
 
 @app.put('/api/sessions/<day>/meta')
+@require_user
 def put_meta(day):
     if not SAFE.match(day): abort(400)
     body = request.get_json(silent=True)
@@ -351,6 +418,7 @@ def put_meta(day):
 
 # ---------- races (time windows within a session day, each with its own marks) ----------
 @app.get('/api/sessions/<day>/races')
+@require_user
 def get_races(day):
     if not SAFE.match(day): abort(400)
     try:
@@ -358,6 +426,7 @@ def get_races(day):
     except (OSError, ValueError): return jsonify([])
 
 @app.put('/api/sessions/<day>/races')
+@require_user
 def put_races(day):
     if not SAFE.match(day): abort(400)
     body = request.get_json(silent=True)
@@ -380,6 +449,7 @@ def put_races(day):
 # ---------- crew: who had which puck, per session ----------
 # Puck numbers never change; pucks get handed out differently each time, so names live with the session.
 @app.get('/api/sessions/<day>/crew')
+@require_user
 def get_crew(day):
     if not SAFE.match(day): abort(400)
     try:
@@ -387,6 +457,7 @@ def get_crew(day):
     except (OSError, ValueError): return jsonify({})
 
 @app.put('/api/sessions/<day>/crew')
+@require_user
 def put_crew(day):
     if not SAFE.match(day): abort(400)
     body = request.get_json(silent=True)
@@ -398,6 +469,7 @@ def put_crew(day):
     return jsonify(clean)
 
 @app.get('/api/sailors')
+@require_user
 def sailors():
     """Every name used in any session, for the name picker."""
     names = set()
@@ -412,6 +484,7 @@ WIFI_SSID = os.environ.get('WAKEBACK_WIFI', 'wakeback')          # the dock's ow
 DOCK_OWNER = os.environ.get('WAKEBACK_OWNER', '')                  # owner for pucks with none set, e.g. "Southport SC"
 
 @app.get('/api/venues')
+@require_user
 def venues():
     return jsonify(sorted(load_venues(), key=lambda v: v['name'].lower()))
 
@@ -430,6 +503,7 @@ def clean_venue(b, old=None):
     return v
 
 @app.post('/api/venues')
+@require_user
 def add_venue():
     b = request.get_json(silent=True)
     if not isinstance(b, dict) or not b.get('name') or 'lat' not in b or 'lon' not in b:
@@ -447,6 +521,7 @@ def add_venue():
     return jsonify(v), 201
 
 @app.put('/api/venues/<vid>')
+@require_user
 def put_venue(vid):
     b = request.get_json(silent=True)
     if not isinstance(b, dict): return jsonify(error='expected an object'), 400
@@ -458,6 +533,7 @@ def put_venue(vid):
     return jsonify(vs[i])
 
 @app.post('/api/sessions/<day>/move')
+@require_user
 def move_session(day):
     """Wrong venue? Move the whole session to another one (merging if that session exists)."""
     if not SAFE.match(day): abort(400)
@@ -539,6 +615,7 @@ def last_sailor(session, fname):
     return crew.get(pm.group(1).lower() if pm else '') or crew.get(fname)
 
 @app.get('/api/pucks')
+@require_user
 def pucks():
     now = time.time() * 1000
     m = load_pucks()
@@ -591,6 +668,7 @@ DEMO_NETS = [('SSC Members', 82, True), ('SSC Guest', 64, False), ('BT-Hub-4F2A'
 demo_state = {'connected': None}
 
 @app.get('/api/dock/status')
+@require_user
 def dock_status():
     du = shutil.disk_usage(SESSIONS)
     nets = []
@@ -608,9 +686,11 @@ def dock_status():
         disk_free=du.free, disk_total=du.total,
         sessions=len([d for d in os.listdir(SESSIONS) if os.path.isdir(os.path.join(SESSIONS, d))]),
         nas=None,    # sync to the NAS isn't set up yet
+        accounts=accounts.ENABLED,
     )
 
 @app.get('/api/wifi/scan')
+@require_user
 def wifi_scan():
     if DEMO_WIFI:
         time.sleep(1)   # feels like a scan
@@ -627,6 +707,7 @@ def wifi_scan():
     return jsonify(available=True, networks=nets)
 
 @app.post('/api/wifi/connect')
+@require_user
 def wifi_connect():
     b = request.get_json(silent=True) or {}
     if ADMIN_PIN and str(b.get('pin', '')) != ADMIN_PIN: return jsonify(error='Wrong PIN.'), 403
@@ -650,6 +731,11 @@ def wifi_connect():
 @app.get('/dock')
 def dock_page():
     return send_from_directory(VIEWER, 'dock.html')
+
+@app.get('/admin')
+def admin_page():
+    if not accounts.ENABLED: return 'Accounts are off on this dock (set WAKEBACK_ADMIN=<your email> to turn them on).', 404
+    return send_from_directory(VIEWER, 'admin.html')
 
 # ---------- puck check-in (firmware will use this) ----------
 @app.get('/api/hello')

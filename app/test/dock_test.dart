@@ -116,6 +116,7 @@ void main() {
       {
         'id': '2026-09-20_southport-sc', 'date': '2026-09-20', 'venue': 'southport-sc', 'venue_name': 'Southport SC (Marine Lake)',
         'venue_new': false, 'files': ['puck4_103000-2.csv', 'puck4_103000.csv', 'puck7_log.csv'], 'count': 3, 'races': 0, 'owners': {},
+        'sharing': {}, 'mine': ['puck4_103000-2.csv', 'puck4_103000.csv', 'puck7_log.csv'],
       }
     ]);
     final (_, pk) = await d.req('GET', '/api/pucks');
@@ -237,9 +238,9 @@ void main() {
     final (_, list) = await d.req('GET', '/api/sessions');
     expect(list, [
       {'count': 1, 'date': '2026-09-23', 'files': ['Mate.csv'], 'id': '2026-09-23_near-5339n-319w', 'owners': {'Mate.csv': 'Dave'}, 'races': 0,
-        'venue': 'near-5339n-319w', 'venue_name': 'New venue near 53.39, -3.19', 'venue_new': true},
+        'venue': 'near-5339n-319w', 'venue_name': 'New venue near 53.39, -3.19', 'venue_new': true, 'sharing': {'Mate.csv': 'friends'}, 'mine': []},
       {'count': 1, 'date': '2026-09-20', 'files': ['puck4_103000.csv'], 'id': '2026-09-20_southport-sc', 'owners': {'puck4_103000.csv': 'James'}, 'races': 0,
-        'venue': 'southport-sc', 'venue_name': 'Southport SC (Marine Lake)', 'venue_new': false},
+        'venue': 'southport-sc', 'venue_name': 'Southport SC (Marine Lake)', 'venue_new': false, 'sharing': {'puck4_103000.csv': 'friends'}, 'mine': []},
     ]);
     expect(jsonEncode(list), isNot(contains('example.com'))); // emails never leave the dock
     expect((await d.req('GET', '/api/venues')).$2, [
@@ -265,6 +266,27 @@ void main() {
     expect((await d.req('GET', '/api/qr/wifi.svg')).$1, 404); // phone-upload QR page is gone
   });
 
+  test('phone dock: who am I, mine vs friends, sharing switch', () async {
+    d.store
+      ..ownerName = 'James'
+      ..ownerEmail = 'james@example.com';
+    d.dock.me = () => {'name': 'James', 'email': 'james@example.com'};
+    expect((await d.req('GET', '/api/auth/me')).$2, {'accounts': false, 'user': {'name': 'James', 'email': 'james@example.com'}});
+    await d.upload('puck1_103000.csv', south); // mine (profile owner)
+    await d.upload('Mate.csv', south, fields: {'owner_name': 'Dave', 'owner_email': 'dave@x.com'}); // a friend's puck via my hotspot
+    final (_, list) = await d.req('GET', '/api/sessions');
+    final s = (list as List).single;
+    expect(s['mine'], ['puck1_103000.csv']);
+    expect(s['sharing'], {'puck1_103000.csv': 'friends', 'Mate.csv': 'friends'});
+    expect(s['owners'], {'puck1_103000.csv': 'James', 'Mate.csv': 'Dave'});
+    final (st, j) = await d.req('POST', '/api/sessions/2026-09-20_southport-sc/tracks/puck1_103000.csv', json: {'visibility': 'private'});
+    expect(st, 200);
+    expect(j, {'name': 'James', 'visibility': 'private'});
+    expect((await d.req('POST', '/api/sessions/2026-09-20_southport-sc/tracks/puck1_103000.csv', json: {'visibility': 'x'})).$1, 400);
+    expect(((await d.req('GET', '/api/sessions')).$2 as List).single['sharing']['puck1_103000.csv'], 'private');
+    expect(await d.store.ownerOf('2026-09-20_southport-sc', 'puck1_103000.csv'), {'name': 'James', 'email': 'james@example.com', 'visibility': 'private'});
+  });
+
   test('old date-only folders are split into date + venue sessions', () async {
     final old = Directory('${d.dir.path}/sessions/2026-09-19');
     await old.create(recursive: true);
@@ -274,7 +296,7 @@ void main() {
     await d.store.init(); // what happens when the app starts
     expect((await d.req('GET', '/api/sessions')).$2, [
       {'count': 1, 'date': '2026-09-19', 'files': ['puck1_090000.csv'], 'id': '2026-09-19_southport-sc', 'owners': {}, 'races': 0,
-        'venue': 'southport-sc', 'venue_name': 'Southport SC (Marine Lake)', 'venue_new': false},
+        'venue': 'southport-sc', 'venue_name': 'Southport SC (Marine Lake)', 'venue_new': false, 'sharing': {}, 'mine': ['puck1_090000.csv']},
     ]);
     expect(await File('${d.dir.path}/sessions/2026-09-19_southport-sc/meta.json').exists(), true);
     expect(await old.exists(), false);

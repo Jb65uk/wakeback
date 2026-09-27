@@ -18,11 +18,17 @@ class DockSettings {
 }
 
 class PocketDock {
-  final DockStore store;
+  DockStore store; // swapped when entering/leaving demo mode
   final AssetLoader assets;
   final DockSettings settings;
   HttpServer? _server;
   final DateTime _boot = DateTime.now();
+
+  /// Who this phone belongs to (the app's profile / account), for the viewer's "mine vs friends".
+  Map<String, String> Function() me = () => const {};
+
+  /// Demo mode on? (shown on the Dock page)
+  bool Function() demoMode = () => false;
 
   PocketDock(this.store, this.assets, this.settings);
 
@@ -127,6 +133,12 @@ class PocketDock {
     final api = seg.sublist(1);
     final path = api.join('/');
 
+    // who am I (no accounts on the phone itself: the viewer just needs to know whose boats are whose)
+    if (m == 'GET' && path == 'auth/me') {
+      final p = me();
+      return _json(req, {'accounts': false, 'user': (p['name'] ?? '').isEmpty && (p['email'] ?? '').isEmpty ? null : {'name': p['name'] ?? '', 'email': p['email'] ?? ''}});
+    }
+
     // sessions
     if (m == 'GET' && path == 'sessions') return _json(req, await store.sessions());
     if (api.length == 3 && api[0] == 'sessions') {
@@ -150,6 +162,9 @@ class PocketDock {
         return _json(req, {'ok': true});
       }
       if (m == 'POST' && what == 'move') return _json(req, {'session': await store.moveSession(day, await _body(req))});
+    }
+    if (m == 'POST' && api.length == 4 && api[0] == 'sessions' && api[2] == 'tracks') {
+      return _json(req, await store.trackSettings(api[1], api[3], await _body(req)));
     }
 
     // venues
@@ -253,7 +268,7 @@ class PocketDock {
       'online': await _online(),
       'networks': <Object>[],
       'can_manage_wifi': false,
-      'demo': false,
+      'demo': demoMode(),
       'uplink_if': '',
       'dock_wifi': settings.wifi,
       'pin_required': false,
