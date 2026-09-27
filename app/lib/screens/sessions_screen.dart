@@ -72,7 +72,7 @@ String niceMonth(String ym) {
   }
 }
 
-String hours(num h) {
+String niceHours(num h) {
   if (h < 1) return '${(h * 60).round()} min';
   return h >= 10 ? '${h.round()} h' : '${h.toStringAsFixed(1)} h';
 }
@@ -409,7 +409,7 @@ class _StatsTabState extends State<_StatsTab> {
       Row(children: [
         Expanded(child: _Big(nm(dist), 'nautical miles', Icons.route_outlined, t)),
         const SizedBox(width: 8),
-        Expanded(child: _Big(hours(h), 'on the water', Icons.timer_outlined, t)),
+        Expanded(child: _Big(niceHours(h), 'on the water', Icons.timer_outlined, t)),
       ]),
       const SizedBox(height: 8),
       Row(children: [
@@ -505,7 +505,7 @@ class _FunFact extends StatelessWidget {
     }
     final times = nmiles / pick.$1;
     final howMany = times >= 2 ? '${times.toStringAsFixed(times >= 10 ? 0 : 1)} times' : times >= 0.9 ? 'about once' : '${(times * 100).round()}% of the way';
-    final afloat = hrs >= 24 ? ' — and ${(hrs / 24).toStringAsFixed(1)} whole days afloat.' : hrs >= 1 ? ' — ${hours(hrs)} of it.' : '.';
+    final afloat = hrs >= 24 ? ' — and ${(hrs / 24).toStringAsFixed(1)} whole days afloat.' : hrs >= 1 ? ' — ${niceHours(hrs)} of it.' : '.';
     return 'That\'s $howMany${pick.$1 <= 1 ? ' round ' : ' '}${pick.$2}$afloat';
   }
 
@@ -580,7 +580,7 @@ enum _Cat {
 
   String fmt(num v) => switch (this) {
         _Cat.miles => '${nm(v)} nm',
-        _Cat.hours => hours(v),
+        _Cat.hours => niceHours(v),
         _Cat.top || _Cat.avg => '${v.toStringAsFixed(1)} kn',
       };
 }
@@ -699,7 +699,7 @@ class _LeagueTabState extends State<_LeagueTab> {
           ),
         ),
         title: Text('${p['name']}${me ? ' (you)' : ''}', style: TextStyle(fontWeight: me ? FontWeight.w800 : FontWeight.w600)),
-        subtitle: Text('${p['sessions']} session${p['sessions'] == 1 ? '' : 's'} · ${nm((p['dist_nm'] as num?) ?? 0)} nm · ${hours((p['moving_h'] as num?) ?? 0)}'),
+        subtitle: Text('${p['sessions']} session${p['sessions'] == 1 ? '' : 's'} · ${nm((p['dist_nm'] as num?) ?? 0)} nm · ${niceHours((p['moving_h'] as num?) ?? 0)}'),
         trailing: Text(_cat.fmt((p[_cat.key] as num?) ?? 0), style: t.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
       ),
     );
