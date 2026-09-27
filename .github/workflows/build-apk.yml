@@ -50,6 +50,19 @@ jobs:
           open(p, 'w').write(s)
           PY
 
+      - name: Release signing key (same key every build, so updates install over the top)
+        env:
+          KS: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KP: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$KS" ] || [ -z "$KP" ]; then
+            echo "::warning title=Signing::No ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD secrets yet: this APK uses a throwaway key and won't install over an earlier build."
+            exit 0
+          fi
+          echo "$KS" | base64 -d > android/app/upload.jks
+          printf 'storeFile=upload.jks\nstorePassword=%s\nkeyAlias=wakeback\nkeyPassword=%s\n' "$KP" "$KP" > android/key.properties
+          python3 tool/use_release_key.py
+
       - run: flutter pub get 2>&1 | tee -a ci.log
 
       - name: App icon
