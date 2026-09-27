@@ -50,6 +50,16 @@ club pucks ─► dock Pi at the club ──────────────
    issued by the server, tied to the owner's account — club pucks to the club account). The puck sends the
    key with every upload; nobody types or remembers it. Lost/sold puck → revoke the key in /admin and set it
    up again. Lost hotspot password → change it on the phone and re-tell the puck the same way.
+4b. **Firmware: calibrate itself, don't make the sailor do it** — TO DO (with the firmware)
+   - Which way up: gravity at rest → deck cradle or hanging under the thwart; flip heel/pitch signs to suit.
+   - Mounting twist: compass heading (BNO085) minus GPS course while sailing straight, averaged → the angle the
+     puck is turned from the bow; re-learnt each time it's locked in, so the lid can stop at any angle.
+   - Level: the "flat" heel/pitch offset from the first minutes at rest on the trolley/pontoon (and the cradle
+     not being quite level on deck).
+   - Magnetometer: run the BNO085's own calibration in the background; save it so it survives a power cycle.
+   - GPS: nothing to calibrate, but do warm-start (save last fix + almanac) so it's ready when the boat hits the water.
+   - Report all of it (orientation, twist, level, mag status) in the check-in so the app can show "puck 3 is
+     under the thwart, calibrated" or warn when it isn't.
 5. **Firmware from the dashboard → app → puck** — TO DO
    /admin: upload a `.bin` + version + notes; server serves `/api/firmware/latest`. The app shows
    "Puck 3 is on 1.2, 1.4 available — Update" on the Dock page and pushes it while the puck is on the pad /
