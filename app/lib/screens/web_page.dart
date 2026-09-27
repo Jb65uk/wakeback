@@ -51,6 +51,8 @@ class WakeWebViewState extends State<WakeWebView> with AutomaticKeepAliveClientM
         },
         onPageFinished: (_) {
           if (mounted) setState(() => _loading = false);
+          // belt and braces for the Load demo button: the page reads ?demo=1, and we tell it too
+          _c.runJavaScript('window.wbSetDemo && wbSetDemo(${app.demoMode})').catchError((_) {});
         },
         onWebResourceError: (e) {
           if ((e.isForMainFrame ?? true) && mounted) {
@@ -155,6 +157,18 @@ class WakeWebViewState extends State<WakeWebView> with AutomaticKeepAliveClientM
       setState(() => _loading = true);
       _c.loadRequest(Uri.parse(widget.url));
     }
+  }
+
+  /// Open a session's replay. Uses the page's own hook when the viewer is up; otherwise loads it with ?session=.
+  Future<void> openSession(String id) async {
+    final js = jsonEncode(id);
+    try {
+      final r = await _c.runJavaScriptReturningResult('typeof wbOpenSession === "function" ? (wbOpenSession($js), true) : false');
+      if (r == true || '$r' == 'true') return;
+    } catch (_) {}
+    final u = Uri.parse(widget.url);
+    setState(() => _loading = true);
+    await _c.loadRequest(u.replace(queryParameters: {...u.queryParameters, 'session': id}));
   }
 
   /// Back button: leave full screen, else go back a page (Dock -> Replay). Returns false if there's nowhere to go.

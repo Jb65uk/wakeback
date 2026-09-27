@@ -15,11 +15,13 @@ your phone records is marked as yours (Setup → You).
 app/
   lib/dock/store.dart         the dock's storage + rules, ported line for line from server/app.py
   lib/dock/pocket_dock.dart   the dock's HTTP API on port 5000 + serves the viewer pages
+  lib/dock/stats.dart         miles / hours / speeds per track, totals and the league (= server/stats.py)
   lib/sync/server_sync.dart   two-way sync with your server (existing endpoints only)
   lib/demo/                   fake_pucks.py + gen_fake_data.py, ported
-  lib/screens/                Replay (the viewer), Sync, Setup
+  lib/screens/                Sessions (list, Stats, League), Replay (the viewer), Sync, Setup
   assets/web/                 viewer pages (copied from ..\viewer by setup.ps1) + Leaflet
-  test/dock_test.dart         checks the phone dock answers like app.py, and sync between two docks
+  test/dock_test.dart         checks the phone dock answers like app.py (incl. stats), and sync between two docks
+  test/fixtures/              two small tracks whose numbers were taken from server/stats.py
 ```
 
 ## 1. Install Flutter (once, ~15 min)

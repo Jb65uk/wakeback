@@ -17,7 +17,7 @@ Run:  python server/app.py            (http://localhost:5000)
 import os, re, json, threading, time, shutil, socket, subprocess
 from datetime import datetime, timezone
 from flask import Flask, request, jsonify, send_from_directory, abort
-import accounts
+import accounts, stats as trackstats
 from accounts import require_user, require_admin, current_user, can_see, can_edit, friend_emails, is_admin
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -217,7 +217,8 @@ def sessions():
             m = SESSION_RE.match(day)
             vid = (m.group(2) if m else None) or UNKNOWN_VENUE
             out.append({'id': day, 'date': m.group(1) if m else day[:10], 'venue': vid, 'venue_name': venue_name(vid, vs), 'venue_new': venue_is_new(vid, vs),
-                        'files': files, 'count': len(files), 'races': len(races) if isinstance(races, list) else 0, **share})
+                        'files': files, 'count': len(files), 'races': len(races) if isinstance(races, list) else 0, **share,
+                        'stats': trackstats.session_stats(d, files)})
     out.sort(key=lambda s: (s['date'], s['venue_name']), reverse=True)
     return jsonify(out)
 
@@ -467,6 +468,60 @@ def put_crew(day):
     with lock:
         with open(os.path.join(d, 'crew.json'), 'w') as f: json.dump(clean, f, indent=1)
     return jsonify(clean)
+
+def _rows_for(user, period, league=False):
+    """Every visible track as a row with its owner, for stats and the league.
+    For the league even the admin only sees what a friend would: private sails stay off the board."""
+    since = trackstats.period_start(period)
+    friends = friend_emails(user); vs = load_venues(); rows = []
+    def on_board(o):
+        if not (league and accounts.ENABLED and user and isinstance(o, dict)): return True
+        email = (o.get('email') or '').lower()
+        return not email or email == user['email'] or ((o.get('visibility') or 'friends') != 'private' and email in friends)
+    for day in os.listdir(SESSIONS):
+        d = os.path.join(SESSIONS, day)
+        m = SESSION_RE.match(day)
+        if not m or not os.path.isdir(d): continue
+        files = sorted(f for f in os.listdir(d) if f.lower().endswith(('.csv', '.gpx')))
+        owners = {f: o for f, o in read_json(os.path.join(d, 'owners.json'), {}).items() if isinstance(o, dict)}
+        files = [f for f in files if can_see(owners.get(f), user, friends) and on_board(owners.get(f))]
+        if not files: continue
+        st = trackstats.session_stats(d, files)
+        vid = m.group(2) or UNKNOWN_VENUE
+        for f in files:
+            if f not in st or st[f]['start_ms'] < since: continue
+            o = owners.get(f, {})
+            rows.append({'session': day, 'date': m.group(1), 'venue': vid, 'venue_name': venue_name(vid, vs), 'file': f, 'stats': st[f],
+                         'owner_email': (o.get('email') or '').lower(), 'owner_name': o.get('name') or ''})
+    return rows
+
+@app.get('/api/stats')
+@require_user
+def my_stats():
+    """Your totals (or, without accounts, everything on this dock): ?period=month|year|all"""
+    user = current_user(); period = request.args.get('period', 'all')
+    rows = _rows_for(user, period)
+    if accounts.ENABLED and user:
+        rows = [r for r in rows if r['owner_email'] == user['email'] or (not r['owner_email'] and r['owner_name'] == user['name'])]
+    return jsonify(period=period, **trackstats.summarise(rows))
+
+@app.get('/api/league')
+@require_user
+def league():
+    """You and your friends (and the club's unowned tracks), ranked: ?period=month|year|all"""
+    user = current_user(); period = request.args.get('period', 'all')
+    by = {}
+    for r in _rows_for(user, period, league=True):
+        key = r['owner_email'] or (r['owner_name'] or 'Club')
+        by.setdefault(key, {'name': r['owner_name'] or 'Club', 'rows': []})['rows'].append(r)
+    people = []
+    for key, v in by.items():
+        sm = trackstats.summarise(v['rows'])
+        people.append({'name': v['name'], 'me': bool(user) and (key == user['email'] or (not '@' in key and key == user['name'])),
+                       'sessions': sm['sessions'], 'dist_nm': sm['dist_nm'], 'moving_h': sm['moving_h'], 'max_kn': sm['max_kn'],
+                       'avg_kn': sm['avg_kn'], 'best_avg_kn': sm['best_avg_kn'], 'longest_nm': sm.get('longest_nm', 0)})
+    people.sort(key=lambda p: -p['dist_nm'])
+    return jsonify(period=period, people=people)
 
 @app.get('/api/sailors')
 @require_user

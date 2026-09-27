@@ -108,6 +108,21 @@ class ServerSync {
   Future<Object?> _putJson(String p, Object value) async =>
       jsonDecode(utf8.decode((await _go(http.put(_u(p), headers: _authJson, body: jsonEncode(value)))).bodyBytes));
 
+  /// Your totals on the server (?period=month|year|all).
+  Future<Map<String, dynamic>> myStats(String period) async =>
+      ((await _getJson('/api/stats?period=$period')) as Map).cast<String, dynamic>();
+
+  /// The friends' league from the server: people ranked, 'me' flagged.
+  Future<List<Map<String, dynamic>>> league(String period) async {
+    final j = ((await _getJson('/api/league?period=$period')) as Map).cast<String, dynamic>();
+    return ((j['people'] as List?) ?? const []).whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
+  }
+
+  /// Change how one of your tracks on the server is shared ('friends' / 'private').
+  Future<void> setSharing(String day, String file, String visibility) async {
+    await _go(http.post(_u('/api/sessions/$day/tracks/$file'), headers: _authJson, body: jsonEncode({'visibility': visibility})));
+  }
+
   /// Is this a WakeBack dock/server? Returns its session list.
   Future<List<Map<String, dynamic>>> serverSessions() async {
     final j = await _getJson('/api/sessions');

@@ -34,6 +34,13 @@ club pucks ─► dock Pi at the club ──────────────
    Email + password accounts on the server (SQLite), approval or auto-approve, admin dashboard at /admin,
    friends, friends/private per track, only the owner (or admin) edits or deletes, the app signs in and
    keeps demo data separate. Not yet: a public read-only link, email "forgot password".
+2b. **Sessions tab, stats and the league** ✅
+   The app opens on a native Sessions list (tap to replay, Friends/Private switch per session), with Stats
+   (miles, hours, sessions, average, top speed, fastest average, longest sail, favourite venue, miles by
+   month, a fun comparison) and a friends' League (miles, hours, top speed, best average; this month / year /
+   all time; medals). Numbers come from `server/stats.py` (`/api/stats`, `/api/league`, `stats` in
+   `/api/sessions`, cached per session in `stats.json`) and the identical Dart port `app/lib/dock/stats.dart`
+   for what's on the phone. Private sails stay off everyone's board, including the admin's.
 3. **Events and "who else was there?"**
    Create an event, share a link/code, everyone adds their track; the server spots other WakeBack sailors at
    the same venue and time and offers to ask them; a feed of your and your friends' sailing.

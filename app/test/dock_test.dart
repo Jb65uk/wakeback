@@ -7,6 +7,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wakeback/demo/fake_race.dart';
 import 'package:wakeback/dock/pocket_dock.dart';
+import 'package:wakeback/dock/stats.dart';
 import 'package:wakeback/dock/store.dart';
 import 'package:wakeback/sync/server_sync.dart';
 
@@ -74,6 +75,10 @@ class Dock {
   }
 }
 
+/// /api/sessions without the per-track 'stats' (those are checked in their own test).
+List<Map<String, dynamic>> noStats(Object? list) =>
+    (list as List).map((s) => {...(s as Map).cast<String, dynamic>()}..remove('stats')).toList();
+
 String shortCsv(DateTime t0, {int seed = 5}) {
   final rows = simBoat(4.5, seed, 0, 12, t0: t0, laps: 1);
   return toPuckCsv(rows.take(600).toList()); // one minute at 10 Hz
@@ -112,7 +117,7 @@ void main() {
     expect(j3['file'], 'puck7_log.csv');
 
     final (_, sessions) = await d.req('GET', '/api/sessions');
-    expect(sessions, [
+    expect(noStats(sessions), [
       {
         'id': '2026-09-20_southport-sc', 'date': '2026-09-20', 'venue': 'southport-sc', 'venue_name': 'Southport SC (Marine Lake)',
         'venue_new': false, 'files': ['puck4_103000-2.csv', 'puck4_103000.csv', 'puck7_log.csv'], 'count': 3, 'races': 0, 'owners': {},
@@ -236,7 +241,7 @@ void main() {
     final (_, dd) = await d.upload('Mate.csv', far, fields: {'owner_name': 'Dave'});
     expect(dd, {'file': 'Mate.csv', 'ok': true, 'session': '2026-09-23_near-5339n-319w', 'venue': 'near-5339n-319w', 'venue_name': 'New venue near 53.39, -3.19'});
     final (_, list) = await d.req('GET', '/api/sessions');
-    expect(list, [
+    expect(noStats(list), [
       {'count': 1, 'date': '2026-09-23', 'files': ['Mate.csv'], 'id': '2026-09-23_near-5339n-319w', 'owners': {'Mate.csv': 'Dave'}, 'races': 0,
         'venue': 'near-5339n-319w', 'venue_name': 'New venue near 53.39, -3.19', 'venue_new': true, 'sharing': {'Mate.csv': 'friends'}, 'mine': []},
       {'count': 1, 'date': '2026-09-20', 'files': ['puck4_103000.csv'], 'id': '2026-09-20_southport-sc', 'owners': {'puck4_103000.csv': 'James'}, 'races': 0,
@@ -287,6 +292,52 @@ void main() {
     expect(await d.store.ownerOf('2026-09-20_southport-sc', 'puck1_103000.csv'), {'name': 'James', 'email': 'james@example.com', 'visibility': 'private'});
   });
 
+  test('stats and league match server/stats.py to the decimal', () async {
+    // expected values come from running server/stats.py on the same two fixture files
+    final puck = await File('test/fixtures/stats_puck.csv').readAsString();
+    final gpx = await File('test/fixtures/stats_phone.gpx').readAsString();
+    expect(computeStats(puck, 'x.csv'), {'points': 1800, 'start_ms': 1789900200000, 'end_ms': 1789900499900, 'dist_nm': 0.191, 'max_kn': 7.38, 'avg_kn': 4.24, 'moving_s': 147});
+    expect(computeStats(gpx, 'x.gpx'), {'points': 400, 'start_ms': 1789900200000, 'end_ms': 1789900599000, 'dist_nm': 0.377, 'max_kn': 4.06, 'avg_kn': 3.98, 'moving_s': 339});
+    expect(computeStats('t_ms,lat,lon\n1,2,3\n', 'x.csv'), isNull);
+
+    d.store
+      ..ownerName = 'James'
+      ..ownerEmail = 'james@example.com';
+    await d.upload('puck1_103000.csv', puck);
+    await d.upload('Steve_phone.gpx', gpx, fields: {'owner_name': 'Steve', 'owner_email': 'steve@x.com'});
+    final s = ((await d.req('GET', '/api/sessions')).$2 as List).single;
+    expect(s['id'], '2026-09-20_southport-sc');
+    expect(s['stats']['puck1_103000.csv']['dist_nm'], 0.191);
+    expect(s['stats']['Steve_phone.gpx']['moving_s'], 339);
+    expect(await File('${d.dir.path}/sessions/2026-09-20_southport-sc/stats.json').exists(), isTrue); // cached
+
+    const ref = {'session': '2026-09-20_southport-sc', 'date': '2026-09-20', 'venue_name': 'Southport SC (Marine Lake)'};
+    final (st, mine) = await d.req('GET', '/api/stats?period=all');
+    expect(st, 200);
+    expect(mine, {
+      'period': 'all', 'sessions': 1, 'tracks': 1, 'dist_nm': 0.19, 'moving_h': 0.04,
+      'max_kn': 7.38, 'max_track': {...ref, 'file': 'puck1_103000.csv'},
+      'avg_kn': 4.24, 'best_avg_kn': 4.24, 'best_avg_track': {...ref, 'file': 'puck1_103000.csv'},
+      'longest_nm': 0.191, 'longest_track': {...ref, 'file': 'puck1_103000.csv'},
+      'venues': 1, 'favourite_venue': 'Southport SC (Marine Lake)', 'first_date': '2026-09-20', 'last_date': '2026-09-20',
+      'by_month': [{'month': '2026-09', 'dist_nm': 0.19, 'sessions': 1, 'moving_s': 147}],
+    });
+    // both together (what summarise gives the league for a two-track person)
+    final rows = await d.store.rowsFor('all');
+    expect(summarise(rows)['avg_kn'], 4.06);
+    expect(summarise(rows)['longest_track'], {...ref, 'file': 'Steve_phone.gpx'});
+
+    final (_, lg) = await d.req('GET', '/api/league');
+    expect(lg['people'], [
+      {'name': 'Steve', 'me': false, 'sessions': 1, 'dist_nm': 0.38, 'moving_h': 0.09, 'max_kn': 4.06, 'avg_kn': 3.98, 'best_avg_kn': 3.98, 'longest_nm': 0.377},
+      {'name': 'James', 'me': true, 'sessions': 1, 'dist_nm': 0.19, 'moving_h': 0.04, 'max_kn': 7.38, 'avg_kn': 4.24, 'best_avg_kn': 4.24, 'longest_nm': 0.191},
+    ]);
+    // a period that starts after the sailing: nothing
+    expect(periodStart('month', now: DateTime.utc(2026, 9, 15)), 1788220800000);
+    expect(periodStart('year', now: DateTime.utc(2026, 9, 15)), 1767225600000);
+    expect(((await d.req('GET', '/api/stats?period=month')).$2)['sessions'], DateTime.now().toUtc().isBefore(DateTime.utc(2026, 10)) ? 1 : 0);
+  });
+
   test('old date-only folders are split into date + venue sessions', () async {
     final old = Directory('${d.dir.path}/sessions/2026-09-19');
     await old.create(recursive: true);
@@ -294,7 +345,7 @@ void main() {
         't_ms,lat,lon,sog_kn,hdg,heel,pitch\n1789812000000,53.6500000,-3.0100000,4.00,90,5.0,0.0\n1789812001000,53.6500100,-3.0099900,4.10,90,5.0,0.0\n');
     await File('${old.path}/meta.json').writeAsString('{"marks": [], "fixes": [], "lines": []}');
     await d.store.init(); // what happens when the app starts
-    expect((await d.req('GET', '/api/sessions')).$2, [
+    expect(noStats((await d.req('GET', '/api/sessions')).$2), [
       {'count': 1, 'date': '2026-09-19', 'files': ['puck1_090000.csv'], 'id': '2026-09-19_southport-sc', 'owners': {}, 'races': 0,
         'venue': 'southport-sc', 'venue_name': 'Southport SC (Marine Lake)', 'venue_new': false, 'sharing': {}, 'mine': ['puck1_090000.csv']},
     ]);

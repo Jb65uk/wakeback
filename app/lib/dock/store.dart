@@ -11,6 +11,8 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'stats.dart';
+
 final RegExp _safeRe = RegExp(r'^[A-Za-z0-9._ -]+$');
 
 /// app.py's SAFE check, plus no "." / ".." (so nothing outside the sessions folder can be reached).
@@ -337,6 +339,7 @@ class DockStore {
       out.add({
         'id': day, 'date': m?.group(1) ?? cut(day, 10), 'venue': vid, 'venue_name': venueName(vid, vs), 'venue_new': venueIsNew(vid, vs),
         'files': files, 'count': files.length, 'races': races, 'owners': owners, 'sharing': sharing, 'mine': mine,
+        'stats': await sessionStats(dayDir(day), files),
       });
     }
     // newest date first, then venue name (sorted(key=(date, venue_name), reverse=True))
@@ -346,6 +349,53 @@ class DockStore {
     });
     return out;
   }
+
+  /// Is this track mine (app.py: my email, or my name / nobody's when no email is known; never one from the server)?
+  bool _isMine(Object? o) {
+    if (o is! Map) return true;
+    if (o['remote'] == true) return false;
+    final e = pyStr(o['email'] ?? '').toLowerCase(), n = pyStr(o['name'] ?? '');
+    return e.isEmpty ? (n == ownerName || n.isEmpty) : e == ownerEmail.toLowerCase();
+  }
+
+  /// Every track on this phone as a row with its owner, newest first (app.py _rows_for).
+  Future<List<StatRow>> rowsFor(String period) async {
+    final since = periodStart(period);
+    final vs = await venues();
+    final rows = <StatRow>[];
+    for (final day in await _days()) {
+      final m = sessionRe.firstMatch(day);
+      if (m == null) continue;
+      final files = await trackFiles(day);
+      if (files.isEmpty) continue;
+      final st = await sessionStats(dayDir(day), files);
+      final ow = await _readJson(File('${dayDir(day).path}/owners.json'));
+      final vid = m.group(2) ?? unknownVenue;
+      for (final f in files) {
+        final s = st[f];
+        if (s is! Map || (s['start_ms'] as num) < since) continue;
+        final o = ow is Map ? ow[f] : null;
+        // a track nobody has claimed on this phone is yours (recorded before you had an account), so the
+        // league row and your Stats agree
+        final mine = _isMine(o);
+        var email = o is Map ? pyStr(o['email'] ?? '').toLowerCase() : '', name = o is Map ? pyStr(o['name'] ?? '') : '';
+        if (mine && email.isEmpty) {
+          email = ownerEmail.toLowerCase();
+          if (name.isEmpty) name = ownerName;
+        }
+        rows.add(StatRow(day, m.group(1)!, vid, venueName(vid, vs), f, s.cast<String, dynamic>(), ownerEmail: email, ownerName: name, owner: o));
+      }
+    }
+    return rows;
+  }
+
+  // ---- GET /api/stats?period=  (your tracks only)
+  Future<Map<String, dynamic>> myStats(String period) async =>
+      {'period': period, ...summarise([for (final r in await rowsFor(period)) if (_isMine(r.owner)) r])};
+
+  // ---- GET /api/league?period=  (everyone on this phone: you, friends' shared tracks, unowned = Club)
+  Future<Map<String, dynamic>> leagueTable(String period) async =>
+      {'period': period, 'people': league(await rowsFor(period), myEmail: ownerEmail, myName: ownerName)};
 
   Future<File> trackFile(String day, String name) async {
     if (!safeName.hasMatch(day) || !safeName.hasMatch(name)) throw const DockError(400, 'bad name');

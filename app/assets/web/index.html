@@ -1676,6 +1676,8 @@ async function dockInit() {
     dockBadge(); setInterval(dockBadge, 30000);
     loadSailors();
     renderSessions(await r.json());
+    const want = new URLSearchParams(location.search).get('session');
+    if (want) openSession(want);
     setInterval(async () => {
       try { const rr = await fetch('/api/sessions', { cache: 'no-store' }); if (rr.status === 401) { await needLogin(); return; } const list = await rr.json(); renderSessions(list); pickUpNewTracks(list); } catch {}
     }, 5000);
@@ -1751,19 +1753,26 @@ $('#venueBar').addEventListener('click', async e => {
   } catch (err) { toast('Couldn\'t change the venue: ' + err.message); }
 });
 $('#venueBar').addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.id === 'venueName') $('#venueSave').click(); });
-$('#sessList').addEventListener('click', async e => {
-  const b = e.target.closest('[data-sess]'); if (!b) return;
-  const id = b.dataset.sess;
+async function openSession(id) {
   try {
     const list = await (await fetch('/api/sessions', { cache: 'no-store' })).json();
-    const sx = list.find(x => x.id === id); if (!sx) return;
+    const sx = list.find(x => x.id === id); if (!sx) { toast('That session isn\'t here any more'); return false; }
     $('#clear').click(); dock.session = id; dock.owners = sx.owners || {}; dock.sharing = sx.sharing || {}; dock.mine = sx.mine || null; venueEdit = null; if (!unsaved.size) $('#saveState').hidden = true;
     renderSessions.last = null; renderSessions(list);
     const files = await Promise.all(sx.files.map(async f => new File([await (await fetch(`/api/sessions/${id}/${f}`)).blob()], f)));
     await loadFiles(files);
     $('#panel').classList.remove('open');
-  } catch (err) { toast('Could not load session: ' + err.message); }
+    return true;
+  } catch (err) { toast('Could not load session: ' + err.message); return false; }
+}
+$('#sessList').addEventListener('click', e => {
+  const b = e.target.closest('[data-sess]'); if (!b) return;
+  openSession(b.dataset.sess);
 });
+// the phone app's Sessions tab opens a replay with this (and ?session=<id> on the URL does the same at start-up)
+window.wbOpenSession = id => openSession(id);
+// the app tells the page whether it's in demo mode (the Load demo button only belongs in the demo)
+window.wbSetDemo = on => document.body.classList.toggle('nodemo', !on || !!dock.accounts);
 // a phone upload (or a puck landing on the pad) for the session on screen: add it without a reload
 let pulling = false;
 async function pickUpNewTracks(list) {

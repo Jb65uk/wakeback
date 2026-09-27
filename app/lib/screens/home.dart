@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../app_state.dart';
+import 'sessions_screen.dart';
 import 'setup_screen.dart';
 import 'sync_screen.dart';
 import 'web_page.dart';
@@ -16,13 +17,21 @@ class _HomeScreenState extends State<HomeScreen> {
   int _tab = 0;
   final _viewer = GlobalKey<WakeWebViewState>();
 
+  static const _sessions = 0, _replay = 1, _setup = 3;
+
   Future<void> _back() async {
-    if (_tab != 0) {
-      setState(() => _tab = 0);
+    if (_tab == _replay && (await _viewer.currentState?.handleBack() ?? false)) return; // full screen / Dock page
+    if (_tab != _sessions) {
+      setState(() => _tab = _sessions);
       return;
     }
-    if (await _viewer.currentState?.handleBack() ?? false) return;
     await SystemNavigator.pop();
+  }
+
+  /// A session tapped in the Sessions tab (or a record in Stats): replay it.
+  void _open(String id) {
+    setState(() => _tab = _replay);
+    _viewer.currentState?.openSession(id);
   }
 
   @override
@@ -46,7 +55,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   Material(
                     color: t.colorScheme.primary,
                     child: InkWell(
-                      onTap: () => setState(() => _tab = 2),
+                      onTap: () => setState(() => _tab = _setup),
                       child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
                         child: Row(children: [
@@ -60,6 +69,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 Expanded(
                   child: IndexedStack(index: _tab, children: [
+                    SessionsScreen(onOpen: _open),
                     // the real viewer, served by the phone's own dock (its Replay / Dock tabs are inside).
                     // The URL changes with demo mode (?demo=1), and the web view reloads on a URL change.
                     WakeWebView(
@@ -80,6 +90,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     selectedIndex: _tab,
                     onDestinationSelected: (i) => setState(() => _tab = i),
                     destinations: const [
+                      NavigationDestination(icon: Icon(Icons.list_alt_outlined), selectedIcon: Icon(Icons.list_alt), label: 'Sessions'),
                       NavigationDestination(icon: Icon(Icons.sailing_outlined), selectedIcon: Icon(Icons.sailing), label: 'Replay'),
                       NavigationDestination(icon: Icon(Icons.cloud_sync_outlined), selectedIcon: Icon(Icons.cloud_sync), label: 'Sync'),
                       NavigationDestination(icon: Icon(Icons.settings_outlined), selectedIcon: Icon(Icons.settings), label: 'Setup'),
