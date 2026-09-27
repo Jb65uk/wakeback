@@ -120,6 +120,14 @@ Phone/watch GPX files are accepted too; they just lack heel and pitch.
 | GET / POST | `/api/wifi/scan`, `/api/wifi/connect` | find and join a WiFi network (on the Pi) |
 | GET | `/api/hello` | dock time, used by pucks to confirm they're talking to the right box |
 
+## On a NAS (or any Docker box)
+
+GitHub builds the server as a container on every change: `ghcr.io/jb65uk/wakeback-server:latest`.
+Use `docker-compose.yml` from this repo (on a Ugreen NAS: Docker → Project → Create, paste it). It
+listens on port 5090 and keeps everything in a `data` folder next to the compose file. Put it on the
+internet with a Cloudflare tunnel public hostname pointing at `http://<nas-ip>:5090`, and until
+accounts exist, protect it with Cloudflare Access (email code) so only people you allow get in.
+
 ## On the Pi
 
 Same server. Set the Pi up as a WiFi access point (`wakeback`, no internet needed), run `app.py` under systemd, and point Chromium in kiosk mode at `http://localhost:5000` for the projector. Pucks join the AP when they sit on the charging pad and POST to `/api/upload`.

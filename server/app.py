@@ -664,4 +664,4 @@ with lock:
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     print(f'WakeBack dock on http://localhost:{port}  (sessions in {SESSIONS})')
-    app.run(host='0.0.0.0', port=port, debug=True)
+    app.run(host='0.0.0.0', port=port, debug=os.environ.get('WAKEBACK_DEBUG', '1') == '1')   # dev; the container runs gunicorn
