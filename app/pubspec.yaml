@@ -1,7 +1,7 @@
 name: wakeback
 description: WakeBack phone/tablet app — the dock in your pocket, running the real WakeBack viewer.
 publish_to: 'none'
-version: 0.2.0+2
+version: 0.2.1+3
 
 environment:
   sdk: '>=3.4.0 <4.0.0'
@@ -24,6 +24,17 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: '>=4.0.0 <7.0.0'
+  flutter_launcher_icons: '>=0.13.1 <1.0.0'
+
+# App icon: a boat arrow at the head of its wake. Source: assets/icon/make_icon.py
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: assets/icon/icon.png
+  adaptive_icon_background: '#13293A'
+  adaptive_icon_foreground: assets/icon/icon_fg.png
+  adaptive_icon_monochrome: assets/icon/icon_mono.png
+  min_sdk_android: 21
 
 flutter:
   uses-material-design: true

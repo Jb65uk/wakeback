@@ -62,6 +62,7 @@ if ($changed) {
 # ---- 4. packages
 flutter pub get
 if ($LASTEXITCODE -ne 0) { throw 'flutter pub get failed' }
+dart run flutter_launcher_icons   # the WakeBack icon (assets\icon)
 
 if ($Test) { flutter test; exit $LASTEXITCODE }
 if ($Run) { flutter run; exit $LASTEXITCODE }

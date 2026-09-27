@@ -51,6 +51,9 @@ jobs:
 
       - run: flutter pub get
 
+      - name: App icon
+        run: dart run flutter_launcher_icons
+
       - name: Tests (phone dock behaves like app.py, sync)
         run: flutter test
 
