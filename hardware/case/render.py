@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon as MPoly
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
-CASE_COL = {'base': '#3d7ea6', 'lid': '#e0a800', 'bridge': '#d9534f', 'cradle': '#6c757d'}
+CASE_COL = {'base': '#3d7ea6', 'lid': '#e0a800', 'bridge': '#d9534f', 'cradle': '#6c757d', 'lid_mount': '#c99700', 'cradle_lid': '#6c757d'}
 IN_COL = {'battery': '#5b8c3a', 'Qi coil': '#b87333', 'Qi board': '#8e44ad', 'board': '#1f5c3a',
           'TP4056': '#2c3e50', 'XIAO': '#34495e', 'IMU': '#7f8c8d', 'GPS': '#c0392b'}
 
@@ -109,9 +109,26 @@ def cradle(parts, out, K):
     fig.savefig(os.path.join(out, 'case-cradle.png'), bbox_inches='tight', facecolor='white'); plt.close(fig)
 
 
+def thwart(parts, out, K):
+    """Under the thwart: the lid cradle screwed to the underside, the puck hanging from its lid-mount."""
+    fig = plt.figure(figsize=(8, 7), dpi=110)
+    ax = fig.add_subplot(111, projection='3d')
+    def hung(m): return m.rotate([180, 0, 0]).translate([0, 0, K['CR_FLOOR'] + K['Z_LID_TOP']])
+    # draw it the way it hangs: flip the whole assembly so the cradle is at the top
+    def flip(m): return m.rotate([180, 0, 0])
+    _draw3d(ax, flip(parts['cradle_lid']), CASE_COL['cradle'])
+    _draw3d(ax, flip(hung(parts['lid_mount'])), CASE_COL['lid_mount'])
+    _draw3d(ax, flip(hung(parts['base'])), CASE_COL['base'])
+    ax.set_xlim(-50, 50); ax.set_ylim(-50, 50); ax.set_zlim(-52, 8)
+    ax.set_box_aspect((1, 1, 0.6)); ax.view_init(20, -60); ax.set_axis_off()
+    ax.set_title('Under a thwart: lid cradle screwed to the underside, puck hangs by its lid-mount (lid up, coil down)', fontsize=9)
+    fig.savefig(os.path.join(out, 'case-thwart.png'), bbox_inches='tight', facecolor='white'); plt.close(fig)
+
+
 def all(parts, inside, out, K):
     exploded(parts, inside, out, K)
     section(parts, inside, out, K)
     plans(parts, inside, out, K)
     cradle(parts, out, K)
+    thwart(parts, out, K)
     print('  previews written')

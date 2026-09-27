@@ -6,6 +6,8 @@ Parts (all in out/):
   wakeback-lid.stl     screw-on lid, O-ring face seal (70 x 2 mm nitrile O-ring)
   wakeback-bridge.stl  GPS shelf, held by the same two screws that hold the board down
   wakeback-cradle.stl  deck mount: drop the puck in, twist clockwise, it locks with the arrow to the bow
+  wakeback-lid-mount.stl    second lid with bayonet lugs round its rim, for hanging the puck under a thwart
+  wakeback-cradle-lid.stl   the cradle for that lid: screws to the underside of the thwart, puck twists in upside down
 
 Frame: same as the carrier board. Origin = board centre, +Y = bow (the IMU arrow), Z up, base underside at z = 0.
 Run: python gen_case.py   (needs: pip install manifold3d trimesh numpy matplotlib)
@@ -54,9 +56,7 @@ LUGS = [(90.0, 16.0), (210.0, 10.0), (330.0, 10.0)]   # (angle, width deg). The 
 LUG_OUT, LUG_Z0, LUG_Z1 = 2.0, 2.2, 5.2
 TWIST = 20.0             # cradle: drop in 20 deg anticlockwise of locked, twist clockwise
 CR_FLOOR, CR_CLR = 3.0, 0.4
-CR_R_IN = R_BODY + CR_CLR
 CR_WALL = 2.8
-CR_R_OUT = R_BODY + LUG_OUT + CR_CLR + CR_WALL
 CR_H = CR_FLOOR + 9.0
 SCREW_PILOT, SCREW_CLEAR = 2.2, 2.8   # M2.5 self-tapping into plastic / clearance
 
@@ -164,30 +164,65 @@ for hx, hy in legs:
 bridge -= box(12, 12, 5, GPS['cx'], GPS['cy'], Z_BRIDGE - 1)
 bridge ^= cyl(R_NECK_IN - 0.6, 60, 0)
 
-# ================================================================== CRADLE (sits on the deck; puck floor rests on its floor ring)
-cr = ring(20.0, CR_R_OUT, CR_FLOOR) + ring(CR_R_IN, CR_R_OUT, CR_H - CR_FLOOR, CR_FLOOR)
-cr_lug_zlo = CR_FLOOR + LUG_Z0 - LUG_OUT - 0.4
-cr_lug_zhi = CR_FLOOR + LUG_Z1 + 0.5
+# ================================================================== LID-MOUNT (the same lid, plus bayonet lugs round the rim)
+# For hanging the puck under a thwart: this lid twists into its own cradle, so the base (and its charging coil)
+# hangs downwards. The lugs sit just under the top face, mirroring the base's lugs, with the chamfer on the
+# top-face side so it still prints top-down without support.
+# The lugs are placed mirrored (angle -a): turned upside down, the puck's port side becomes starboard, and the
+# mirrored lugs then land in the cradle's windows at the same angles as the base's lugs do in the deck cradle.
+lid_mount = lid
 for a, w in LUGS:
-    wa = w + 3.0
-    # vertical entry slot, TWIST deg anticlockwise of the locked position
-    cr -= sector(CR_R_IN - 1, CR_R_OUT + 1, cr_lug_zlo, CR_H + 1, a + TWIST - wa / 2, a + TWIST + wa / 2)
-    # horizontal window the lug slides along
-    cr -= sector(CR_R_IN - 1, CR_R_OUT + 1, cr_lug_zlo, cr_lug_zhi, a - wa / 2, a + TWIST + wa / 2)
-    # lock zone: window ceiling drops to 0.15 mm above the lug so it clamps the puck down when twisted home
-    cr += sector(CR_R_IN, CR_R_OUT, CR_FLOOR + LUG_Z1 + 0.15, cr_lug_zhi + 0.01, a - w / 2 - 1.5, a + w / 2 + 1.5)
-# countersunk deck screw holes (No.6 / M3.5) and a strap slot either side
-for a in (30, 150, 270):
-    x, y = 31.0 * math.cos(math.radians(a)), 31.0 * math.sin(math.radians(a))
-    cr -= cyl(2.0, CR_FLOOR + 1, -0.5, x, y, seg=32)
-    cr -= cyl(2.0, 2.0, CR_FLOOR - 2.0 + 0.01, x, y, r2=4.0, seg=32)
-for a in (0, 180):
-    cr -= box(4.0, 22.0, CR_FLOOR + 2, 31.0 * math.cos(math.radians(a)), 0, -1)
-# lanyard eye on the stern side
-eye = box(8, 6, 7, 0, -(CR_R_OUT + 1.5), 0) - M.cylinder(10, 1.8, 1.8, 32).rotate([0, 90, 0]).translate([-5, -(CR_R_OUT + 2.2), 3.5])
-cr += eye
-# bow arrow on the cradle rim
-cr -= CS([[(-3, 0), (3, 0), (0, 5)]]).extrude(1.0).translate([0, CR_R_IN + (CR_R_OUT - CR_R_IN) / 2 - 2.5, CR_H - 0.6])
+    za, zb = Z_LID_TOP - LUG_Z1, Z_LID_TOP - LUG_Z0
+    prof = CS([[(R_LID - 0.3, za), (R_LID + LUG_OUT, za), (R_LID + LUG_OUT, zb), (R_LID - 0.3, zb + LUG_OUT)]])
+    lid_mount += M.revolve(prof, SEG, w).rotate([0, 0, -a - w / 2])
+# a bow mark on the top face above the key lug (points to the bow once the puck is hung)
+lid_mount -= CS([[(-2.5, 0), (0, -4), (2.5, 0)]]).extrude(0.8).translate([0, -(R_LID - 6.5), Z_LID_TOP - 0.8])
+
+
+# ================================================================== CRADLE (a ring the puck drops into, lugs lock under windows)
+def make_cradle(r_body, arrow=True, eye=True):
+    """The puck's floor (or, upside down, the lid-mount's top face) rests on the floor ring; the three lugs go down
+    the entry slots, TWIST deg anticlockwise of locked, and are twisted clockwise under the lock zone."""
+    r_in = r_body + CR_CLR
+    r_out = r_body + LUG_OUT + CR_CLR + CR_WALL
+    cr = ring(20.0, r_out, CR_FLOOR) + ring(r_in, r_out, CR_H - CR_FLOOR, CR_FLOOR)
+    lug_zlo = CR_FLOOR + LUG_Z0 - LUG_OUT - 0.4
+    lug_zhi = CR_FLOOR + LUG_Z1 + 0.5
+    for a, w in LUGS:
+        wa = w + 3.0
+        # vertical entry slot, TWIST deg anticlockwise of the locked position
+        cr -= sector(r_in - 1, r_out + 1, lug_zlo, CR_H + 1, a + TWIST - wa / 2, a + TWIST + wa / 2)
+        # horizontal window the lug slides along
+        cr -= sector(r_in - 1, r_out + 1, lug_zlo, lug_zhi, a - wa / 2, a + TWIST + wa / 2)
+        # lock zone: window ceiling drops to 0.15 mm above the lug so it clamps the puck down when twisted home
+        cr += sector(r_in, r_out, CR_FLOOR + LUG_Z1 + 0.15, lug_zhi + 0.01, a - w / 2 - 1.5, a + w / 2 + 1.5)
+    # countersunk screw holes (No.6 / M3.5) and a strap slot either side
+    rs = r_in - 9.0
+    for a in (30, 150, 270):
+        x, y = rs * math.cos(math.radians(a)), rs * math.sin(math.radians(a))
+        cr -= cyl(2.0, CR_FLOOR + 1, -0.5, x, y, seg=32)
+        cr -= cyl(2.0, 2.0, CR_FLOOR - 2.0 + 0.01, x, y, r2=4.0, seg=32)
+    for a in (0, 180):
+        cr -= box(4.0, 22.0, CR_FLOOR + 2, rs * math.cos(math.radians(a)), 0, -1)
+    if eye:
+        # lanyard eye on the stern side
+        e = box(8, 6, 7, 0, -(r_out + 1.5), 0) - M.cylinder(10, 1.8, 1.8, 32).rotate([0, 90, 0]).translate([-5, -(r_out + 2.2), 3.5])
+        cr += e
+    if arrow:
+        # bow arrow on the cradle rim
+        cr -= CS([[(-3, 0), (3, 0), (0, 5)]]).extrude(1.0).translate([0, r_in + (r_out - r_in) / 2 - 2.5, CR_H - 0.6])
+    return cr
+
+
+cr = make_cradle(R_BODY)
+cr_lid = make_cradle(R_LID)
+CR_R_IN, CR_R_OUT = R_BODY + CR_CLR, R_BODY + LUG_OUT + CR_CLR + CR_WALL   # (kept for the renders)
+
+
+def hung(m):
+    """A part of the closed puck, upside down with the lid-mount's top face on the lid cradle's floor."""
+    return m.rotate([180, 0, 0]).translate([0, 0, CR_FLOOR + Z_LID_TOP])
+
 
 # ================================================================== the insides, for fit checks
 inside = {
@@ -200,7 +235,7 @@ inside = {
     'IMU': box(IMU['l'], IMU['w'], IMU['h'], IMU['cx'], IMU['cy'], Z_PCB_TOP),
     'GPS': box(GPS['s'], GPS['s'], GPS['h'], GPS['cx'], GPS['cy'], Z_GPS),
 }
-parts = {'base': base, 'lid': lid, 'bridge': bridge, 'cradle': cr}
+parts = {'base': base, 'lid': lid, 'bridge': bridge, 'cradle': cr, 'lid_mount': lid_mount, 'cradle_lid': cr_lid}
 
 
 def check():
@@ -236,6 +271,21 @@ def check():
     # the lid must unscrew along its thread (anticlockwise = open) without hitting the base
     for th in (60, 180, 360, 720):
         clash(lid.rotate([0, 0, th]).translate([0, 0, th / 360 * PITCH]), base, f'lid unscrewed {th} deg')
+        clash(lid_mount.rotate([0, 0, th]).translate([0, 0, th / 360 * PITCH]), base, f'lid-mount unscrewed {th} deg')
+    for n, p in inside.items():
+        clash(p, lid_mount, f'{n} / lid-mount')
+    clash(base, lid_mount, 'base / lid-mount')
+    # under the thwart: the closed puck hangs from the lid-mount in its own cradle
+    clash(hung(lid_mount), cr_lid, 'lid-mount / lid cradle (locked)')
+    clash(hung(base), cr_lid, 'base / lid cradle (locked)')
+    clash(hung(lid_mount.rotate([0, 0, -TWIST])), cr_lid, 'lid-mount / lid cradle (entry)')
+    for dz in (8, 4, 1):
+        clash(hung(lid_mount.rotate([0, 0, -TWIST])).translate([0, 0, dz]), cr_lid, f'lid cradle drop-in at +{dz} mm')
+    for t in (15, 10, 5):
+        clash(hung(lid_mount.rotate([0, 0, -t])), cr_lid, f'lid cradle twist at {t} deg')
+    # the plain lid must not lock into the lid cradle's lug windows by accident (it just sits there), and the
+    # lid-mount must still clear the deck cradle when the puck is used the normal way up
+    clash(lid_mount.translate([0, 0, CR_FLOOR]), cr, 'lid-mount / deck cradle (puck locked, right way up)')
     gap = Z_TOP - (Z_GPS + GPS['h'])
     print(f'  GPS top to lid: {gap:.2f} mm (use a 1 mm foam pad)')
     print(f'  board underside to battery top: {Z_PCB - (FLOOR + COIL["t"] + BATT["t"]):.2f} mm (TP4056 is {TP["h"]} mm)')
@@ -267,10 +317,12 @@ if __name__ == '__main__':
         'lid': export(lid, 'wakeback-lid.stl', flip=True),
         'bridge': export(bridge, 'wakeback-bridge.stl', flip=True),
         'cradle': export(cr, 'wakeback-cradle.stl'),
+        'lid_mount': export(lid_mount, 'wakeback-lid-mount.stl', flip=True),
+        'cradle_lid': export(cr_lid, 'wakeback-cradle-lid.stl'),
     }
     for n, p in parts.items():
         bb = p.bounding_box()
         print(f'  {n:7s} {bb[3]-bb[0]:.1f} x {bb[4]-bb[1]:.1f} x {bb[5]-bb[2]:.1f} mm, {p.volume()/1000:.1f} cm3 (~{p.volume()/1000*1.27:.0f} g PETG)')
     tot = (M.hull(base) + M.hull(lid)).volume()
     print(f'  closed puck displaces ~{tot/1000:.0f} cm3, so it floats with up to ~{tot/1000:.0f} g inside')
-    import sys; sys.path.insert(0, HERE); import render; render.all(parts, inside, OUT, dict(Z_PCB=Z_PCB, Z_TOP=Z_TOP, TWIST=TWIST, CR_FLOOR=CR_FLOOR))
+    import sys; sys.path.insert(0, HERE); import render; render.all(parts, inside, OUT, dict(Z_PCB=Z_PCB, Z_TOP=Z_TOP, TWIST=TWIST, CR_FLOOR=CR_FLOOR, Z_LID_TOP=Z_LID_TOP))

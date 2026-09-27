@@ -1,6 +1,6 @@
 # WakeBack puck case
 
-A round puck, 86 mm across and 37 mm tall, made to fit the carrier board and the parts on the shopping list. It has four printed parts:
+A round puck, 86 mm across and 37 mm tall, made to fit the carrier board and the parts on the shopping list. It has four printed parts (plus two optional ones for hanging it under a thwart, below):
 
 | File | What it is | Print it |
 |---|---|---|
@@ -8,6 +8,15 @@ A round puck, 86 mm across and 37 mm tall, made to fit the carrier board and the
 | `out/wakeback-lid.stl` | Screw-on lid with a thread and an O-ring seal | Top face down (the file is already that way up) |
 | `out/wakeback-bridge.stl` | GPS shelf. Sits over the heel sensor on two legs | Flat side down (already that way up) |
 | `out/wakeback-cradle.stl` | Deck mount. Drop the puck in and twist it clockwise to lock it | As it comes |
+
+Plus two optional parts for hanging the puck **under a thwart** instead of on the deck:
+
+| File | What it is | Print it |
+|---|---|---|
+| `out/wakeback-lid-mount.stl` | The same lid, with three bayonet lugs round its rim | Top face down (already that way up) |
+| `out/wakeback-cradle-lid.stl` | A wider cradle that fits that lid. Screws to the underside of the thwart; the puck twists in upside down | As it comes |
+
+![under the thwart](out/case-thwart.png)
 
 ![exploded](out/case-exploded.png)
 ![section](out/case-section.png)
@@ -51,6 +60,17 @@ It floats. It displaces about 196 cm³ and weighs about 130 g with everything in
 - Hold the puck with its side arrow about 20° anticlockwise of the cradle arrow. Push it down, then twist it clockwise until the arrows line up. It clamps down as it goes home.
 - Tie a thin lanyard through the eye on the cradle to the puck, in case of a big capsize.
 - To charge it, twist it out and lay it on the Qi pad, flat side down.
+
+## Under the thwart (lid-mount)
+
+- Print the lid-mount and the lid cradle; the base, shelf and O-ring are the same. Swap lids as you like: both screw onto the same base.
+- Screw (3 × No.6) or strap the lid cradle to the underside of the thwart, **arrow to the bow**. Screws go up into the wood; the heads sit inside the cradle.
+- Screw the lid-mount onto the puck so the small arrow on its top face lines up with the base's bow arrow as near as you can (it doesn't need to be exact, see below).
+- Offer the puck up lid-first, arrow about 20° anticlockwise of the cradle's arrow (as you look up at it), push, twist clockwise until the arrows meet. It hangs lid-up, charging coil down.
+- Tie the lanyard through the cradle's eye. Upside down, the lugs are what's holding it; the lanyard is the belt to those braces.
+- GPS: the antenna now faces up into the thwart. A wooden or GRP thwart is fine (plywood, a foam-cored GRP thwart, a Solo's mahogany one); a **carbon** thwart or a metal plate will block it — go on deck instead. Expect a slightly slower first fix and the odd extra metre of scatter.
+- Heel and pitch: the puck is upside down and turned to whatever angle the lid tightened at. The firmware detects "upside down" from gravity at rest and learns the twist from the difference between its compass heading and the GPS course when you're sailing straight — nothing to set. Until that's in, the phone app's puck setup will have a "mounted: deck / under thwart" choice.
+- The lid-mount also works on deck in the normal cradle (its lugs clear the deck cradle), so one puck can carry the lid-mount all the time and go either way.
 
 ## Things to know
 
