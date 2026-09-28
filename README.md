@@ -128,7 +128,10 @@ listens on port 5090 and keeps everything in a `data` folder next to the compose
 internet with a Cloudflare tunnel public hostname pointing at `http://<nas-ip>:5090`. The compose file also
 runs Watchtower, which checks GitHub every 30 minutes and swaps in a newer server image by itself, so the
 NAS keeps up with the app without you touching it (put Cloudflare Access in front of `/admin` only, not the
-whole site, or the app can't sign in).
+whole site, or the app can't sign in), and a nightly backup container that writes `backups/wakeback-<date>.tar.gz`
+(last 14 kept) — point the NAS's own backup or cloud sync at that folder so a copy leaves the building.
+Password guessing is braked: 8 wrong tries on an email or 20 from one address in 10 minutes and that
+login is refused for a while (a 429; the app says "Too many tries").
 
 Set **`WAKEBACK_ADMIN`** to your email and accounts switch on:
 

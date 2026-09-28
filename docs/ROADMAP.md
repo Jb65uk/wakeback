@@ -100,5 +100,9 @@ club pucks ─► dock Pi at the club ──────────────
    Also: `app/lib/dock/badges.dart` (bests + 17 badges), `app/lib/dock/tiles.dart` (tile cache served at
    `/tiles/<layer>/z/x/y` by the phone's dock; the in-app viewer uses it), `app/lib/share_card.dart`.
 
+Done 28 Sep, security: login/sign-up rate limits (accounts.py), Watchtower auto-updates the server image,
+nightly backups to ./backups on the NAS (still to do: a copy off the NAS — the NAS's own backup app to the
+PC or cloud). Still open: the update button needs the repo public (or a separate public releases repo).
+
 Also still on you: add the GitHub signing secrets; scope Cloudflare Access to `/admin` only so the app can
 create accounts.

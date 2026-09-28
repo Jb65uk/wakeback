@@ -29,3 +29,28 @@ services:
       WATCHTOWER_CLEANUP: "true"           # delete the old image after an update
       WATCHTOWER_POLL_INTERVAL: "1800"
       TZ: Europe/London
+
+  # Nightly backup of everything (tracks, venues, accounts) into ./backups next to this file, one
+  # wakeback-YYYY-MM-DD.tar.gz a day, the last 14 kept. Point the NAS's own backup / cloud sync at that
+  # folder so a copy leaves the building.
+  backup:
+    image: alpine:3
+    container_name: wakeback-backup
+    restart: unless-stopped
+    volumes:
+      - ./data:/data:ro
+      - ./backups:/backups
+    environment:
+      TZ: Europe/London
+    command: >
+      sh -c 'apk add --no-cache sqlite tar >/dev/null;
+      while true; do
+        d=$$(date +%F); tmp=/tmp/wb-$$d; rm -rf $$tmp; mkdir -p $$tmp;
+        cp -r /data/. $$tmp/ 2>/dev/null;
+        [ -f /data/wakeback.db ] && sqlite3 /data/wakeback.db ".backup $$tmp/wakeback.db";
+        rm -f $$tmp/wakeback.db-wal $$tmp/wakeback.db-shm;
+        tar -czf /backups/wakeback-$$d.tar.gz -C $$tmp . && echo "backup wakeback-$$d.tar.gz";
+        rm -rf $$tmp;
+        ls -1t /backups/wakeback-*.tar.gz 2>/dev/null | tail -n +15 | xargs -r rm -f;
+        sleep 86400;
+      done'

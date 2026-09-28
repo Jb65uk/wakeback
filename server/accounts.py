@@ -187,6 +187,67 @@ def _reply_with_token(user, token, want_cookie):
     return resp
 
 
+# ---------------------------------------------------------------- brute-force brake
+# Password guessing is slowed two ways: per address (whoever is hammering) and per email (whoever is being
+# hammered). Failed attempts count; a success clears the email's count. In memory: gunicorn runs one worker.
+_attempts = {}            # key -> [t_ms, ...] of failures in the window
+_attempts_lock = threading.Lock()
+RATE_WINDOW_S, RATE_PER_IP, RATE_PER_EMAIL = 600, 20, 8
+
+
+def client_ip():
+    return (request.headers.get('CF-Connecting-IP') or request.headers.get('X-Forwarded-For', '').split(',')[0].strip()
+            or request.remote_addr or '?')
+
+
+def _too_many(keys):
+    """(True, seconds to wait) if any key is over its limit."""
+    now = time.time()
+    with _attempts_lock:
+        for key, limit in keys:
+            hits = [t for t in _attempts.get(key, []) if now - t < RATE_WINDOW_S]
+            _attempts[key] = hits
+            if len(hits) >= limit:
+                return True, int(RATE_WINDOW_S - (now - hits[0])) + 1
+        # tidy the odd stale key so this never grows without bound
+        if len(_attempts) > 5000:
+            for k in [k for k, v in _attempts.items() if not v or now - v[-1] > RATE_WINDOW_S]: _attempts.pop(k, None)
+    return False, 0
+
+
+def _failed(keys):
+    now = time.time()
+    with _attempts_lock:
+        for key, _ in keys:
+            _attempts.setdefault(key, []).append(now)
+
+
+def _cleared(email):
+    with _attempts_lock:
+        _attempts.pop('e:' + email, None)
+
+
+def _rate_keys(email):
+    return [('ip:' + client_ip(), RATE_PER_IP), ('e:' + email, RATE_PER_EMAIL)]
+
+
+def _check_password_limited(email, pw):
+    """The user row if the password is right; a (json, status) reply otherwise — including 'slow down'."""
+    keys = _rate_keys(email)
+    over, wait = _too_many(keys)
+    if over:
+        audit('login_blocked', email, {'ip': client_ip()})
+        return None, (jsonify(error=f'Too many tries. Wait {max(1, wait // 60)} minute{"s" if wait > 120 else ""} and try again'), 429)
+    with connect() as c:
+        r = c.execute('SELECT * FROM users WHERE email=?', (email,)).fetchone()
+    if not r or not check_password_hash(r['pw'], pw):
+        _failed(keys)
+        time.sleep(0.5)
+        return None, (jsonify(error='Wrong email or password'), 401)
+    _cleared(email)
+    return dict(r), None
+
+
 # ---------------------------------------------------------------- sign up / in / out
 
 @bp.post('/api/auth/signup')
@@ -194,6 +255,9 @@ def signup():
     b = request.get_json(silent=True) or {}
     email, name, pw = str(b.get('email', '')).strip().lower(), str(b.get('name', '')).strip()[:40], str(b.get('password', ''))
     if not EMAIL_RE.match(email): return jsonify(error='That doesn\'t look like an email address'), 400
+    over, wait = _too_many([('signup:' + client_ip(), 5)])     # 5 sign-ups per address per 10 minutes
+    if over: return jsonify(error='Too many sign-ups from here. Try again later'), 429
+    _failed([('signup:' + client_ip(), 5)])
     if not name: return jsonify(error='What should we call you?'), 400
     if len(pw) < 8: return jsonify(error='Password needs at least 8 characters'), 400
     with connect() as c:
@@ -216,12 +280,8 @@ def signup():
 def login():
     b = request.get_json(silent=True) or {}
     email, pw = str(b.get('email', '')).strip().lower(), str(b.get('password', ''))
-    with connect() as c:
-        r = c.execute('SELECT * FROM users WHERE email=?', (email,)).fetchone()
-    if not r or not check_password_hash(r['pw'], pw):
-        time.sleep(0.5)
-        return jsonify(error='Wrong email or password'), 401
-    user = dict(r)
+    user, bad = _check_password_limited(email, pw)
+    if bad: return bad
     if user['status'] == 'pending': return jsonify(error='Your account hasn\'t been approved yet', status='pending'), 403
     if user['status'] == 'disabled': return jsonify(error='This account has been disabled', status='disabled'), 403
     audit('login', email, {'device': (b.get('device') or '')[:80]}, user=user)
@@ -257,11 +317,9 @@ def me():
 def status():
     """For the app's 'waiting for approval' screen: is this login active yet?"""
     b = request.get_json(silent=True) or {}
-    with connect() as c:
-        r = c.execute('SELECT * FROM users WHERE email=?', (str(b.get('email', '')).strip().lower(),)).fetchone()
-    if not r or not check_password_hash(r['pw'], str(b.get('password', ''))): return jsonify(error='Wrong email or password'), 401
-    if r['status'] != 'active': return jsonify(status=r['status'])
-    user = dict(r)
+    user, bad = _check_password_limited(str(b.get('email', '')).strip().lower(), str(b.get('password', '')))
+    if bad: return bad
+    if user['status'] != 'active': return jsonify(status=user['status'])
     return _reply_with_token(user, _make_token(user['id'], b.get('device')), bool(b.get('cookie')))
 
 
