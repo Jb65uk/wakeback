@@ -19,7 +19,7 @@ if 'WakeBack release key' in s:
 
 if path == kts:
     block = '''    // WakeBack release key (android/key.properties) — the same key for every build
-    val wbKeyProps = java.util.Properties().apply {
+    val wbKeyProps = Properties().apply {
         val f = rootProject.file("key.properties")
         if (f.exists()) f.inputStream().use { load(it) }
     }
@@ -62,5 +62,8 @@ if not m or not old.search(s):
     sys.exit(f'Could not find buildTypes / the debug signing line in {path} — the Flutter template has changed; tell Claude.')
 s = s[:m.start()] + block + s[m.start():]
 s = old.sub(new, s, count=1)
+if path == kts and 'import java.util.Properties' not in s:
+    # inside android { } the name `java` is Gradle's java extension, not the package, so import the class up top
+    s = 'import java.util.Properties\n\n' + s
 open(path, 'w').write(s)
 print('release signing set up in', os.path.basename(path))
