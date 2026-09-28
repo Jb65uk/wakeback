@@ -125,7 +125,10 @@ Phone/watch GPX files are accepted too; they just lack heel and pitch.
 GitHub builds the server as a container on every change: `ghcr.io/jb65uk/wakeback-server:latest`.
 Use `docker-compose.yml` from this repo (on a Ugreen NAS: Docker → Project → Create, paste it). It
 listens on port 5090 and keeps everything in a `data` folder next to the compose file. Put it on the
-internet with a Cloudflare tunnel public hostname pointing at `http://<nas-ip>:5090`.
+internet with a Cloudflare tunnel public hostname pointing at `http://<nas-ip>:5090`. The compose file also
+runs Watchtower, which checks GitHub every 30 minutes and swaps in a newer server image by itself, so the
+NAS keeps up with the app without you touching it (put Cloudflare Access in front of `/admin` only, not the
+whole site, or the app can't sign in).
 
 Set **`WAKEBACK_ADMIN`** to your email and accounts switch on:
 
