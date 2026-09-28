@@ -87,12 +87,18 @@ jobs:
           python3 - <<'PY'
           import os, re
           lines = open('ci.log', errors='ignore').read().splitlines() if os.path.exists('ci.log') else ['no log captured']
-          pick = re.compile(r'error|Error|FAILED|failed|Expected:|Actual:|Which:|Exception|\.dart:\d+|\[E\]|Some tests')
+          pick = re.compile(r'error|Error|FAILED|failed|Expected:|Actual:|Which:|Exception|\.dart:\d+|\[E\]|Some tests|^e: |\.kts:\d+|^\s*\^')
           keep = [l.strip()[:300] for l in lines if pick.search(l)] or lines[-40:]
           keep = keep[-80:]
           esc = lambda t: t.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
           for i in range(0, len(keep), 20):
               print('::error title=WakeBack build (part %d)::%s' % (i // 20 + 1, esc('\n'.join(keep[i:i + 20]))))
+          # the patched Gradle file, so a signing-setup problem can be read off the run
+          for g in ('android/app/build.gradle.kts', 'android/app/build.gradle'):
+              if os.path.exists(g):
+                  src = open(g, errors='ignore').read().splitlines()
+                  for i in range(0, len(src), 40):
+                      print('::warning title=%s (lines %d+)::%s' % (g, i + 1, esc('\n'.join('%3d %s' % (i + j + 1, l) for j, l in enumerate(src[i:i + 40])))))
           PY
 
       - uses: actions/upload-artifact@v4
