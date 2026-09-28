@@ -14,6 +14,7 @@ import 'demo/demo_pucks.dart';
 import 'dock/pocket_dock.dart';
 import 'dock/store.dart';
 import 'dock/tiles.dart';
+import 'updates.dart';
 
 /// Your WakeBack server. Change in Setup → Advanced if you run your own.
 const String kDefaultServer = 'https://wakeback.bridgesolutions.uk';
@@ -180,6 +181,37 @@ class AppState extends ChangeNotifier {
 
   Future<void> setRecordCard(List<Map<String, dynamic>> v) async {
     await _p.setString('recordCard', jsonEncode(v));
+    notifyListeners();
+  }
+
+  // ------------------------------------------------------------------ app updates
+
+  /// A newer build on GitHub than the one running, from the last check (kept until installed).
+  AppUpdate? get pendingUpdate {
+    try {
+      return AppUpdate.fromJson(jsonDecode(_p.getString('pendingUpdate') ?? 'null'));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Ask GitHub, at most every 6 hours unless [force]. Returns the update, null if up to date; throws if offline.
+  Future<AppUpdate?> checkForUpdate({bool force = false}) async {
+    final last = _p.getInt('lastUpdateCheck') ?? 0;
+    if (!force && DateTime.now().millisecondsSinceEpoch - last < 6 * 3600 * 1000) return pendingUpdate;
+    final u = await Updates.instance.check();
+    await _p.setInt('lastUpdateCheck', DateTime.now().millisecondsSinceEpoch);
+    if (u == null) {
+      await _p.remove('pendingUpdate');
+    } else {
+      await _p.setString('pendingUpdate', jsonEncode(u.toJson()));
+    }
+    notifyListeners();
+    return u;
+  }
+
+  Future<void> dismissUpdate() async {
+    await _p.remove('pendingUpdate');
     notifyListeners();
   }
 

@@ -19,6 +19,7 @@ app/
   lib/dock/badges.dart        personal bests ("new record") and badges, from your tracks
   lib/dock/tiles.dart         map tile cache: the dock serves /tiles/... so Replay works offline
   lib/share_card.dart         the picture of a session for WhatsApp
+  lib/updates.dart            checks GitHub releases, downloads + installs a newer build
   lib/sync/server_sync.dart   two-way sync with your server (existing endpoints only)
   lib/demo/                   fake_pucks.py + gen_fake_data.py, ported
   lib/screens/                Sessions (list, Stats, League), Replay (the viewer), Sync, Setup

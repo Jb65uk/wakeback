@@ -65,10 +65,12 @@ club pucks ─► dock Pi at the club ──────────────
    "Puck 3 is on 1.2, 1.4 available — Update" on the Dock page and pushes it while the puck is on the pad /
    the hotspot (ESP32 OTA). Rule: keep the previous image and roll back if the new one doesn't check in
    within a minute — one bad build must not brick the club's pucks on a Saturday.
-6. **App update button** — TO DO
-   The app checks the GitHub release feed, shows "Update available", downloads the APK and hands it to
-   Android's installer. Needs the `ANDROID_KEYSTORE_*` signing secrets on GitHub first (a build signed with a
-   throwaway key won't install over the last one — what stuck on the tablet).
+6. **App update button** ✅ (28 Sep)
+   Every build is signed with the permanent key (GitHub secrets) and its build number is the run number, so
+   the release tag `app-N` and the installed build match. The app checks the public releases feed (every 6 h,
+   or Setup → About → Check), shows an "Update available" card with the release notes (the commit message)
+   on Sessions and in Setup, downloads the APK and hands it to Android's installer (`app/lib/updates.dart`).
+   One-off: phones with a throwaway-key build must uninstall once.
 7. **2FA (TOTP) on accounts** — TO DO
    Authenticator-app codes, no SMS/email service; optional for sailors, on for the admin; admin can turn it
    off for someone who's lost their phone (from /admin, like a password reset).

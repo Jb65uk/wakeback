@@ -12,6 +12,7 @@ import '../dock/store.dart';
 import '../widgets/common.dart';
 import 'friends_section.dart';
 import 'offline_maps.dart';
+import 'update_card.dart';
 import 'welcome_screen.dart';
 
 class SetupScreen extends StatefulWidget {
@@ -250,8 +251,10 @@ class _SetupScreenState extends State<SetupScreen> {
               ]),
             ),
           ],
-          const SizedBox(height: 16),
-          const Center(child: Hint('WakeBack app 0.5')),
+
+          // ------------------------------------------------ about / updates
+          const SectionLabel('About'),
+          const AboutCard(),
         ]),
       ),
     );

@@ -43,7 +43,7 @@ jobs:
           p = 'android/app/src/main/AndroidManifest.xml'
           s = open(p).read()
           if 'android.permission.INTERNET' not in s:
-              s = re.sub(r'(<manifest[^>]*>)', r'\1\n    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />', s, count=1)
+              s = re.sub(r'(<manifest[^>]*>)', r'\1\n    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />\n    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />', s, count=1)
           if 'usesCleartextTraffic' not in s:
               s = s.replace('<application', '<application android:usesCleartextTraffic="true"', 1)
           s = s.replace('android:label="wakeback"', 'android:label="WakeBack"')
@@ -76,7 +76,8 @@ jobs:
 
       - name: Build APK
         run: |
-          flutter build apk --release 2>&1 | tee -a ci.log
+          # build number = this run's number = the release tag (app-N), so the app can tell if a release is newer
+          flutter build apk --release --build-number=${{ github.run_number }} 2>&1 | tee -a ci.log
           cp build/app/outputs/flutter-apk/app-release.apk WakeBack.apk
 
       # If anything above failed, put the important lines on the run as error notes, which can be read
@@ -106,12 +107,26 @@ jobs:
           name: WakeBack-apk
           path: app/WakeBack.apk
 
+      - name: Release notes (the app shows these in its "Update available" card)
+        id: notes
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        run: |
+          ver=$(grep -E '^version:' pubspec.yaml | sed -E 's/version:[[:space:]]*([^+]+).*/\1/')
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          {
+            echo 'body<<EOF'
+            git -C .. log -1 --pretty=%B | sed -E '/^(Co-Authored-By|Claude-Session):/d' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}'
+            echo
+            echo 'Open this page on your phone, tap WakeBack.apk, then open the download and allow "install unknown apps". Once installed, the app updates itself from here.'
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Publish as a release (fixed download link)
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: app-${{ github.run_number }}
-          name: WakeBack app build ${{ github.run_number }}
-          body: Open this page on your phone, tap WakeBack.apk, then open the download and allow "install unknown apps".
+          name: WakeBack ${{ steps.notes.outputs.version }} (build ${{ github.run_number }})
+          body: ${{ steps.notes.outputs.body }}
           files: app/WakeBack.apk
           make_latest: true

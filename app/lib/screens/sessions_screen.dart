@@ -10,6 +10,7 @@ import '../dock/stats.dart';
 import '../share_card.dart';
 import '../sync/server_sync.dart';
 import '../widgets/common.dart';
+import 'update_card.dart';
 
 class SessionsScreen extends StatefulWidget {
   /// Open a session in the Replay tab.
@@ -167,6 +168,10 @@ class _SessionListState extends State<_SessionList> {
     } catch (e) {
       if (mounted) setState(() => _err = '$e');
     }
+    // a newer build on GitHub? (at most every 6 h; silent if offline)
+    try {
+      await app.checkForUpdate();
+    } catch (_) {}
   }
 
   /// Personal bests: any of my tracks not looked at before that beats everything earlier.
@@ -255,14 +260,16 @@ class _SessionListState extends State<_SessionList> {
       );
     }
     final records = app.demoMode ? const <Map<String, dynamic>>[] : app.recordCard;
-    final head = records.isEmpty ? 0 : 1;
+    final update = app.pendingUpdate;
+    final head = (records.isEmpty ? 0 : 1) + (update == null ? 0 : 1);
     return RefreshIndicator(
       onRefresh: _load,
       child: ListView.builder(
         padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
         itemCount: list.length + 1 + head,
         itemBuilder: (context, idx) {
-          if (head == 1 && idx == 0) return _RecordCard(records, onOpen: widget.onOpen, onDismiss: () => app.setRecordCard([]));
+          if (update != null && idx == 0) return UpdateCard(update);
+          if (records.isNotEmpty && idx == head - 1) return _RecordCard(records, onOpen: widget.onOpen, onDismiss: () => app.setRecordCard([]));
           final i = idx - head;
           if (i == list.length) {
             return Padding(
