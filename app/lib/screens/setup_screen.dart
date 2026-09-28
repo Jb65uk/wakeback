@@ -11,6 +11,7 @@ import '../dock/pocket_dock.dart';
 import '../dock/store.dart';
 import '../widgets/common.dart';
 import 'friends_section.dart';
+import 'offline_maps.dart';
 import 'welcome_screen.dart';
 
 class SetupScreen extends StatefulWidget {
@@ -183,6 +184,10 @@ class _SetupScreenState extends State<SetupScreen> {
               onTap: _import,
             ),
           ),
+
+          // ------------------------------------------------ maps for the lake
+          const SectionLabel('Maps'),
+          const OfflineMapsCard(),
 
           // ------------------------------------------------ demo (only in demo mode)
           if (app.demoMode) const SectionLabel('Demo'),

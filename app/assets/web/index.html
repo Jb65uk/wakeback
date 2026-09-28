@@ -423,9 +423,11 @@ try { const w = localStorage.getItem('wakeback-wind'); if (w !== null && w !== '
 // ---------- map ----------
 const map = L.map('map', { zoomControl: true }).setView([53.6503, -3.0102], 15);
 const renderer = L.canvas({ padding: 0.5 });
-const sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Imagery © Esri' });
-const osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap contributors' });
-const seamarks = L.tileLayer('https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '© OpenSeaMap' });
+// inside the phone app the tiles come through the phone's own dock, which keeps a copy (offline maps, Setup)
+const inApp = !!window.WakeBackApp && /^(127\.0\.0\.1|localhost)$/.test(location.hostname);
+const sat = L.tileLayer(inApp ? '/tiles/sat/{z}/{x}/{y}.jpg' : 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Imagery © Esri' });
+const osm = L.tileLayer(inApp ? '/tiles/osm/{z}/{x}/{y}.png' : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap contributors' });
+const seamarks = L.tileLayer(inApp ? '/tiles/sea/{z}/{x}/{y}.png' : 'https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '© OpenSeaMap' });
 sat.addTo(map);
 
 // ---------- helpers ----------

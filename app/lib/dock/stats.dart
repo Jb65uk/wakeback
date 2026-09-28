@@ -6,6 +6,7 @@ import 'dart:io';
 import 'dart:math' as math;
 
 const double kKn = 1.943844;
+const int kCacheV = 2; // bump when computeStats learns something new, so old stats.json files are redone
 
 double _havM(double la1, double lo1, double la2, double lo2) {
   double r(double d) => d * (math.pi / 180); // exactly math.radians()
@@ -19,9 +20,37 @@ double roundTo(double x, int n) => double.parse(x.toStringAsFixed(n));
 class _Pt {
   final int t;
   final double lat, lon;
-  final double? sog;
-  const _Pt(this.t, this.lat, this.lon, this.sog);
+  final double? sog, hdg, heel;
+  const _Pt(this.t, this.lat, this.lon, this.sog, [this.hdg, this.heel]);
 }
+
+double _bearing(double la1, double lo1, double la2, double lo2) {
+  double r(double d) => d * (math.pi / 180);
+  final y = math.sin(r(lo2 - lo1)) * math.cos(r(la2));
+  final x = math.cos(r(la1)) * math.sin(r(la2)) - math.sin(r(la1)) * math.cos(r(la2)) * math.cos(r(lo2 - lo1));
+  return (math.atan2(y, x) * (180 / math.pi) + 360) % 360;
+}
+
+/// (dir_from_deg, speed_kn) from the day's hourly weather (meta.weather), nearest hour, or null.
+(double, double)? windAt(Map? weather, int tMs) {
+  final pts = weather?['pts'];
+  if (pts is! List || pts.isEmpty) return null;
+  List? best;
+  var bd = 1 << 62;
+  for (final p in pts) {
+    if (p is! List || p.length < 3) continue;
+    final d = ((p[0] as num).toInt() - tMs).abs();
+    if (d < bd) {
+      bd = d;
+      best = p;
+    }
+  }
+  if (best == null || bd > 2 * 3600 * 1000) return null;
+  return ((best[1] as num).toDouble(), (best[2] as num).toDouble());
+}
+
+/// The positions of a track, for drawing it: [[lat, lon], ...] in time order.
+List<List<double>> trackPositions(String text, String name) => [for (final p in _points(text, name)) [p.lat, p.lon]];
 
 int? _parseTime(String s) {
   try {
@@ -52,7 +81,9 @@ List<_Pt> _points(String text, String name) {
     if (lines.isEmpty) return [];
     final cols = lines[0].split(',').map((c) => c.trim().toLowerCase()).toList();
     final it = cols.indexOf('t_ms'), ila = cols.indexOf('lat'), ilo = cols.indexOf('lon'), isog = cols.indexOf('sog_kn');
+    final ihdg = cols.indexOf('hdg'), iheel = cols.indexOf('heel');
     if (it < 0 || ila < 0 || ilo < 0) return [];
+    double? opt(List<String> c, int i) => i >= 0 && i < c.length && c[i].isNotEmpty ? double.tryParse(c[i]) : null;
     for (final ln in lines.skip(1)) {
       final c = ln.split(',');
       try {
@@ -61,7 +92,7 @@ List<_Pt> _points(String text, String name) {
         if (t < 1e12) t *= 1000;
         final sog = isog >= 0 && isog < c.length && c[isog].isNotEmpty ? double.parse(c[isog]) : null;
         if (!(lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180)) continue;
-        pts.add(_Pt(t.toInt(), lat, lon, sog));
+        pts.add(_Pt(t.toInt(), lat, lon, sog, opt(c, ihdg), opt(c, iheel)));
       } catch (_) {
         continue;
       }
@@ -71,8 +102,9 @@ List<_Pt> _points(String text, String name) {
   return pts;
 }
 
-/// Stats for one track's text, or null if it has no usable positions.
-Map<String, dynamic>? computeStats(String text, String name) {
+/// Stats for one track's text, or null if it has no usable positions. With the day's weather (meta.weather):
+/// upwind/downwind averages, best VMG and the wind strength it was sailed in.
+Map<String, dynamic>? computeStats(String text, String name, [Map? weather]) {
   final pts = _points(text, name);
   if (pts.length < 2) return null;
   final n = pts.length;
@@ -119,13 +151,76 @@ Map<String, dynamic>? computeStats(String text, String name) {
     if (sog[i] > 1.5) movingMs += dt;
   }
   final vals = List<double>.of(sog)..sort();
-  return {
+  final out = <String, dynamic>{
     'points': n, 'start_ms': pts.first.t, 'end_ms': pts.last.t,
     'dist_nm': roundTo(dist / 1852, 3),
     'max_kn': roundTo(vals[math.min(vals.length - 1, (vals.length * 0.995).toInt())], 2),
     'avg_kn': sCnt > 0 ? roundTo(sSum / sCnt, 2) : 0.0,
     'moving_s': movingMs ~/ 1000,
   };
+  // heel (pucks only): 99th percentile of |heel|, and capsizes = |heel| > 80 deg for 10 s or more
+  final heels = [for (final p in pts) if (p.heel != null) p.heel!.abs()]..sort();
+  if (heels.isNotEmpty) {
+    out['max_heel'] = roundTo(heels[math.min(heels.length - 1, (heels.length * 0.99).toInt())], 1);
+    var caps = 0;
+    int? runStart;
+    var over = false;
+    for (final p in pts) {
+      if (p.heel != null && p.heel!.abs() > 80) {
+        if (runStart == null) {
+          runStart = p.t;
+          over = false;
+        }
+        if (!over && p.t - runStart >= 10000) {
+          caps++;
+          over = true;
+        }
+      } else {
+        runStart = null;
+      }
+    }
+    out['capsizes'] = caps;
+  }
+  // the wind: heading vs the hour's wind direction while moving
+  if (weather != null) {
+    final up = <double>[], down = <double>[], wkn = <double>[];
+    final vmg = <(int, double)>[];
+    for (var i = 1; i < n; i++) {
+      if (sog[i] <= 1) continue;
+      final w = windAt(weather, pts[i].t);
+      if (w == null) continue;
+      var hdg = pts[i].hdg;
+      if (hdg == null) {
+        if (pts[i].t - pts[i - 1].t <= 0) continue;
+        hdg = _bearing(pts[i - 1].lat, pts[i - 1].lon, pts[i].lat, pts[i].lon);
+      }
+      final ang = ((hdg - w.$1 + 180) % 360 - 180).abs(); // 0 = straight into the wind
+      wkn.add(w.$2);
+      if (ang < 60) {
+        up.add(sog[i]);
+        vmg.add((pts[i].t, sog[i] * math.cos(ang * (math.pi / 180))));
+      } else if (ang > 120) {
+        down.add(sog[i]);
+      }
+    }
+    if (wkn.isNotEmpty) {
+      out['wind_kn'] = roundTo(wkn.reduce((a, b) => a + b) / wkn.length, 1);
+      if (up.isNotEmpty) out['up_kn'] = roundTo(up.reduce((a, b) => a + b) / up.length, 2);
+      if (down.isNotEmpty) out['down_kn'] = roundTo(down.reduce((a, b) => a + b) / down.length, 2);
+      var best = 0.0, acc = 0.0;
+      var a = 0;
+      for (var b = 0; b < vmg.length; b++) {
+        acc += vmg[b].$2;
+        while (vmg[b].$1 - vmg[a].$1 > 30000) {
+          acc -= vmg[a].$2;
+          a++;
+        }
+        if (vmg[b].$1 - vmg[a].$1 >= 20000) best = math.max(best, acc / (b - a + 1));
+      }
+      if (best > 0) out['vmg_kn'] = roundTo(best, 2);
+    }
+  }
+  return out;
 }
 
 /// {file: stats} for a session folder, cached in stats.json (redone when a file's size changes).
@@ -136,6 +231,12 @@ Future<Map<String, dynamic>> sessionStats(Directory folder, List<String> files) 
     final j = jsonDecode(await cf.readAsString());
     if (j is Map) cache = j.cast<String, dynamic>();
   } catch (_) {}
+  Map? weather;
+  try {
+    final m = jsonDecode(await File('${folder.path}/meta.json').readAsString());
+    if (m is Map && m['weather'] is Map) weather = m['weather'] as Map;
+  } catch (_) {}
+  final wxKey = weather == null ? 0 : (weather['got'] ?? 1);
   final out = <String, dynamic>{};
   var changed = false;
   for (final fn in files) {
@@ -147,17 +248,17 @@ Future<Map<String, dynamic>> sessionStats(Directory folder, List<String> files) 
       continue;
     }
     final c = cache[fn];
-    if (c is Map && c['_size'] == size) {
+    if (c is Map && c['_size'] == size && (c['_wx'] ?? 0) == wxKey && c['_v'] == kCacheV) {
       if (c['_none'] != true) out[fn] = {for (final e in c.entries) if (!e.key.toString().startsWith('_')) e.key.toString(): e.value};
       continue;
     }
     Map<String, dynamic>? st;
     try {
-      st = computeStats(await f.readAsString(encoding: latin1), fn);
+      st = computeStats(await f.readAsString(encoding: latin1), fn, weather);
     } catch (_) {
       st = null;
     }
-    cache[fn] = {...?st, '_size': size, '_none': st == null};
+    cache[fn] = {...?st, '_size': size, '_wx': wxKey, '_v': kCacheV, '_none': st == null};
     changed = true;
     if (st != null) out[fn] = st;
   }
@@ -198,6 +299,9 @@ class StatRow {
   int get startMs => (stats['start_ms'] as num).toInt();
   Map<String, dynamic> get ref => {'session': session, 'file': file, 'date': date, 'venue_name': venueName};
 }
+
+const windBins = ['0-5', '5-10', '10-15', '15-20', '20+'];
+String windBin(double kn) => kn < 5 ? '0-5' : kn < 10 ? '5-10' : kn < 15 ? '10-15' : kn < 20 ? '15-20' : '20+';
 
 /// Totals for one person's rows (stats.py summarise).
 Map<String, dynamic> summarise(List<StatRow> rows) {
@@ -245,7 +349,58 @@ Map<String, dynamic> summarise(List<StatRow> rows) {
       .toList()
     ..sort((a, b) => (a['month'] as String).compareTo(b['month'] as String));
   final dates = rows.map((r) => r.date).toList()..sort();
+  // the wind: sessions grouped by strength, and upwind / downwind / VMG bests
+  final bins = <String, Map<String, dynamic>>{};
+  for (final r in rows) {
+    final st = r.stats;
+    if (!st.containsKey('wind_kn')) continue;
+    final k = windBin((st['wind_kn'] as num).toDouble());
+    final b = bins.putIfAbsent(k, () => {'bin': k, 'sessions': <String>{}, 'w': 0.0, 'moving_s': 0, 'best_avg_kn': 0.0, 'max_kn': 0.0});
+    (b['sessions'] as Set<String>).add(r.session);
+    b['w'] = (b['w'] as double) + r.avgKn * r.movingS;
+    b['moving_s'] = (b['moving_s'] as int) + r.movingS;
+    b['best_avg_kn'] = math.max(b['best_avg_kn'] as double, r.avgKn);
+    b['max_kn'] = math.max(b['max_kn'] as double, r.maxKn);
+  }
+  final wind = (bins.values.toList()..sort((a, b) => windBins.indexOf(a['bin'] as String).compareTo(windBins.indexOf(b['bin'] as String))))
+      .map((b) => {
+            'bin': b['bin'], 'sessions': (b['sessions'] as Set).length,
+            'avg_kn': (b['moving_s'] as int) > 0 ? roundTo((b['w'] as double) / (b['moving_s'] as int), 2) : 0.0,
+            'best_avg_kn': b['best_avg_kn'], 'max_kn': b['max_kn'], 'moving_h': roundTo((b['moving_s'] as int) / 3600, 2),
+          })
+      .toList();
+  final extra = <String, dynamic>{};
+  for (final key in ['up_kn', 'down_kn', 'vmg_kn', 'max_heel']) {
+    StatRow? b;
+    for (final r in rows) {
+      if (r.stats.containsKey(key) && (b == null || (r.stats[key] as num) > (b.stats[key] as num))) b = r;
+    }
+    if (b != null) {
+      extra[key] = b.stats[key];
+      extra['${key.replaceAll('_kn', '').replaceAll('max_', '')}_track'] = b.ref;
+    }
+  }
+  double? weighted(String key) {
+    var w = 0.0;
+    var m = 0;
+    for (final r in rows) {
+      if (r.stats.containsKey(key)) {
+        w += (r.stats[key] as num) * r.movingS;
+        m += r.movingS;
+      }
+    }
+    return m > 0 ? roundTo(w / m, 2) : null;
+  }
+  final avgUp = weighted('up_kn'), avgDown = weighted('down_kn');
+  if (avgUp != null) extra['avg_up_kn'] = avgUp;
+  if (avgDown != null) extra['avg_down_kn'] = avgDown;
+  var capsizes = 0;
+  for (final r in rows) {
+    capsizes += ((r.stats['capsizes'] as num?) ?? 0).toInt();
+  }
+  extra['capsizes'] = capsizes;
   return {
+    'wind': wind, ...extra,
     'sessions': sessions.length, 'tracks': rows.length,
     'dist_nm': roundTo(dist, 2), 'moving_h': roundTo(moving / 3600, 2),
     'max_kn': fastest.maxKn, 'max_track': fastest.ref,

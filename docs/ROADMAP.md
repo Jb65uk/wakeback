@@ -83,7 +83,7 @@ club pucks ─► dock Pi at the club ──────────────
    Cloudflare-fronted server HTTPS-only, back-ups encrypted, and the SQLite/data folder off any shared NAS
    share. No third-party analytics or trackers, so nothing to consent to beyond the account itself.
 
-9. **Make it fun / useful — picked 27 Sep, in this order** — TO DO
+9. **Make it fun / useful — picked 27 Sep, in this order** ✅ (28 Sep; all five, phone side; server computes the same stats)
    1. **Personal bests**: when a session lands, a toast + card — "Fastest average this year", "Longest sail
       ever", "New top speed". Stats already has the numbers; keep a small `bests.json` per person.
    2. **Offline maps**: cache map tiles for your venues (a few zoom levels round each) so the tablet works
@@ -92,8 +92,11 @@ club pucks ─► dock Pi at the club ──────────────
       via the Android share sheet.
    4. **Streaks & badges**: sailed N weekends running, 100 nm month, first 6 kn, dawn sail, most miles at a
       new venue, first capsize (heel > 80° for 10 s — the IMU knows). All from data already logged.
-   5. **Wind vs speed**: best average by wind strength, upwind vs downwind speed, best VMG, heel vs speed —
-      from the day's weather (meta.weather), the wind direction set in the viewer, and the puck's heel.
+   5. **Wind vs speed**: upwind / downwind averages and bests, best 30-s VMG, most heel and capsizes (heel > 80°
+      for 10 s), and a table by wind strength — from the day's weather (meta.weather, so pull it in on Replay)
+      and the puck's heading and heel. `server/stats.py` and `app/lib/dock/stats.dart` compute it identically.
+   Also: `app/lib/dock/badges.dart` (bests + 17 badges), `app/lib/dock/tiles.dart` (tile cache served at
+   `/tiles/<layer>/z/x/y` by the phone's dock; the in-app viewer uses it), `app/lib/share_card.dart`.
 
 Also still on you: add the GitHub signing secrets; scope Cloudflare Access to `/admin` only so the app can
 create accounts.

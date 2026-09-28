@@ -15,7 +15,10 @@ your phone records is marked as yours (Setup → You).
 app/
   lib/dock/store.dart         the dock's storage + rules, ported line for line from server/app.py
   lib/dock/pocket_dock.dart   the dock's HTTP API on port 5000 + serves the viewer pages
-  lib/dock/stats.dart         miles / hours / speeds per track, totals and the league (= server/stats.py)
+  lib/dock/stats.dart         miles / hours / speeds / wind / heel per track, totals and the league (= server/stats.py)
+  lib/dock/badges.dart        personal bests ("new record") and badges, from your tracks
+  lib/dock/tiles.dart         map tile cache: the dock serves /tiles/... so Replay works offline
+  lib/share_card.dart         the picture of a session for WhatsApp
   lib/sync/server_sync.dart   two-way sync with your server (existing endpoints only)
   lib/demo/                   fake_pucks.py + gen_fake_data.py, ported
   lib/screens/                Sessions (list, Stats, League), Replay (the viewer), Sync, Setup

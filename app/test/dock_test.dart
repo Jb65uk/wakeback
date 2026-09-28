@@ -7,7 +7,9 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wakeback/demo/fake_race.dart';
 import 'package:wakeback/dock/pocket_dock.dart';
+import 'package:wakeback/dock/badges.dart';
 import 'package:wakeback/dock/stats.dart';
+import 'package:wakeback/dock/tiles.dart';
 import 'package:wakeback/dock/store.dart';
 import 'package:wakeback/sync/server_sync.dart';
 
@@ -296,9 +298,22 @@ void main() {
     // expected values come from running server/stats.py on the same two fixture files
     final puck = await File('test/fixtures/stats_puck.csv').readAsString();
     final gpx = await File('test/fixtures/stats_phone.gpx').readAsString();
-    expect(computeStats(puck, 'x.csv'), {'points': 1800, 'start_ms': 1789900200000, 'end_ms': 1789900499900, 'dist_nm': 0.191, 'max_kn': 7.38, 'avg_kn': 4.24, 'moving_s': 147});
+    expect(computeStats(puck, 'x.csv'), {'points': 1800, 'start_ms': 1789900200000, 'end_ms': 1789900499900, 'dist_nm': 0.191, 'max_kn': 7.38, 'avg_kn': 4.24, 'moving_s': 147, 'max_heel': 12.0, 'capsizes': 0});
     expect(computeStats(gpx, 'x.gpx'), {'points': 400, 'start_ms': 1789900200000, 'end_ms': 1789900599000, 'dist_nm': 0.377, 'max_kn': 4.06, 'avg_kn': 3.98, 'moving_s': 339});
     expect(computeStats('t_ms,lat,lon\n1,2,3\n', 'x.csv'), isNull);
+    // with the day's weather (wind from 000 at 12 kn): upwind / downwind / VMG, same as stats.py
+    final wx = {'pts': [for (var h = -1; h < 3; h++) [1789900200000 + h * 3600000, 0.0, 12.0, null]], 'got': 5};
+    expect(computeStats(puck, 'x.csv', wx), {'points': 1800, 'start_ms': 1789900200000, 'end_ms': 1789900499900, 'dist_nm': 0.191, 'max_kn': 7.38, 'avg_kn': 4.24, 'moving_s': 147,
+      'max_heel': 12.0, 'capsizes': 0, 'wind_kn': 12.0, 'up_kn': 1.7, 'down_kn': 5.5, 'vmg_kn': 1.19});
+    expect(computeStats(gpx, 'x.gpx', wx), {'points': 400, 'start_ms': 1789900200000, 'end_ms': 1789900599000, 'dist_nm': 0.377, 'max_kn': 4.06, 'avg_kn': 3.98, 'moving_s': 339,
+      'wind_kn': 12.0, 'up_kn': 3.98, 'vmg_kn': 2.83});
+    // a capsize: 12 s over 80 deg counts once, 5 s doesn't
+    final capCsv = StringBuffer('t_ms,lat,lon,sog_kn,hdg,heel,pitch\n');
+    for (var i = 0; i < 400; i++) {
+      final heel = (i >= 50 && i < 170) ? 85.0 : (i >= 300 && i < 350) ? -85.0 : 10.0;
+      capCsv.writeln('${1789900200000 + i * 100},${53.65 + i * 1e-6},-3.01,3.0,90.0,$heel,1.0');
+    }
+    expect(computeStats(capCsv.toString(), 'x.csv')!['capsizes'], 1);
 
     d.store
       ..ownerName = 'James'
@@ -321,11 +336,24 @@ void main() {
       'longest_nm': 0.191, 'longest_track': {...ref, 'file': 'puck1_103000.csv'},
       'venues': 1, 'favourite_venue': 'Southport SC (Marine Lake)', 'first_date': '2026-09-20', 'last_date': '2026-09-20',
       'by_month': [{'month': '2026-09', 'dist_nm': 0.19, 'sessions': 1, 'moving_s': 147}],
+      'wind': [], 'max_heel': 12.0, 'heel_track': {...ref, 'file': 'puck1_103000.csv'}, 'capsizes': 0,
     });
     // both together (what summarise gives the league for a two-track person)
     final rows = await d.store.rowsFor('all');
     expect(summarise(rows)['avg_kn'], 4.06);
     expect(summarise(rows)['longest_track'], {...ref, 'file': 'Steve_phone.gpx'});
+    // the day's weather arrives later: stats are redone and the wind section fills in
+    await d.req('PUT', '/api/sessions/2026-09-20_southport-sc/meta', json: {'marks': [], 'lines': [], 'fixes': [], 'weather': {'src': 'test', 'lat': 53.65, 'lon': -3.01, 'got': 5, 'pts': wx['pts']}});
+    final wrows = await d.store.rowsFor('all');
+    final wsum = summarise(wrows);
+    expect(wsum['wind'], [{'bin': '10-15', 'sessions': 1, 'avg_kn': 4.06, 'best_avg_kn': 4.24, 'max_kn': 7.38, 'moving_h': 0.14}]);
+    expect(wsum['up_kn'], 3.98);
+    expect(wsum['up_track'], {...ref, 'file': 'Steve_phone.gpx'});
+    expect(wsum['down_kn'], 5.5);
+    expect(wsum['vmg_kn'], 2.83);
+    expect(wsum['avg_up_kn'], 3.29);
+    expect(wsum['avg_down_kn'], 5.5);
+    expect(wsum['capsizes'], 0);
 
     final (_, lg) = await d.req('GET', '/api/league');
     expect(lg['people'], [
@@ -336,6 +364,68 @@ void main() {
     expect(periodStart('month', now: DateTime.utc(2026, 9, 15)), 1788220800000);
     expect(periodStart('year', now: DateTime.utc(2026, 9, 15)), 1767225600000);
     expect(((await d.req('GET', '/api/stats?period=month')).$2)['sessions'], DateTime.now().toUtc().isBefore(DateTime.utc(2026, 10)) ? 1 : 0);
+  });
+
+  test('personal bests and badges', () {
+    StatRow row(String date, {double max = 5, double avg = 3, double dist = 4, int moving = 3600, String venue = 'Southport SC', int hour = 11, Map<String, dynamic> extra = const {}}) =>
+        StatRow('${date}_x', date, 'x', venue, '$date.csv', {
+          'max_kn': max, 'avg_kn': avg, 'dist_nm': dist, 'moving_s': moving,
+          'start_ms': DateTime.parse('${date}T${hour.toString().padLeft(2, '0')}:00:00').millisecondsSinceEpoch, 'end_ms': 0, 'points': 10, ...extra,
+        });
+    final before = [row('2026-09-05', max: 6.1, avg: 3.5, dist: 8), row('2026-09-12', max: 5.5, avg: 3.9, dist: 6), row('2025-06-01', max: 7.0, avg: 3.0, dist: 12)];
+    final fresh = [row('2026-09-19', max: 6.5, avg: 4.1, dist: 7)];
+    final recs = newRecords(fresh, before, year: 2026);
+    expect(recs.map((r) => '${r.title}|${r.value}|${r.scope}').toList(), [
+      'Top speed|6.5 kn|this year', // 7.0 in 2025 still stands
+      'Fastest average|4.1 kn|ever',
+    ]);
+    expect(newRecords(fresh, const [], year: 2026), isEmpty); // nothing to beat yet
+    expect(newRecords(const [], before, year: 2026), isEmpty);
+
+    final rows = [...before, ...fresh, row('2026-09-26', max: 8.2, dist: 16, moving: 5 * 3600, hour: 6, venue: 'West Kirby SC', extra: {'wind_kn': 22.0, 'capsizes': 1})];
+    final b = {for (final x in badges(rows, summarise(rows))) x.id: x};
+    expect(b['first']!.earned, isTrue);
+    expect(b['ten']!.earned, isFalse);
+    expect(b['ten']!.detail, '5 of 10');
+    expect(b['kn6']!.earned, isTrue);
+    expect(b['kn8']!.earned, isTrue);
+    expect(b['kn10']!.earned, isFalse);
+    expect(b['marathon']!.earned, isTrue);
+    expect(b['allday']!.earned, isTrue);
+    expect(b['dawn']!.earned, isTrue);
+    expect(b['streak3']!.earned, isTrue); // 5, 12, 19, 26 Sep 2026 are four Saturdays running
+    expect(b['streak6']!.earned, isFalse);
+    expect(b['windy']!.earned, isTrue);
+    expect(b['swimmer']!.earned, isTrue);
+    expect(b['explorer']!.earned, isFalse);
+    expect(badges(const [], summarise(const [])).single.earned, isFalse);
+  });
+
+  test('offline map tiles: served from the cache, geometry of a venue', () async {
+    final cache = TileCache(Directory('${d.dir.path}/tiles'));
+    d.dock.tiles = cache;
+    // Southport at z14 -> the tile that holds the lake
+    final around = TileCache.tilesAround(53.6503, -3.0102, 5, 14, 14);
+    expect(around, [(14, 8055, 5287)]);
+    // more zoom = more tiles, and a 2.5 km circle at z17 is a few hundred of them
+    expect(TileCache.tilesAround(53.6503, -3.0102, 2500, 17, 17).length, inInclusiveRange(400, 1200));
+    final f = File('${d.dir.path}/tiles/osm/14/8055/5287');
+    await f.create(recursive: true);
+    await f.writeAsBytes([1, 2, 3]);
+    final c = HttpClient();
+    try {
+      final r = await (await c.getUrl(Uri.parse('${d.url}/tiles/osm/14/8055/5287.png'))).close();
+      expect(r.statusCode, 200);
+      expect(r.headers.contentType?.mimeType, 'image/png');
+      expect(await r.fold<List<int>>([], (a, b) => a..addAll(b)), [1, 2, 3]);
+      expect((await (await c.getUrl(Uri.parse('${d.url}/tiles/nope/1/0/0.png'))).close()).statusCode, anyOf(404, 502));
+      expect((await (await c.getUrl(Uri.parse('${d.url}/tiles/osm/1/9/9.png'))).close()).statusCode, anyOf(404, 502)); // off the map
+    } finally {
+      c.close();
+    }
+    expect(await cache.usage(), (3, 1));
+    await cache.clear();
+    expect(await cache.usage(), (0, 0));
   });
 
   test('old date-only folders are split into date + venue sessions', () async {

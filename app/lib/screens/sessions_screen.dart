@@ -5,6 +5,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
+import '../dock/badges.dart';
+import '../dock/stats.dart';
+import '../share_card.dart';
 import '../sync/server_sync.dart';
 import '../widgets/common.dart';
 
@@ -160,8 +163,43 @@ class _SessionListState extends State<_SessionList> {
           _err = null;
         });
       }
+      await _checkRecords();
     } catch (e) {
       if (mounted) setState(() => _err = '$e');
+    }
+  }
+
+  /// Personal bests: any of my tracks not looked at before that beats everything earlier.
+  Future<void> _checkRecords() async {
+    if (app.demoMode) return;
+    final rows = await app.store.myRows('all');
+    final keys = {for (final r in rows) '${r.session}/${r.file}'};
+    final seen = app.seenTracks;
+    if (seen == null) {
+      // first run: everything already here is history, not news
+      await app.setSeenTracks(keys);
+      return;
+    }
+    final fresh = [for (final r in rows) if (!seen.contains('${r.session}/${r.file}')) r];
+    if (fresh.isEmpty) return;
+    final freshKeys = fresh.map((r) => '${r.session}/${r.file}').toSet();
+    final before = [for (final r in rows) if (!freshKeys.contains('${r.session}/${r.file}')) r];
+    final recs = newRecords(fresh, before);
+    await app.setSeenTracks({...seen, ...keys});
+    if (recs.isEmpty) return;
+    final card = [...app.recordCard, for (final r in recs) r.toJson()];
+    await app.setRecordCard(card.length > 6 ? card.sublist(card.length - 6) : card);
+    if (mounted) {
+      final r = recs.first;
+      toast(context, '🏆 New record${recs.length > 1 ? 's' : ''}: ${r.title} ${r.value}${r.scope == 'ever' ? '' : ' (this year)'}${recs.length > 1 ? ' +${recs.length - 1} more' : ''}');
+    }
+  }
+
+  Future<void> _share(Map<String, dynamic> s) async {
+    try {
+      await shareSession(context, s);
+    } catch (e) {
+      if (mounted) toast(context, 'Couldn\'t make the card: $e', error: true);
     }
   }
 
@@ -216,12 +254,16 @@ class _SessionListState extends State<_SessionList> {
         ]),
       );
     }
+    final records = app.demoMode ? const <Map<String, dynamic>>[] : app.recordCard;
+    final head = records.isEmpty ? 0 : 1;
     return RefreshIndicator(
       onRefresh: _load,
       child: ListView.builder(
         padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
-        itemCount: list.length + 1,
-        itemBuilder: (context, i) {
+        itemCount: list.length + 1 + head,
+        itemBuilder: (context, idx) {
+          if (head == 1 && idx == 0) return _RecordCard(records, onOpen: widget.onOpen, onDismiss: () => app.setRecordCard([]));
+          final i = idx - head;
           if (i == list.length) {
             return Padding(
               padding: const EdgeInsets.fromLTRB(8, 12, 8, 0),
@@ -269,6 +311,7 @@ class _SessionListState extends State<_SessionList> {
                       ]),
                     ]),
                   ),
+                  IconButton(tooltip: 'Share a picture of this session', icon: const Icon(Icons.ios_share, size: 20), onPressed: () => _share(s)),
                   if (mine.isNotEmpty)
                     Column(mainAxisSize: MainAxisSize.min, children: [
                       Switch(
@@ -308,6 +351,46 @@ class _Fact extends StatelessWidget {
   }
 }
 
+class _RecordCard extends StatelessWidget {
+  final List<Map<String, dynamic>> records;
+  final void Function(String id) onOpen;
+  final VoidCallback onDismiss;
+  const _RecordCard(this.records, {required this.onOpen, required this.onDismiss});
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context);
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 4),
+      color: t.colorScheme.primaryContainer,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 6, 10),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            const Text('🏆', style: TextStyle(fontSize: 22)),
+            const SizedBox(width: 8),
+            Expanded(child: Text('New personal best${records.length > 1 ? 's' : ''}', style: t.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800, color: t.colorScheme.onPrimaryContainer))),
+            IconButton(icon: const Icon(Icons.close, size: 20), onPressed: onDismiss, tooltip: 'Dismiss'),
+          ]),
+          for (final r in records)
+            InkWell(
+              onTap: r['session'] is String ? () => onOpen(r['session'] as String) : null,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(children: [
+                  Expanded(child: Text('${r['title']}${r['scope'] == 'ever' ? '' : ' (this year)'}', style: TextStyle(color: t.colorScheme.onPrimaryContainer))),
+                  Text('${r['value']}', style: t.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800, color: t.colorScheme.onPrimaryContainer)),
+                  const SizedBox(width: 10),
+                  Text(niceDate('${r['date']}'), style: t.textTheme.bodySmall?.copyWith(color: t.colorScheme.onPrimaryContainer.withValues(alpha: 0.7))),
+                  const SizedBox(width: 8),
+                ]),
+              ),
+            ),
+        ]),
+      ),
+    );
+  }
+}
+
 // ---------------------------------------------------------------- Stats
 
 class _StatsTab extends StatefulWidget {
@@ -320,6 +403,7 @@ class _StatsTab extends StatefulWidget {
 class _StatsTabState extends State<_StatsTab> {
   String _period = 'all';
   Map<String, dynamic>? _st;
+  List<SailBadge> _badges = const [];
   String? _err, _source;
   int _req = 0;
 
@@ -359,11 +443,17 @@ class _StatsTabState extends State<_StatsTab> {
         err = '$e';
       }
     }
+    List<SailBadge>? bd;
+    try {
+      final rows = await app.store.myRows('all');
+      bd = badges(rows, summarise(rows));
+    } catch (_) {}
     if (mounted && n == _req && period == _period) {
       setState(() {
         _st = st;
         _err = err;
         _source = src;
+        if (bd != null) _badges = bd;
       });
     }
   }
@@ -430,6 +520,65 @@ class _StatsTabState extends State<_StatsTab> {
         const SectionLabel('Miles by month'),
         _MonthBars(months, t),
       ],
+      ..._wind(t, st),
+      if (_badges.isNotEmpty) ...[
+        const SectionLabel('Badges'),
+        _Badges(_badges, t),
+      ],
+    ];
+  }
+
+  /// Upwind / downwind / VMG and how you go in different breezes — only once a day has its weather.
+  List<Widget> _wind(ThemeData t, Map<String, dynamic> st) {
+    final bins = ((st['wind'] as List?) ?? const []).whereType<Map>().toList();
+    final hasUp = st['up_kn'] != null, hasDown = st['down_kn'] != null, hasVmg = st['vmg_kn'] != null;
+    if (bins.isEmpty && !hasUp && !hasDown) {
+      return [
+        const SectionLabel('The wind'),
+        const Hint('Pull the day\'s weather in on Replay (Weather button) and this fills in: upwind and downwind speeds, best VMG, and how you go in a blow.'),
+      ];
+    }
+    String where(Map? m) => m == null || m.isEmpty ? '' : '${niceDate('${m['date']}')} · ${m['venue_name']}';
+    return [
+      const SectionLabel('The wind'),
+      if (hasUp)
+        _Record(Icons.north, 'Upwind', '${(st['avg_up_kn'] as num? ?? st['up_kn'] as num).toStringAsFixed(1)} kn',
+            'average; best ${(st['up_kn'] as num).toStringAsFixed(1)} kn · ${where(st['up_track'] as Map?)}', () => _open((st['up_track'] as Map?) ?? const {})),
+      if (hasDown)
+        _Record(Icons.south, 'Downwind', '${(st['avg_down_kn'] as num? ?? st['down_kn'] as num).toStringAsFixed(1)} kn',
+            'average; best ${(st['down_kn'] as num).toStringAsFixed(1)} kn · ${where(st['down_track'] as Map?)}', () => _open((st['down_track'] as Map?) ?? const {})),
+      if (hasVmg)
+        _Record(Icons.call_made, 'Best VMG upwind', '${(st['vmg_kn'] as num).toStringAsFixed(1)} kn', where(st['vmg_track'] as Map?), () => _open((st['vmg_track'] as Map?) ?? const {})),
+      if (st['max_heel'] != null)
+        _Record(Icons.airline_seat_flat_angled, 'Most heel', '${(st['max_heel'] as num).toStringAsFixed(0)}°',
+            '${where(st['heel_track'] as Map?)}${(st['capsizes'] as num? ?? 0) > 0 ? ' · ${st['capsizes']} capsize${st['capsizes'] == 1 ? '' : 's'}' : ''}', () => _open((st['heel_track'] as Map?) ?? const {})),
+      if (bins.isNotEmpty)
+        Card(
+          margin: const EdgeInsets.symmetric(vertical: 3),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('By wind strength', style: t.textTheme.titleSmall),
+              const SizedBox(height: 6),
+              Table(
+                columnWidths: const {0: FlexColumnWidth(1.2), 1: FlexColumnWidth(1), 2: FlexColumnWidth(1), 3: FlexColumnWidth(1)},
+                children: [
+                  TableRow(children: [
+                    for (final hdr in ['Wind', 'Sessions', 'Average', 'Top'])
+                      Padding(padding: const EdgeInsets.symmetric(vertical: 3), child: Text(hdr, style: t.textTheme.labelMedium?.copyWith(color: t.colorScheme.onSurfaceVariant))),
+                  ]),
+                  for (final b in bins)
+                    TableRow(children: [
+                      Padding(padding: const EdgeInsets.symmetric(vertical: 3), child: Text('${b['bin']} kn', style: const TextStyle(fontWeight: FontWeight.w600))),
+                      Text('${b['sessions']}'),
+                      Text('${(b['avg_kn'] as num).toStringAsFixed(1)} kn'),
+                      Text('${(b['max_kn'] as num).toStringAsFixed(1)} kn'),
+                    ]),
+                ],
+              ),
+            ]),
+          ),
+        ),
     ];
   }
 
@@ -554,6 +703,54 @@ class _MonthBars extends StatelessWidget {
                 SizedBox(width: 74, child: Text('${nm(m['dist_nm'] as num)} nm', textAlign: TextAlign.right, style: t.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w600))),
               ]),
             ),
+        ]),
+      ),
+    );
+  }
+}
+
+class _Badges extends StatelessWidget {
+  final List<SailBadge> list;
+  final ThemeData t;
+  const _Badges(this.list, this.t);
+  @override
+  Widget build(BuildContext context) {
+    final earned = list.where((b) => b.earned).length;
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('$earned of ${list.length}', style: t.textTheme.labelLarge?.copyWith(color: t.colorScheme.onSurfaceVariant)),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final b in list)
+                Tooltip(
+                  message: '${b.name}: ${b.blurb}${b.detail != null ? '\n${b.detail}' : ''}',
+                  triggerMode: TooltipTriggerMode.tap,
+                  showDuration: const Duration(seconds: 4),
+                  child: Container(
+                    width: 96,
+                    padding: const EdgeInsets.fromLTRB(6, 10, 6, 8),
+                    decoration: BoxDecoration(
+                      color: b.earned ? t.colorScheme.primaryContainer : t.colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Column(children: [
+                      Opacity(opacity: b.earned ? 1 : 0.3, child: Text(b.icon, style: const TextStyle(fontSize: 30))),
+                      const SizedBox(height: 4),
+                      Text(b.name, textAlign: TextAlign.center, maxLines: 2, style: t.textTheme.labelSmall?.copyWith(fontWeight: FontWeight.w700, color: b.earned ? t.colorScheme.onPrimaryContainer : t.colorScheme.onSurfaceVariant)),
+                      if (!b.earned && b.detail != null) Text(b.detail!, textAlign: TextAlign.center, maxLines: 1, overflow: TextOverflow.ellipsis, style: t.textTheme.labelSmall?.copyWith(fontSize: 9, color: t.colorScheme.onSurfaceVariant)),
+                    ]),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          const Hint('Tap a badge to see what it takes.'),
         ]),
       ),
     );

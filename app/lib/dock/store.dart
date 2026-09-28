@@ -389,9 +389,14 @@ class DockStore {
     return rows;
   }
 
+  /// Your own tracks (app.py's rule for "mine"), newest first.
+  Future<List<StatRow>> myRows(String period) async => [for (final r in await rowsFor(period)) if (_isMine(r.owner)) r];
+
   // ---- GET /api/stats?period=  (your tracks only)
-  Future<Map<String, dynamic>> myStats(String period) async =>
-      {'period': period, ...summarise([for (final r in await rowsFor(period)) if (_isMine(r.owner)) r])};
+  Future<Map<String, dynamic>> myStats(String period) async => {'period': period, ...summarise(await myRows(period))};
+
+  /// A track's text, for drawing it (share card).
+  Future<String> trackText(String day, String name) async => (await trackFile(day, name)).readAsString(encoding: latin1);
 
   // ---- GET /api/league?period=  (everyone on this phone: you, friends' shared tracks, unowned = Club)
   Future<Map<String, dynamic>> leagueTable(String period) async =>

@@ -13,6 +13,7 @@ import 'auth/auth_api.dart';
 import 'demo/demo_pucks.dart';
 import 'dock/pocket_dock.dart';
 import 'dock/store.dart';
+import 'dock/tiles.dart';
 
 /// Your WakeBack server. Change in Setup → Advanced if you run your own.
 const String kDefaultServer = 'https://wakeback.bridgesolutions.uk';
@@ -25,6 +26,7 @@ class AppState extends ChangeNotifier {
   late Directory _docs;
   late DockStore store;
   late final PocketDock dock;
+  late final TileCache tiles;
   late final DemoPucks demo;
   final DockSettings dockSettings = DockSettings();
 
@@ -40,6 +42,8 @@ class AppState extends ChangeNotifier {
     store = await _openStore(demoMode);
     dockSettings.wifi = hotspotName;
     dock = PocketDock(store, _asset, dockSettings);
+    tiles = TileCache(Directory('${_docs.path}/wakeback-tiles'));
+    dock.tiles = tiles;
     dock.me = () => {'name': profileName, 'email': profileEmail};
     dock.demoMode = () => demoMode;
     try {
@@ -152,6 +156,30 @@ class AppState extends ChangeNotifier {
     await _p.remove('account');
     await _p.remove('profileEmail');
     store.ownerEmail = '';
+    notifyListeners();
+  }
+
+  // ------------------------------------------------------------------ personal bests
+
+  /// Tracks the Sessions tab has already looked at for records ('session/file'). Null = never looked (first run).
+  Set<String>? get seenTracks {
+    final l = _p.getStringList('seenTracks');
+    return l?.toSet();
+  }
+
+  Future<void> setSeenTracks(Set<String> s) => _p.setStringList('seenTracks', s.toList());
+
+  /// The "new record" card until it's dismissed: JSON list of {title, value, when}.
+  List<Map<String, dynamic>> get recordCard {
+    try {
+      return ((jsonDecode(_p.getString('recordCard') ?? '[]') as List).cast<Map>()).map((m) => m.cast<String, dynamic>()).toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<void> setRecordCard(List<Map<String, dynamic>> v) async {
+    await _p.setString('recordCard', jsonEncode(v));
     notifyListeners();
   }
 

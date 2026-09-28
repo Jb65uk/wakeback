@@ -9,6 +9,7 @@ import 'dart:typed_data';
 import 'package:mime/mime.dart';
 
 import 'store.dart';
+import 'tiles.dart';
 
 typedef AssetLoader = Future<Uint8List?> Function(String name);
 
@@ -19,6 +20,9 @@ class DockSettings {
 
 class PocketDock {
   DockStore store; // swapped when entering/leaving demo mode
+
+  /// Map tiles for the viewer, cached on the phone (offline maps). Null = the viewer fetches them itself.
+  TileCache? tiles;
   final AssetLoader assets;
   final DockSettings settings;
   HttpServer? _server;
@@ -128,6 +132,17 @@ class PocketDock {
     if (m == 'GET' && seg.isEmpty) return _page(req, 'index.html');
     if (m == 'GET' && seg.length == 1 && seg[0] == 'dock') return _page(req, 'dock.html');
     if (m == 'GET' && seg.length == 2 && seg[0] == 'viewer') return _page(req, seg[1]);
+    // map tiles: /tiles/<layer>/<z>/<x>/<y>.<png|jpg> from the cache, else fetched and kept
+    if (m == 'GET' && seg.length == 5 && seg[0] == 'tiles') {
+      final tc = tiles;
+      final y = int.tryParse(seg[4].split('.').first);
+      final z = int.tryParse(seg[2]), x = int.tryParse(seg[3]);
+      if (tc == null || y == null || z == null || x == null) throw const DockError(404, 'not found');
+      final bytes = await tc.get(seg[1], z, x, y);
+      if (bytes == null) throw const DockError(502, 'no tile');
+      req.response.headers.set(HttpHeaders.cacheControlHeader, 'max-age=86400');
+      return _send(req, 200, bytes, seg[1] == 'sat' ? 'image/jpeg' : 'image/png');
+    }
     if (seg.isEmpty || seg[0] != 'api') throw const DockError(404, 'not found');
 
     final api = seg.sublist(1);

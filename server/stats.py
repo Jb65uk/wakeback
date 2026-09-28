@@ -11,6 +11,7 @@ import math, os, re, json
 from datetime import datetime, timezone
 
 KN = 1.943844
+CACHE_V = 2   # bump when compute_stats learns something new, so old stats.json files are redone
 
 
 def _hav_m(la1, lo1, la2, lo2):
@@ -28,7 +29,7 @@ def _parse_time(s):
 
 
 def _points(path):
-    """[(t_ms, lat, lon, sog_kn or None)] from a puck CSV or a GPX file."""
+    """[(t_ms, lat, lon, sog_kn or None, hdg or None, heel or None)] from a puck CSV or a GPX file."""
     pts = []
     with open(path, 'r', errors='ignore') as f:
         text = f.read()
@@ -41,7 +42,7 @@ def _points(path):
             if t is None: continue
             sp = re.search(r'<(?:gpxtpx:)?speed>([-0-9.eE]+)</', m.group(2))
             sog = float(sp.group(1)) * KN if sp else None
-            pts.append((t, float(la.group(1)), float(lo.group(1)), sog))
+            pts.append((t, float(la.group(1)), float(lo.group(1)), sog, None, None))
     else:
         lines = text.splitlines()
         if not lines: return []
@@ -51,6 +52,11 @@ def _points(path):
         except ValueError:
             return []
         isog = cols.index('sog_kn') if 'sog_kn' in cols else -1
+        ihdg = cols.index('hdg') if 'hdg' in cols else -1
+        iheel = cols.index('heel') if 'heel' in cols else -1
+        def opt(c, i):
+            try: return float(c[i]) if i >= 0 and i < len(c) and c[i] != '' else None
+            except ValueError: return None
         for ln in lines[1:]:
             c = ln.split(',')
             try:
@@ -60,13 +66,30 @@ def _points(path):
             except (ValueError, IndexError):
                 continue
             if not (-90 <= lat <= 90 and -180 <= lon <= 180): continue
-            pts.append((int(t), lat, lon, sog))
+            pts.append((int(t), lat, lon, sog, opt(c, ihdg), opt(c, iheel)))
     pts.sort(key=lambda p: p[0])
     return pts
 
 
-def compute_stats(path):
-    """Stats for one track file, or None if it has no usable positions."""
+def _bearing(la1, lo1, la2, lo2):
+    r = math.radians
+    y = math.sin(r(lo2 - lo1)) * math.cos(r(la2))
+    x = math.cos(r(la1)) * math.sin(r(la2)) - math.sin(r(la1)) * math.cos(r(la2)) * math.cos(r(lo2 - lo1))
+    return (math.degrees(math.atan2(y, x)) + 360) % 360
+
+
+def wind_at(weather, t_ms):
+    """(dir_from_deg, speed_kn) from the day's hourly weather (meta.weather), nearest hour, or None."""
+    pts = weather.get('pts') if isinstance(weather, dict) else None
+    if not pts: return None
+    best = min(pts, key=lambda p: abs(p[0] - t_ms))
+    if abs(best[0] - t_ms) > 2 * 3600 * 1000: return None
+    return (best[1], best[2])
+
+
+def compute_stats(path, weather=None):
+    """Stats for one track file, or None if it has no usable positions.
+    With the day's weather: upwind/downwind averages, best VMG and the wind strength it was sailed in."""
     pts = _points(path)
     if len(pts) < 2: return None
     # speed: from the file when it has it (pucks), else from consecutive positions (phones/watches)
@@ -99,34 +122,81 @@ def compute_stats(path):
         if sog[i] > 1: s_sum += sog[i]; s_cnt += 1
         if sog[i] > 1.5: moving_ms += dt
     vals = sorted(sog)
-    return {
+    out = {
         'points': len(pts), 'start_ms': pts[0][0], 'end_ms': pts[-1][0],
         'dist_nm': round(dist / 1852, 3),
         'max_kn': round(vals[min(len(vals) - 1, int(len(vals) * 0.995))], 2),
         'avg_kn': round(s_sum / s_cnt, 2) if s_cnt else 0.0,
         'moving_s': moving_ms // 1000,
     }
+    # heel (pucks only): 99th percentile of |heel|, and capsizes = |heel| > 80 deg for 10 s or more
+    heels = [abs(p[5]) for p in pts if p[5] is not None]
+    if heels:
+        hs = sorted(heels)
+        out['max_heel'] = round(hs[min(len(hs) - 1, int(len(hs) * 0.99))], 1)
+        caps = 0; run_start = None; over = False
+        for p in pts:
+            if p[5] is not None and abs(p[5]) > 80:
+                if run_start is None: run_start = p[0]; over = False
+                if not over and p[0] - run_start >= 10000: caps += 1; over = True
+            else:
+                run_start = None
+        out['capsizes'] = caps
+    # the wind: heading vs the hour's wind direction while moving
+    if weather:
+        up = []; down = []; wkn = []; vmg = []
+        for i in range(1, n):
+            if sog[i] <= 1: continue
+            w = wind_at(weather, pts[i][0])
+            if w is None: continue
+            hdg = pts[i][4]
+            if hdg is None:
+                if pts[i][0] - pts[i - 1][0] <= 0: continue
+                hdg = _bearing(pts[i - 1][1], pts[i - 1][2], pts[i][1], pts[i][2])
+            ang = abs((hdg - w[0] + 180) % 360 - 180)      # 0 = straight into the wind
+            wkn.append(w[1])
+            if ang < 60: up.append(sog[i]); vmg.append((pts[i][0], sog[i] * math.cos(math.radians(ang))))
+            elif ang > 120: down.append(sog[i])
+        if wkn:
+            out['wind_kn'] = round(sum(wkn) / len(wkn), 1)
+            if up: out['up_kn'] = round(sum(up) / len(up), 2)
+            if down: out['down_kn'] = round(sum(down) / len(down), 2)
+            # best upwind VMG over any 30 s
+            best = 0.0; a = 0; acc = 0.0
+            for b in range(len(vmg)):
+                acc += vmg[b][1]
+                while vmg[b][0] - vmg[a][0] > 30000: acc -= vmg[a][1]; a += 1
+                if vmg[b][0] - vmg[a][0] >= 20000: best = max(best, acc / (b - a + 1))
+            if best: out['vmg_kn'] = round(best, 2)
+    return out
 
 
 def session_stats(folder, files, lock=None):
-    """{file: stats} for the tracks in a session folder, cached in stats.json (re-done if a file's size changed)."""
+    """{file: stats} for the tracks in a session folder, cached in stats.json
+    (re-done if a file's size changed, or the day's weather was fetched since)."""
     cp = os.path.join(folder, 'stats.json')
     try:
         with open(cp) as f: cache = json.load(f)
         if not isinstance(cache, dict): cache = {}
     except (OSError, ValueError):
         cache = {}
+    weather = None
+    try:
+        with open(os.path.join(folder, 'meta.json')) as f: weather = (json.load(f) or {}).get('weather') or None
+    except (OSError, ValueError, AttributeError):
+        pass
+    wx_key = weather.get('got', 1) if isinstance(weather, dict) else 0
     out, changed = {}, False
     for fn in files:
         p = os.path.join(folder, fn)
         try: size = os.path.getsize(p)
         except OSError: continue
         c = cache.get(fn)
-        if isinstance(c, dict) and c.get('_size') == size:
+        if isinstance(c, dict) and c.get('_size') == size and c.get('_wx', 0) == wx_key and c.get('_v') == CACHE_V:
             if not c.get('_none'): out[fn] = {k: v for k, v in c.items() if not k.startswith('_')}
             continue
-        st = compute_stats(p)
-        cache[fn] = {**(st or {}), '_size': size, '_none': st is None}
+        st = compute_stats(p, weather)
+        cache[fn] = {**(st or {}), '_size': size, '_wx': wx_key, '_v': CACHE_V, '_none': st is None}
         changed = True
         if st: out[fn] = st
     if changed:
@@ -154,6 +224,13 @@ def period_start(period, now_ms=None):
     return 0
 
 
+WIND_BINS = ['0-5', '5-10', '10-15', '15-20', '20+']
+
+
+def wind_bin(kn):
+    return '0-5' if kn < 5 else '5-10' if kn < 10 else '10-15' if kn < 15 else '15-20' if kn < 20 else '20+'
+
+
 def summarise(rows):
     """Totals for a list of {session, date, venue, venue_name, file, stats} rows (one person)."""
     if not rows:
@@ -174,7 +251,34 @@ def summarise(rows):
         m = by_month.setdefault(_month(r['stats']['start_ms']), {'month': _month(r['stats']['start_ms']), 'dist_nm': 0.0, 'sessions': set(), 'moving_s': 0})
         m['dist_nm'] += r['stats']['dist_nm']; m['sessions'].add(r['session']); m['moving_s'] += r['stats']['moving_s']
     ref = lambda r: {'session': r['session'], 'file': r['file'], 'date': r['date'], 'venue_name': r['venue_name']}
+    # the wind: sessions grouped by strength (Beaufort-ish bins), and upwind / downwind / VMG bests
+    bins = {}
+    for r in rows:
+        st = r['stats']
+        if 'wind_kn' not in st: continue
+        k = wind_bin(st['wind_kn'])
+        b = bins.setdefault(k, {'bin': k, 'sessions': set(), 'w': 0.0, 'moving_s': 0, 'best_avg_kn': 0.0, 'max_kn': 0.0})
+        b['sessions'].add(r['session']); b['w'] += st['avg_kn'] * st['moving_s']; b['moving_s'] += st['moving_s']
+        b['best_avg_kn'] = max(b['best_avg_kn'], st['avg_kn']); b['max_kn'] = max(b['max_kn'], st['max_kn'])
+    wind = [{'bin': b['bin'], 'sessions': len(b['sessions']), 'avg_kn': round(b['w'] / b['moving_s'], 2) if b['moving_s'] else 0.0,
+             'best_avg_kn': b['best_avg_kn'], 'max_kn': b['max_kn'], 'moving_h': round(b['moving_s'] / 3600, 2)}
+            for b in sorted(bins.values(), key=lambda b: WIND_BINS.index(b['bin']))]
+    def best_of(key):
+        rs = [r for r in rows if key in r['stats']]
+        return max(rs, key=lambda r: r['stats'][key]) if rs else None
+    extra = {}
+    for key in ('up_kn', 'down_kn', 'vmg_kn', 'max_heel'):
+        b = best_of(key)
+        if b: extra[key] = b['stats'][key]; extra[key.replace('_kn', '').replace('max_', '') + '_track'] = ref(b)
+    ups = [r for r in rows if 'up_kn' in r['stats']]
+    if ups:
+        extra['avg_up_kn'] = round(sum(r['stats']['up_kn'] * r['stats']['moving_s'] for r in ups) / sum(r['stats']['moving_s'] for r in ups), 2)
+    downs = [r for r in rows if 'down_kn' in r['stats']]
+    if downs:
+        extra['avg_down_kn'] = round(sum(r['stats']['down_kn'] * r['stats']['moving_s'] for r in downs) / sum(r['stats']['moving_s'] for r in downs), 2)
+    extra['capsizes'] = sum(r['stats'].get('capsizes', 0) for r in rows)
     return {
+        'wind': wind, **extra,
         'sessions': len(sessions), 'tracks': len(rows),
         'dist_nm': round(dist, 2), 'moving_h': round(moving / 3600, 2),
         'max_kn': fastest['stats']['max_kn'], 'max_track': ref(fastest),
