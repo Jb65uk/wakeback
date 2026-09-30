@@ -147,6 +147,7 @@ void main() {
     final r2 = await store.upload('puck3_${l.fileBase()}.csv', utf8.encode(l.toCsv()), ownerName: 'Dave');
     ss = await store.sessions();
     expect((ss.single['boats'] as Map).containsKey(r2['file']), false);
+    expect((ss.single['sharing'] as Map).containsKey(r2['file']), true);
     // change it, then clear it
     expect((await store.trackSettings(day, file, {'boat': 'Laser'}))['boat'], 'Laser');
     ss = await store.sessions();
@@ -154,7 +155,7 @@ void main() {
     expect((ss.single['sharing'] as Map)[file], 'friends'); // visibility untouched
     await store.trackSettings(day, file, {'boat': ''});
     ss = await store.sessions();
-    expect((ss.single['boats'] as Map).containsKey(file), false);
+    expect(ss.single.containsKey('boats'), false); // no boats left: key left out, like the server
     await dir.delete(recursive: true);
   });
 }

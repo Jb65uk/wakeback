@@ -339,7 +339,7 @@ class DockStore {
       }
       out.add({
         'id': day, 'date': m?.group(1) ?? cut(day, 10), 'venue': vid, 'venue_name': venueName(vid, vs), 'venue_new': venueIsNew(vid, vs),
-        'files': files, 'count': files.length, 'races': races, 'owners': owners, 'sharing': sharing, 'boats': boats, 'mine': mine,
+        'files': files, 'count': files.length, 'races': races, 'owners': owners, 'sharing': sharing, if (boats.isNotEmpty) 'boats': boats, 'mine': mine,
         'stats': await sessionStats(dayDir(day), files),
       });
     }
@@ -630,7 +630,7 @@ class DockStore {
       o.putIfAbsent('visibility', () => 'friends');
       m[file] = o;
       await _writeJson(f, m);
-      return {'name': pyStr(o['name'] ?? ''), 'visibility': pyStr(o['visibility']), 'boat': pyStr(o['boat'] ?? '')};
+      return {'name': pyStr(o['name'] ?? ''), 'visibility': pyStr(o['visibility']), if (pyStr(o['boat'] ?? '').isNotEmpty) 'boat': pyStr(o['boat'])};
     });
   }
 
