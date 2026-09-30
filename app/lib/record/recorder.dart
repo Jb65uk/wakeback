@@ -4,7 +4,6 @@
 // start offers to carry on or save it.
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';

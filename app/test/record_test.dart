@@ -84,7 +84,7 @@ void main() {
     }
     final back = TrackLog()..restore([for (final f in l.fixes) Fix.fromDraftLine(f.draftLine)!]);
     expect(back.fixes.length, l.fixes.length);
-    expect(back.distNm, closeTo(l.distNm, 1e-6));
+    expect(back.distNm, closeTo(l.distNm, 1e-4)); // the draft keeps 7 decimals (~1 cm)
     expect(back.sailedMs, l.sailedMs);
     expect(back.seg, 2); // a resume after recovery starts a new segment
   });
