@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 
 import 'app_state.dart';
+import 'record/recorder.dart';
 import 'screens/home.dart';
 import 'screens/welcome_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await AppState.instance.init();
+  await Recorder.instance.recover(); // a recording cut off by a crash or flat battery comes back paused
   runApp(const WakeBackApp());
 }
 

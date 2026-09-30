@@ -44,6 +44,10 @@ jobs:
           s = open(p).read()
           if 'android.permission.INTERNET' not in s:
               s = re.sub(r'(<manifest[^>]*>)', r'\1\n    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />\n    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />', s, count=1)
+          # Record tab: GPS with the screen off, as a foreground service with a notification
+          for perm in ['ACCESS_FINE_LOCATION', 'ACCESS_COARSE_LOCATION', 'FOREGROUND_SERVICE', 'FOREGROUND_SERVICE_LOCATION', 'WAKE_LOCK', 'POST_NOTIFICATIONS']:
+              if f'android.permission.{perm}"' not in s:
+                  s = re.sub(r'(<manifest[^>]*>)', rf'\1\n    <uses-permission android:name="android.permission.{perm}" />', s, count=1)
           if 'usesCleartextTraffic' not in s:
               s = s.replace('<application', '<application android:usesCleartextTraffic="true"', 1)
           s = s.replace('android:label="wakeback"', 'android:label="WakeBack"')

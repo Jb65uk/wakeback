@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../app_state.dart';
+import '../record/recorder.dart';
+import 'record_screen.dart';
 import 'sessions_screen.dart';
 import 'setup_screen.dart';
 import 'sync_screen.dart';
@@ -14,10 +16,11 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  int _tab = 0;
+  // a recording cut off last time: open straight on Record so it's the first thing you see
+  int _tab = recorder.active ? _record : _sessions;
   final _viewer = GlobalKey<WakeWebViewState>();
 
-  static const _sessions = 0, _replay = 1, _setup = 3;
+  static const _sessions = 0, _record = 1, _replay = 2, _setup = 4;
 
   Future<void> _back() async {
     if (_tab == _replay && (await _viewer.currentState?.handleBack() ?? false)) return; // full screen / Dock page
@@ -70,6 +73,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 Expanded(
                   child: IndexedStack(index: _tab, children: [
                     SessionsScreen(onOpen: _open),
+                    RecordScreen(onOpen: _open),
                     // the real viewer, served by the phone's own dock (its Replay / Dock tabs are inside).
                     // The URL changes with demo mode (?demo=1), and the web view reloads on a URL change.
                     WakeWebView(
@@ -91,6 +95,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     onDestinationSelected: (i) => setState(() => _tab = i),
                     destinations: const [
                       NavigationDestination(icon: Icon(Icons.list_alt_outlined), selectedIcon: Icon(Icons.list_alt), label: 'Sessions'),
+                      NavigationDestination(icon: _RecordIcon(selected: false), selectedIcon: _RecordIcon(selected: true), label: 'Record'),
                       NavigationDestination(icon: Icon(Icons.sailing_outlined), selectedIcon: Icon(Icons.sailing), label: 'Replay'),
                       NavigationDestination(icon: Icon(Icons.cloud_sync_outlined), selectedIcon: Icon(Icons.cloud_sync), label: 'Sync'),
                       NavigationDestination(icon: Icon(Icons.settings_outlined), selectedIcon: Icon(Icons.settings), label: 'Setup'),
@@ -101,4 +106,20 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
+}
+
+/// The Record tab's icon: a red dot on it while a sail is being recorded.
+class _RecordIcon extends StatelessWidget {
+  final bool selected;
+  const _RecordIcon({required this.selected});
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+        listenable: recorder,
+        builder: (context, _) => Badge(
+          isLabelVisible: recorder.active,
+          smallSize: 9,
+          backgroundColor: recorder.state == RecState.recording ? const Color(0xFFFF6B6B) : const Color(0xFFFFC72C),
+          child: Icon(selected ? Icons.radio_button_checked : Icons.radio_button_unchecked),
+        ),
+      );
 }

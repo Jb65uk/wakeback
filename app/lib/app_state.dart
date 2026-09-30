@@ -255,6 +255,17 @@ class AppState extends ChangeNotifier {
     store.fleet = v.clamp(0, 16);
     notifyListeners();
   }
+
+  // ------------------------------------------------------------------ recording with the phone
+  /// GPS fixes worse than this many metres are left out of a phone recording.
+  int get recordMaxAcc => _p.getInt('recordMaxAcc') ?? 30;
+  set recordMaxAcc(int v) {
+    _p.setInt('recordMaxAcc', v.clamp(5, 100));
+    notifyListeners();
+  }
+
+  /// A track was added outside the dock (e.g. a phone recording): lists reload.
+  void tracksChanged() => notifyListeners();
 }
 
 AppState get app => AppState.instance;
