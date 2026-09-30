@@ -321,7 +321,7 @@ class DockStore {
       final m = sessionRe.firstMatch(day);
       final vid = m?.group(2) ?? unknownVenue;
       final ow = await _readJson(File('${dayDir(day).path}/owners.json'));
-      final owners = <String, dynamic>{}, sharing = <String, dynamic>{};
+      final owners = <String, dynamic>{}, sharing = <String, dynamic>{}, boats = <String, dynamic>{};
       final mine = <String>[];
       final myEmail = ownerEmail.toLowerCase(), myName = ownerName;
       for (final f in files) {
@@ -329,6 +329,7 @@ class DockStore {
         if (o is Map) {
           owners[f] = pyStr(o['name'] ?? ''); // names only: emails stay here
           sharing[f] = pyStr(o['visibility'] ?? 'friends');
+          if (pyStr(o['boat'] ?? '').isNotEmpty) boats[f] = pyStr(o['boat']);
           final e = pyStr(o['email'] ?? '').toLowerCase();
           // mine: my account's, or (no email known) my name's, or nobody's; never one that came down from the server
           if (o['remote'] != true && (e.isEmpty ? (owners[f] == myName || owners[f] == '') : e == myEmail)) mine.add(f);
@@ -338,7 +339,7 @@ class DockStore {
       }
       out.add({
         'id': day, 'date': m?.group(1) ?? cut(day, 10), 'venue': vid, 'venue_name': venueName(vid, vs), 'venue_new': venueIsNew(vid, vs),
-        'files': files, 'count': files.length, 'races': races, 'owners': owners, 'sharing': sharing, 'mine': mine,
+        'files': files, 'count': files.length, 'races': races, 'owners': owners, 'sharing': sharing, 'boats': boats, 'mine': mine,
         'stats': await sessionStats(dayDir(day), files),
       });
     }
@@ -460,8 +461,11 @@ class DockStore {
   }
 
   // ---- POST /api/upload
+  /// The boat you usually sail: goes on your own tracks as they land unless the upload names one.
+  String defaultBoat = '';
+
   Future<Map<String, dynamic>> upload(String filename, Uint8List bytes,
-      {String puck = '', String sailor = '', String ownerName = '', String ownerEmail = ''}) async {
+      {String puck = '', String sailor = '', String ownerName = '', String ownerEmail = '', String boat = ''}) async {
     var name = tidyName(filename);
     if (!isTrack(name)) {
       throw const DockError(400, 'That file isn\'t a GPX or CSV track. In your sailing app, look for "Export GPX".');
@@ -511,7 +515,9 @@ class DockStore {
         final of = File('${dir.path}/owners.json');
         final j = await _readJson(of);
         final owners = j is Map ? j.cast<String, dynamic>() : <String, dynamic>{};
-        owners[fname] = {'name': oName, if (oEmail.isNotEmpty) 'email': oEmail, 'visibility': 'friends'};
+        var b = cut(boat.trim(), 40);
+        if (b.isEmpty && person && oName == this.ownerName) b = defaultBoat; // my own track: my usual boat
+        owners[fname] = {'name': oName, if (oEmail.isNotEmpty) 'email': oEmail, 'visibility': 'friends', if (b.isNotEmpty) 'boat': b};
         await _writeJson(of, owners);
         if (person) {
           // the owner's own track: name the boat after them unless someone's said otherwise
@@ -605,16 +611,26 @@ class DockStore {
     if (!safeName.hasMatch(day) || !safeName.hasMatch(file)) throw const DockError(400, 'bad name');
     if (!await File('${dayDir(day).path}/$file').exists()) throw const DockError(404, 'not found');
     final vis = body is Map ? body['visibility'] : null;
-    if (vis != 'friends' && vis != 'private') throw const DockError(400, 'nothing to change');
+    final hasBoat = body is Map && body.containsKey('boat');
+    if (vis != 'friends' && vis != 'private' && !hasBoat) throw const DockError(400, 'nothing to change');
     return locked(() async {
       final f = File('${dayDir(day).path}/owners.json');
       final j = await _readJson(f);
       final m = j is Map ? j.cast<String, dynamic>() : <String, dynamic>{};
       final o = m[file] is Map ? (m[file] as Map).cast<String, dynamic>() : <String, dynamic>{'name': ownerName, if (ownerEmail.isNotEmpty) 'email': ownerEmail};
-      o['visibility'] = vis;
+      if (vis == 'friends' || vis == 'private') o['visibility'] = vis;
+      if (hasBoat) {
+        final b = cut(pyStr(body['boat'] ?? '').trim(), 40);
+        if (b.isEmpty) {
+          o.remove('boat');
+        } else {
+          o['boat'] = b;
+        }
+      }
+      o.putIfAbsent('visibility', () => 'friends');
       m[file] = o;
       await _writeJson(f, m);
-      return {'name': pyStr(o['name'] ?? ''), 'visibility': vis};
+      return {'name': pyStr(o['name'] ?? ''), 'visibility': pyStr(o['visibility']), 'boat': pyStr(o['boat'] ?? '')};
     });
   }
 

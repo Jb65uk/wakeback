@@ -9,6 +9,7 @@ import '../dock/badges.dart';
 import '../dock/stats.dart';
 import '../share_card.dart';
 import '../sync/server_sync.dart';
+import '../widgets/boats.dart';
 import '../widgets/common.dart';
 import 'update_card.dart';
 
@@ -249,6 +250,47 @@ class _SessionListState extends State<_SessionList> {
     await _load();
   }
 
+  /// The boat on my tracks in this session ('' if none; the first named one if they differ).
+  String _boat(Map<String, dynamic> s) {
+    final (mine, _) = _mine(s);
+    final boats = (s['boats'] as Map?) ?? const {};
+    for (final f in mine) {
+      final b = '${boats[f] ?? ''}';
+      if (b.isNotEmpty) return b;
+    }
+    return '';
+  }
+
+  Future<void> _setBoat(Map<String, dynamic> s) async {
+    final id = s['id'] as String;
+    final (mine, _) = _mine(s);
+    if (mine.isEmpty) return;
+    final b = await pickBoat(context, current: _boat(s));
+    if (b == null || !mounted) return;
+    setState(() => _busy.add(id));
+    try {
+      for (final f in mine) {
+        await app.store.trackSettings(id, f, {'boat': b});
+      }
+      final sync = serverOrNull();
+      if (sync != null) {
+        var failed = 0;
+        for (final f in mine) {
+          try {
+            await sync.setTrack(id, f, {'boat': b});
+          } on SyncException catch (e) {
+            if (!e.message.contains('404') && !e.message.toLowerCase().contains('not found')) failed++;
+          }
+        }
+        if (failed > 0 && mounted) toast(context, 'Changed here; the server didn\'t take it for $failed track${failed > 1 ? 's' : ''} — try again after a Sync', error: true);
+      }
+    } catch (e) {
+      if (mounted) toast(context, '$e', error: true);
+    }
+    _busy.remove(id);
+    await _load();
+  }
+
   /// My tracks in this session, and whether any of them is shared with friends.
   (List<String>, bool) _mine(Map<String, dynamic> s) {
     final mine = ((s['mine'] as List?) ?? const []).cast<String>();
@@ -357,6 +399,19 @@ class _SessionListState extends State<_SessionList> {
                         _Fact(Icons.directions_boat_outlined, '$files track${files == 1 ? '' : 's'}${others > 0 && mine.isNotEmpty ? ' ($others mates)' : ''}'),
                         if (races > 0) _Fact(Icons.flag_outlined, '$races race${races == 1 ? '' : 's'}'),
                       ]),
+                      if (mine.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Builder(builder: (context) {
+                          final b = _boat(s);
+                          return ActionChip(
+                            avatar: Icon(Icons.sailing_outlined, size: 16, color: b.isEmpty ? t.colorScheme.onSurfaceVariant : t.colorScheme.primary),
+                            label: Text(b.isEmpty ? 'Which boat?' : b),
+                            labelStyle: t.textTheme.labelMedium?.copyWith(color: b.isEmpty ? t.colorScheme.onSurfaceVariant : null),
+                            visualDensity: VisualDensity.compact,
+                            onPressed: _busy.contains(id) ? null : () => _setBoat(s),
+                          );
+                        }),
+                      ],
                     ]),
                   ),
                   PopupMenuButton<String>(

@@ -27,8 +27,8 @@ class DayCompare {
   final List<String> phoneOnly, serverOnly, both;
 
   /// Who sent each of the server's tracks (names only) and how they're shared, so downloads keep both.
-  final Map<String, String> serverOwners, serverSharing;
-  const DayCompare(this.day, this.phoneOnly, this.serverOnly, this.both, {this.serverOwners = const {}, this.serverSharing = const {}});
+  final Map<String, String> serverOwners, serverSharing, serverBoats;
+  const DayCompare(this.day, this.phoneOnly, this.serverOnly, this.both, {this.serverOwners = const {}, this.serverSharing = const {}, this.serverBoats = const {}});
   bool get onPhone => phoneOnly.isNotEmpty || both.isNotEmpty;
   bool get onServer => serverOnly.isNotEmpty || both.isNotEmpty;
   bool get tracksInSync => phoneOnly.isEmpty && serverOnly.isEmpty;
@@ -119,8 +119,11 @@ class ServerSync {
   }
 
   /// Change how one of your tracks on the server is shared ('friends' / 'private').
-  Future<void> setSharing(String day, String file, String visibility) async {
-    await _go(http.post(_u('/api/sessions/$day/tracks/$file'), headers: _authJson, body: jsonEncode({'visibility': visibility})));
+  Future<void> setSharing(String day, String file, String visibility) => setTrack(day, file, {'visibility': visibility});
+
+  /// Change a track's settings on the server (visibility, boat).
+  Future<void> setTrack(String day, String file, Map<String, dynamic> settings) async {
+    await _go(http.post(_u('/api/sessions/$day/tracks/$file'), headers: _authJson, body: jsonEncode(settings)));
   }
 
   /// Remove one of my tracks from the server (the owner or the admin only; 404 = it was never there).
@@ -177,6 +180,9 @@ class ServerSync {
     final sharing = {
       for (final s in ss) '${s['id']}': {for (final e in ((s['sharing'] as Map?) ?? const {}).entries) '${e.key}': '${e.value}'}
     };
+    final boats = {
+      for (final s in ss) '${s['id']}': {for (final e in ((s['boats'] as Map?) ?? const {}).entries) '${e.key}': '${e.value}'}
+    };
     final phone = {for (final s in await store.sessions()) '${s['id']}': ((s['files'] as List?) ?? const []).map((e) => '$e').toSet()};
     final days = {...server.keys, ...phone.keys}.toList()..sort((a, b) => b.compareTo(a));
     return [
@@ -188,6 +194,7 @@ class ServerSync {
           ((phone[d] ?? <String>{}).intersection(server[d] ?? <String>{})).toList()..sort(),
           serverOwners: owners[d] ?? const {},
           serverSharing: sharing[d] ?? const {},
+          serverBoats: boats[d] ?? const {},
         ),
     ];
   }
@@ -202,6 +209,7 @@ class ServerSync {
       req.fields['owner_name'] = '${owner['name']}';
       if ('${owner['email'] ?? ''}'.isNotEmpty) req.fields['owner_email'] = '${owner['email']}';
       if (owner['visibility'] == 'private') req.fields['visibility'] = 'private';
+      if ('${owner['boat'] ?? ''}'.isNotEmpty) req.fields['boat'] = '${owner['boat']}';
     }
     final r = await _go(req.send().then(http.Response.fromStream), timeout: const Duration(minutes: 3));
     // The server files by the track's own timestamp; if it put it somewhere else (e.g. a track with no
@@ -235,7 +243,8 @@ class ServerSync {
         rep.down++;
         final who = c.serverOwners[f];
         // remember it came from the server, so it's never uploaded back as ours
-        await store.setOwner(day, f, {'name': who ?? '', 'visibility': c.serverSharing[f] ?? 'friends', 'remote': true});
+        final boat = c.serverBoats[f];
+        await store.setOwner(day, f, {'name': who ?? '', 'visibility': c.serverSharing[f] ?? 'friends', if (boat != null && boat.isNotEmpty) 'boat': boat, 'remote': true});
       }
     }
 

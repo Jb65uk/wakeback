@@ -64,7 +64,8 @@ class AppState extends ChangeNotifier {
     s
       ..ownerName = profileName
       ..ownerEmail = profileEmail
-      ..ownerIsPerson = true;
+      ..ownerIsPerson = true
+      ..defaultBoat = defaultBoat;
     return s;
   }
 
@@ -254,6 +255,27 @@ class AppState extends ChangeNotifier {
     _p.setInt('fleet', v.clamp(0, 16));
     store.fleet = v.clamp(0, 16);
     notifyListeners();
+  }
+
+  // ------------------------------------------------------------------ boats
+  /// The boats you sail ("Solo 5843", "Laser"), first is the one you usually sail.
+  List<String> get boats => _p.getStringList('boats') ?? const [];
+  String get defaultBoat => boats.isEmpty ? '' : boats.first;
+  Future<void> setBoats(List<String> v) async {
+    final clean = <String>[];
+    for (final b in v) {
+      final t = b.trim();
+      if (t.isNotEmpty && !clean.contains(t) && clean.length < 12) clean.add(t.length > 40 ? t.substring(0, 40) : t);
+    }
+    await _p.setStringList('boats', clean);
+    store.defaultBoat = defaultBoat;
+    notifyListeners();
+  }
+
+  /// A boat named on a session that isn't in the list yet: keep it, so it's there next time.
+  Future<void> rememberBoat(String b) async {
+    if (b.trim().isEmpty || boats.contains(b.trim())) return;
+    await setBoats([...boats, b.trim()]);
   }
 
   // ------------------------------------------------------------------ recording with the phone

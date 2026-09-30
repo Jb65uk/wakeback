@@ -111,6 +111,9 @@ class _RecordScreenState extends State<RecordScreen> {
             const SizedBox(height: 10),
             if (r.recovered)
               const Hint('This recording was cut off (the app closed or the phone restarted). Resume to carry on, or Finish to save what\'s there.')
+            else if (st == RecState.idle && app.boats.isEmpty)
+              const Hint('Recording keeps going with the screen off (you\'ll see a WakeBack notification). '
+                  'Add your boat in Setup → Your boats and it goes on every sail you record.')
             else if (st == RecState.idle)
               const Hint('Recording keeps going with the screen off or another app open (you\'ll see a WakeBack notification). '
                   'Don\'t swipe WakeBack away from recent apps while you sail.')
@@ -307,6 +310,7 @@ class _SavedCard extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(16, 12, 12, 8),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(where, style: t.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
+          if (app.defaultBoat.isNotEmpty) Text(app.defaultBoat, style: TextStyle(color: t.colorScheme.onSurfaceVariant)),
           const SizedBox(height: 4),
           Text('${log.distNm.toStringAsFixed(2)} nm · ${_hms(ms)} · top ${_f1(log.maxKn)} kn · avg ${_f1(avg)} kn',
               style: TextStyle(color: t.colorScheme.onSurfaceVariant, fontFeatures: _tab)),

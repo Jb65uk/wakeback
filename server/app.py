@@ -199,6 +199,7 @@ def visible_files(d, files, user, friends):
         # names only: owners' emails stay on the server
         'owners': {f: owners[f].get('name', '') for f in seen if f in owners},
         'sharing': {f: (owners[f].get('visibility') or 'friends') for f in seen if f in owners},
+        'boats': {f: owners[f]['boat'] for f in seen if f in owners and owners[f].get('boat')},
         'mine': [f for f in seen if f not in owners or not owners[f].get('email') or owners[f].get('email', '').lower() == me] if accounts.ENABLED else seen,
     }
 
@@ -244,6 +245,7 @@ def upload():
     owner_name = request.form.get('owner_name', '').strip()[:40]
     owner_email = request.form.get('owner_email', '').strip()[:120].lower()
     visibility = 'private' if request.form.get('visibility') == 'private' else 'friends'
+    boat = request.form.get('boat', '').strip()[:40]   # which boat was sailed (Solo 5843, the Laser...)
     if accounts.ENABLED:
         # the track belongs to whoever's signed in, unless it's a friend's own puck (a known account)
         u, known = current_user(), accounts.users_by_email()
@@ -277,7 +279,7 @@ def upload():
         # owner: whose puck/phone sent it (can edit/delete it later). Sailor: who was in the boat (crew).
         if owner_name:
             op = os.path.join(dest_dir, 'owners.json'); owners = read_json(op, {})
-            owners[fname] = {'name': owner_name, **({'email': owner_email} if owner_email else {}), 'visibility': visibility}
+            owners[fname] = {'name': owner_name, **({'email': owner_email} if owner_email else {}), 'visibility': visibility, **({'boat': boat} if boat else {})}
             write_json(op, owners)
             # the owner's own track: name the boat after them unless someone's said otherwise
             if owner_name != DOCK_OWNER:
@@ -322,6 +324,11 @@ def track_settings(day, name):
         if not can_edit(owners.get(name)): return jsonify(error='Only the owner (or the admin) can change this track'), 403
         changes = {}
         if b.get('visibility') in ('friends', 'private'): o['visibility'] = b['visibility']; changes['visibility'] = b['visibility']
+        if 'boat' in b:
+            boat = str(b.get('boat') or '').strip()[:40]
+            if boat: o['boat'] = boat
+            else: o.pop('boat', None)
+            changes['boat'] = boat
         if 'owner_email' in b:
             if not is_admin(): return jsonify(error='Only the admin can change who owns a track'), 403
             email = str(b['owner_email'] or '').strip().lower()
@@ -336,7 +343,7 @@ def track_settings(day, name):
         o.setdefault('visibility', 'friends'); o.setdefault('name', '')
         owners[name] = o; write_json(op, owners)
     if accounts.ENABLED: accounts.audit('track_settings', f'{day}/{name}', changes)
-    return jsonify({'name': o.get('name', ''), 'visibility': o.get('visibility', 'friends'), **({'email': o['email']} if is_admin() and o.get('email') else {})})
+    return jsonify({'name': o.get('name', ''), 'visibility': o.get('visibility', 'friends'), 'boat': o.get('boat', ''), **({'email': o['email']} if is_admin() and o.get('email') else {})})
 
 def clean_marks(ms):
     """Course marks: name, position, and which side to leave them (port = red, stbd = green)."""

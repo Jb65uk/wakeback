@@ -126,4 +126,35 @@ void main() {
     expect(rows.first.ownerName, 'James');
     await dir.delete(recursive: true);
   });
+
+  test('your usual boat goes on your own tracks; a session\'s boat can be changed', () async {
+    final dir = await Directory.systemTemp.createTemp('wakeback_boat');
+    final store = DockStore(dir);
+    await store.init();
+    store
+      ..ownerName = 'James'
+      ..ownerIsPerson = true
+      ..defaultBoat = 'Solo 5843';
+    final l = TrackLog();
+    for (final f in reach(t0, 61, 5)) {
+      l.add(f, recording: true);
+    }
+    final res = await store.upload('${l.fileBase()}.csv', utf8.encode(l.toCsv()));
+    final day = '${res['session']}', file = '${res['file']}';
+    var ss = await store.sessions();
+    expect((ss.single['boats'] as Map)[file], 'Solo 5843');
+    // a mate's track (different owner) doesn't get my boat
+    final r2 = await store.upload('puck3_${l.fileBase()}.csv', utf8.encode(l.toCsv()), ownerName: 'Dave');
+    ss = await store.sessions();
+    expect((ss.single['boats'] as Map).containsKey(r2['file']), false);
+    // change it, then clear it
+    expect((await store.trackSettings(day, file, {'boat': 'Laser'}))['boat'], 'Laser');
+    ss = await store.sessions();
+    expect((ss.single['boats'] as Map)[file], 'Laser');
+    expect((ss.single['sharing'] as Map)[file], 'friends'); // visibility untouched
+    await store.trackSettings(day, file, {'boat': ''});
+    ss = await store.sessions();
+    expect((ss.single['boats'] as Map).containsKey(file), false);
+    await dir.delete(recursive: true);
+  });
 }

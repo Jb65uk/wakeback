@@ -9,6 +9,7 @@ import '../auth/auth_api.dart';
 import '../demo/fake_race.dart';
 import '../dock/pocket_dock.dart';
 import '../dock/store.dart';
+import '../widgets/boats.dart';
 import '../widgets/common.dart';
 import 'friends_section.dart';
 import 'offline_maps.dart';
@@ -119,6 +120,7 @@ class _SetupScreenState extends State<SetupScreen> {
           const SectionLabel('You'),
           if (app.signedIn) _accountCard(t) else _noAccountCard(t),
           if (app.signedIn) const FriendsSection(),
+          const BoatsCard(),
 
           // ------------------------------------------------ this phone as the dock
           const SectionLabel('This phone is the dock'),

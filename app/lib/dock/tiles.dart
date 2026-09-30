@@ -124,6 +124,44 @@ class TileCache {
     return (bytes, n);
   }
 
+  /// The tiles a venue download covers, as (layer, z, x, y).
+  List<(String, int, int, int)> _venueTiles(double lat, double lon, double radiusM, {int z0 = 12, int z1 = 17, List<String> layers = const ['sat', 'osm']}) => [
+        for (final layer in layers)
+          if (tileLayers[layer] != null)
+            for (final (z, x, y) in tilesAround(lat, lon, radiusM, z0, math.min(z1, tileLayers[layer]!.maxZoom))) (layer, z, x, y),
+      ];
+
+  /// How much of a venue's download is on the phone: (bytes, tiles here, tiles in a full download).
+  Future<(int, int, int)> venueUsage(double lat, double lon, {double radiusM = 2500}) async {
+    final want = _venueTiles(lat, lon, radiusM);
+    var bytes = 0, n = 0;
+    for (final (layer, z, x, y) in want) {
+      final f = _file(layer, z, x, y);
+      try {
+        if (await f.exists()) {
+          bytes += await f.length();
+          n++;
+        }
+      } catch (_) {}
+    }
+    return (bytes, n, want.length);
+  }
+
+  /// Delete one venue's tiles (the same set a download fetches). Returns how many went.
+  Future<int> deleteVenue(double lat, double lon, {double radiusM = 2500}) async {
+    var n = 0;
+    for (final (layer, z, x, y) in _venueTiles(lat, lon, radiusM)) {
+      final f = _file(layer, z, x, y);
+      try {
+        if (await f.exists()) {
+          await f.delete();
+          n++;
+        }
+      } catch (_) {}
+    }
+    return n;
+  }
+
   Future<void> clear() async {
     if (await dir.exists()) await dir.delete(recursive: true);
   }

@@ -239,7 +239,7 @@ class PocketDock {
     }
     if (fileName == null || fileName.isEmpty || fileBytes == null) throw const DockError(400, 'no file');
     return _json(req, await store.upload(fileName, fileBytes,
-        puck: fields['puck'] ?? '', sailor: fields['sailor'] ?? '', ownerName: fields['owner_name'] ?? '', ownerEmail: fields['owner_email'] ?? ''));
+        puck: fields['puck'] ?? '', sailor: fields['sailor'] ?? '', ownerName: fields['owner_name'] ?? '', ownerEmail: fields['owner_email'] ?? '', boat: fields['boat'] ?? ''));
   }
 
   // ------------------------------------------------------------------ phone-specific bits
