@@ -235,13 +235,18 @@ class _LiveCard extends StatelessWidget {
     final muted = t.colorScheme.onSurfaceVariant;
     final rec = r.state == RecState.recording;
     Widget lab(String s) => Text(s.toUpperCase(), style: t.textTheme.labelSmall?.copyWith(color: muted, letterSpacing: 1.1, fontWeight: FontWeight.w600));
-    Widget val(String v, [String unit = '']) => Text.rich(
-          TextSpan(children: [
-            TextSpan(text: v, style: const TextStyle(fontSize: 30, fontWeight: FontWeight.w600, height: 1.05)),
-            if (unit.isNotEmpty) TextSpan(text: ' $unit', style: TextStyle(fontSize: 15, color: muted)),
-          ]),
-          style: const TextStyle(fontFeatures: _tab),
-          maxLines: 1,
+    // shrinks to fit its cell rather than running into the next one
+    Widget val(String v, [String unit = '']) => FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: Text.rich(
+            TextSpan(children: [
+              TextSpan(text: v, style: const TextStyle(fontSize: 30, fontWeight: FontWeight.w600, height: 1.05)),
+              if (unit.isNotEmpty) TextSpan(text: ' $unit', style: TextStyle(fontSize: 15, color: muted)),
+            ]),
+            style: const TextStyle(fontFeatures: _tab),
+            maxLines: 1,
+          ),
         );
     Widget cell(String label, String v, [String unit = '']) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [lab(label), val(v, unit)]);
     final hdg = l.hdg;
@@ -273,9 +278,11 @@ class _LiveCard extends StatelessWidget {
           ]),
           const Divider(height: 26),
           Row(children: [
-            Expanded(child: cell('Time', _hms(r.elapsedMs))),
-            Expanded(child: cell('Distance', l.distNm.toStringAsFixed(2), 'nm')),
-            Expanded(child: cell('Average', _f1(r.avgKn), 'kn')),
+            Expanded(flex: 5, child: cell('Time', _hms(r.elapsedMs))),
+            const SizedBox(width: 12),
+            Expanded(flex: 4, child: cell('Distance', l.distNm.toStringAsFixed(2), 'nm')),
+            const SizedBox(width: 12),
+            Expanded(flex: 4, child: cell('Average', _f1(r.avgKn), 'kn')),
           ]),
         ]),
       ),
