@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#13293A">
+<title>WakeBack Record</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+/* One-screen recorder: live numbers on top, map in the middle, controls pinned to the thumb */
+:root{
+  --bg:#13293A; --card:#1C3A4F; --deep:#0F2230; --ink:#EAF2F5; --muted:#8FAAB8; --line:rgba(234,242,245,.13);
+  --signal:#FFC72C; --bad:#FF6B6B; --ok:#6FD3A4;
+  --num:'Barlow Condensed','Arial Narrow',sans-serif; --body:'Barlow',system-ui,-apple-system,'Segoe UI',sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15px;line-height:1.45}
+button,input{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--signal);outline-offset:2px}
+.wrap{max-width:720px;margin:0 auto;padding:calc(14px + env(safe-area-inset-top)) 16px calc(28px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:16px}
+header{display:flex;align-items:center;gap:12px}
+h1{font-family:var(--num);font-weight:700;font-size:30px;line-height:1;margin:0}
+h1 span{color:var(--signal)}
+h1 small{color:var(--muted);font-weight:500;font-size:19px;margin-left:6px}
+h2{font-family:var(--num);font-weight:600;font-size:22px;margin:0}
+.gps{margin-left:auto;display:inline-flex;align-items:center;gap:7px;font-size:13px;font-weight:600;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:4px 11px;white-space:nowrap}
+.gps i{width:9px;height:9px;border-radius:50%;background:var(--muted)}
+.gps.good i{background:var(--ok)} .gps.fair i{background:var(--signal)} .gps.bad i{background:var(--bad)}
+
+/* live numbers */
+.live{background:var(--card);border-radius:12px;padding:14px 16px 16px;display:grid;grid-template-columns:1.35fr 1fr;gap:6px 16px}
+.big{grid-row:span 2;display:flex;flex-direction:column;justify-content:center}
+.big b{font-family:var(--num);font-weight:700;font-size:clamp(76px,24vw,124px);line-height:.86;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.big b.rec{color:var(--signal)}
+.lab{font-size:12px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.cell{display:flex;flex-direction:column;justify-content:center;min-width:0}
+.cell b{font-family:var(--num);font-weight:600;font-size:34px;line-height:1;font-variant-numeric:tabular-nums}
+.cell b u{text-decoration:none;font-size:17px;color:var(--muted);font-weight:500;margin-left:3px}
+.row3{grid-column:1/-1;display:grid;grid-template-columns:repeat(3,1fr);gap:10px;border-top:1px solid var(--line);padding-top:10px;margin-top:6px}
+
+.map{height:clamp(220px,40vh,420px);border-radius:12px;overflow:hidden;background:var(--deep);position:relative}
+#map{position:absolute;inset:0}
+#trace{position:absolute;inset:0;width:100%;height:100%;display:none}
+.maphint{position:absolute;left:10px;bottom:10px;z-index:500;font-size:12px;color:var(--muted);background:rgba(15,34,48,.85);padding:3px 8px;border-radius:6px}
+.follow{position:absolute;right:10px;top:10px;z-index:500;background:var(--deep);border:1px solid var(--line);border-radius:8px;padding:5px 10px;font-size:13px;font-weight:600;color:var(--muted)}
+.follow.on{color:var(--signal);border-color:var(--signal)}
+.leaflet-container{background:var(--deep);font-family:var(--body)}
+
+/* controls */
+.controls{display:flex;gap:10px}
+.btn{flex:1;min-height:58px;border-radius:12px;border:1px solid var(--line);background:transparent;font-family:var(--num);font-weight:700;font-size:24px;letter-spacing:.02em}
+.btn.go{background:var(--signal);color:var(--bg);border-color:var(--signal)}
+.btn.stop{border-color:var(--bad);color:var(--bad)}
+.btn.stop.arm{background:var(--bad);color:var(--bg)}
+.btn:disabled{opacity:.4;cursor:default}
+.note{font-size:13.5px;color:var(--muted);margin:0}
+.note.w{color:var(--signal);font-weight:600}
+.note.b{color:var(--bad);font-weight:600}
+
+/* saved sails */
+.list{display:flex;flex-direction:column;gap:10px}
+.sail{background:var(--card);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:10px}
+.sail .t{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.sail .t strong{font-family:var(--num);font-size:22px;font-weight:600}
+.sail .t span{color:var(--muted);font-size:13.5px}
+.stats{display:flex;flex-wrap:wrap;gap:4px 18px;font-size:14px;color:var(--muted)}
+.stats b{font-family:var(--num);font-size:21px;color:var(--ink);font-weight:600;margin-right:3px;font-variant-numeric:tabular-nums}
+.acts{display:flex;flex-wrap:wrap;gap:8px}
+.a{border:1px solid var(--line);background:transparent;border-radius:8px;padding:7px 13px;font-weight:600;font-size:14px}
+.a.pri{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.a.del{color:var(--bad);border-color:transparent;margin-left:auto}
+.a.del.arm{background:var(--bad);color:var(--bg)}
+.a:disabled{opacity:.5}
+.msg{font-size:13px;color:var(--muted)} .msg.ok{color:var(--ok)} .msg.b{color:var(--bad)}
+.empty{border:1px dashed var(--line);border-radius:12px;padding:18px;color:var(--muted);text-align:center}
+.foot{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;font-size:13px;color:var(--muted)}
+.foot label{display:flex;align-items:center;gap:6px}
+.foot input[type=number]{width:62px;background:var(--deep);border:1px solid var(--line);border-radius:6px;padding:3px 6px}
+@media (prefers-reduced-motion:no-preference){ .big b.rec{animation:none} .gps.rec i{animation:blink 1.2s infinite} @keyframes blink{50%{opacity:.25}} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Wake<span>Back</span><small>record</small></h1>
+    <div class="gps" id="gps"><i></i><span id="gpsTxt">GPS off</span></div>
+  </header>
+
+  <section class="live" aria-label="Live">
+    <div class="big"><span class="lab">Speed · kn</span><b id="sog">0.0</b></div>
+    <div class="cell"><span class="lab">Heading</span><b id="hdg">—<u>°</u></b></div>
+    <div class="cell"><span class="lab">Top speed</span><b id="max">0.0<u>kn</u></b></div>
+    <div class="row3">
+      <div class="cell"><span class="lab">Time</span><b id="dur">0:00:00</b></div>
+      <div class="cell"><span class="lab">Distance</span><b id="dist">0.00<u>nm</u></b></div>
+      <div class="cell"><span class="lab">Average</span><b id="avg">0.0<u>kn</u></b></div>
+    </div>
+  </section>
+
+  <div class="map">
+    <div id="map"></div>
+    <canvas id="trace"></canvas>
+    <button class="follow on" id="follow" type="button">Follow</button>
+    <span class="maphint" id="maphint">Waiting for GPS…</span>
+  </div>
+
+  <div class="controls">
+    <button class="btn go" id="startBtn" type="button">Start</button>
+    <button class="btn" id="pauseBtn" type="button" hidden>Pause</button>
+    <button class="btn stop" id="stopBtn" type="button" hidden>Stop</button>
+  </div>
+  <p class="note" id="note">Keep WakeBack open with the screen on while you sail. Phones stop GPS for web pages when the screen locks.</p>
+
+  <section class="list" aria-label="Saved sails">
+    <h2>Saved sails</h2>
+    <div id="sails"></div>
+  </section>
+
+  <div class="foot">
+    <label for="minAcc">Ignore fixes worse than <input type="number" id="minAcc" min="5" max="100" step="5" value="30"> m</label>
+    <span>Tracks stay on this phone until you save or send them.</span>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+'use strict';
+const MS2KN = 1.943844, M2NM = 1 / 1852;
+const $ = id => document.getElementById(id);
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch { return false; } },
+  del(k) { try { localStorage.removeItem(k); } catch {} }
+};
+
+// ---------- state ----------
+let watchId = null, wakeLock = null, follow = true;
+let rec = null;              // {id, start, seg, pts:[[t,lat,lon,sogKn,hdg,acc,seg]], dist, max, moving}
+let state = 'idle';          // idle | rec | paused
+let last = null;             // last accepted fix (for computed speed when coords.speed is null)
+let shown = 0;               // smoothed speed shown
+let minAcc = +store.get('wakeback-rec-minacc', 30) || 30;
+$('minAcc').value = minAcc;
+$('minAcc').onchange = e => { minAcc = Math.max(5, Math.min(100, +e.target.value || 30)); store.set('wakeback-rec-minacc', minAcc); };
+
+// ---------- geometry ----------
+function hav(a, b, c, d) {
+  const R = 6371008.8, r = Math.PI / 180;
+  const dLat = (c - a) * r, dLon = (d - b) * r;
+  const s = Math.sin(dLat / 2) ** 2 + Math.cos(a * r) * Math.cos(c * r) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
+}
+function bearing(a, b, c, d) {
+  const r = Math.PI / 180, y = Math.sin((d - b) * r) * Math.cos(c * r);
+  const x = Math.cos(a * r) * Math.sin(c * r) - Math.sin(a * r) * Math.cos(c * r) * Math.cos((d - b) * r);
+  return (Math.atan2(y, x) / r + 360) % 360;
+}
+
+// ---------- formatting ----------
+const f1 = n => (Math.round(n * 10) / 10).toFixed(1);
+function hms(ms) { const s = Math.max(0, Math.floor(ms / 1000)); return `${Math.floor(s / 3600)}:${String(Math.floor(s / 60) % 60).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; }
+function hm(ms) { const m = Math.round(ms / 60000); return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')}`; }
+const dateTxt = t => new Date(t).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+const timeTxt = t => new Date(t).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+
+// ---------- map ----------
+let map = null, line = null, dot = null, segLines = [];
+const hasLeaflet = typeof L !== 'undefined';
+if (hasLeaflet) {
+  map = L.map('map', { zoomControl: false, attributionControl: true }).setView([53.65, -3.02], 13);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+  dot = L.circleMarker([0, 0], { radius: 8, color: '#13293A', weight: 3, fillColor: '#FFC72C', fillOpacity: 1 });
+  map.on('dragstart', () => setFollow(false));
+} else {
+  $('map').hidden = true; $('trace').style.display = 'block';
+}
+function setFollow(on) { follow = on; $('follow').classList.toggle('on', on); }
+$('follow').onclick = () => { setFollow(!follow); if (follow && last && map) map.panTo([last.lat, last.lon]); };
+
+function redrawTrack() {
+  if (map) {
+    segLines.forEach(l => l.remove()); segLines = [];
+    if (!rec) return;
+    const segs = {};
+    rec.pts.forEach(p => (segs[p[6]] ||= []).push([p[1], p[2]]));
+    Object.values(segs).forEach(s => segLines.push(L.polyline(s, { color: '#FFC72C', weight: 4, opacity: .95 }).addTo(map)));
+    line = segLines[segLines.length - 1] || null;
+  } else drawCanvas();
+}
+function addToTrack(p) {
+  if (map) {
+    if (!line || line._seg !== p[6]) { line = L.polyline([], { color: '#FFC72C', weight: 4, opacity: .95 }).addTo(map); line._seg = p[6]; segLines.push(line); }
+    line.addLatLng([p[1], p[2]]);
+  } else drawCanvas();
+}
+function drawCanvas() {
+  const c = $('trace'), dpr = devicePixelRatio || 1, w = c.clientWidth, h = c.clientHeight;
+  c.width = w * dpr; c.height = h * dpr; const g = c.getContext('2d'); g.scale(dpr, dpr); g.clearRect(0, 0, w, h);
+  const pts = rec ? rec.pts : []; if (pts.length < 2) return;
+  let a = Infinity, b = -Infinity, cc = Infinity, d = -Infinity;
+  pts.forEach(p => { a = Math.min(a, p[1]); b = Math.max(b, p[1]); cc = Math.min(cc, p[2]); d = Math.max(d, p[2]); });
+  const k = Math.cos(((a + b) / 2) * Math.PI / 180), sx = (d - cc) * k || 1e-6, sy = (b - a) || 1e-6;
+  const s = Math.min((w - 30) / sx, (h - 30) / sy);
+  const X = lon => 15 + (lon - cc) * k * s + ((w - 30) - sx * s) / 2, Y = lat => h - 15 - (lat - a) * s - ((h - 30) - sy * s) / 2;
+  g.strokeStyle = '#FFC72C'; g.lineWidth = 3; g.lineJoin = 'round'; g.beginPath();
+  pts.forEach((p, i) => (i && p[6] === pts[i - 1][6] ? g.lineTo : g.moveTo).call(g, X(p[2]), Y(p[1]))); g.stroke();
+  const e = pts[pts.length - 1]; g.fillStyle = '#FFC72C'; g.beginPath(); g.arc(X(e[2]), Y(e[1]), 6, 0, 7); g.fill();
+}
+
+// ---------- GPS ----------
+function gpsBadge(acc) {
+  const el = $('gps');
+  el.className = 'gps' + (acc == null ? '' : acc <= 10 ? ' good' : acc <= minAcc ? ' fair' : ' bad') + (state === 'rec' ? ' rec' : '');
+  $('gpsTxt').textContent = acc == null ? (watchId == null ? 'GPS off' : 'Finding GPS') : `± ${Math.round(acc)} m`;
+}
+function startGps() {
+  if (watchId != null) return true;
+  if (!('geolocation' in navigator)) { note('This browser has no GPS access.', 'b'); return false; }
+  if (!window.isSecureContext) { note('Open this page over https (your WakeBack server) so the phone will share its GPS.', 'b'); return false; }
+  watchId = navigator.geolocation.watchPosition(onFix, onGpsErr, { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
+  gpsBadge(null); return true;
+}
+function stopGps() { if (watchId != null) navigator.geolocation.clearWatch(watchId); watchId = null; gpsBadge(null); }
+function onGpsErr(e) {
+  if (e.code === 1) { note('Location is blocked. Allow location for this site in the browser settings, then tap Start again.', 'b'); stopGps(); setState('idle', true); }
+  else if (e.code === 3) gpsBadge(null);
+  else note('No GPS signal yet. Stay out in the open.', 'w');
+}
+function onFix(pos) {
+  const c = pos.coords, t = pos.timestamp || Date.now();
+  gpsBadge(c.accuracy);
+  if (c.accuracy > minAcc) { $('maphint').textContent = `Weak fix (± ${Math.round(c.accuracy)} m), waiting`; return; }
+  $('maphint').textContent = state === 'rec' ? 'Recording' : state === 'paused' ? 'Paused' : 'Ready';
+
+  let sog = null, hdg = (c.heading != null && !isNaN(c.heading)) ? c.heading : null;
+  if (c.speed != null && !isNaN(c.speed)) sog = c.speed * MS2KN;
+  let moved = 0;
+  if (last) {
+    moved = hav(last.lat, last.lon, c.latitude, c.longitude);
+    const dt = (t - last.t) / 1000;
+    if (sog == null && dt > 0) sog = moved / dt * MS2KN;
+    if (hdg == null && moved > 3) hdg = bearing(last.lat, last.lon, c.latitude, c.longitude);
+  }
+  sog = Math.max(0, sog || 0);
+  if (sog > 40) return;                          // a dinghy isn't doing 40 kn: bad fix
+  shown = shown * 0.4 + sog * 0.6;
+  $('sog').textContent = f1(shown);
+  if (hdg != null) $('hdg').innerHTML = `${String(Math.round(hdg) % 360).padStart(3, '0')}<u>°</u>`;
+
+  if (map) {
+    dot.setLatLng([c.latitude, c.longitude]); if (!map.hasLayer(dot)) dot.addTo(map);
+    if (follow) map.setView([c.latitude, c.longitude], Math.max(map.getZoom(), 15), { animate: false });
+  }
+
+  if (state === 'rec') {
+    // count distance only when the move is bigger than the fix wobble
+    const lastRec = rec.pts[rec.pts.length - 1];
+    const d = lastRec && lastRec[6] === rec.seg ? hav(lastRec[1], lastRec[2], c.latitude, c.longitude) : 0;
+    if (lastRec && lastRec[6] === rec.seg && d < Math.max(2, c.accuracy * 0.5) && sog < 0.8 && t - lastRec[0] < 10000) { last = { t, lat: c.latitude, lon: c.longitude }; tick(); return; }
+    const p = [t, +c.latitude.toFixed(7), +c.longitude.toFixed(7), +sog.toFixed(2), hdg == null ? null : Math.round(hdg), Math.round(c.accuracy), rec.seg];
+    rec.dist += d; rec.max = Math.max(rec.max, sog);
+    if (lastRec && lastRec[6] === rec.seg) rec.moving += (t - lastRec[0]);
+    rec.pts.push(p); addToTrack(p);
+    if (rec.pts.length % 5 === 0) saveDraft();
+    tick();
+  }
+  last = { t, lat: c.latitude, lon: c.longitude };
+}
+
+// ---------- timing / display ----------
+let timer = null;
+function elapsed() { return rec ? rec.moving : 0; }
+function tick() {
+  if (!rec) return;
+  const ms = elapsed();
+  $('dur').textContent = hms(ms);
+  $('dist').innerHTML = `${(rec.dist * M2NM).toFixed(2)}<u>nm</u>`;
+  $('max').innerHTML = `${f1(rec.max)}<u>kn</u>`;
+  $('avg').innerHTML = `${f1(ms > 0 ? rec.dist * M2NM / (ms / 3600000) : 0)}<u>kn</u>`;
+}
+
+// ---------- wake lock ----------
+async function lockScreen() {
+  try { if ('wakeLock' in navigator && !wakeLock) { wakeLock = await navigator.wakeLock.request('screen'); wakeLock.addEventListener('release', () => wakeLock = null); } } catch {}
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && state !== 'idle') { lockScreen(); startGps(); }
+  if (document.visibilityState === 'hidden' && state === 'rec') saveDraft();
+});
+
+// ---------- controls ----------
+function note(t, cls = '') { const n = $('note'); n.textContent = t; n.className = 'note' + (cls ? ' ' + cls : ''); }
+function setState(s, quiet) {
+  state = s;
+  $('startBtn').hidden = s !== 'idle';
+  $('pauseBtn').hidden = $('stopBtn').hidden = s === 'idle';
+  $('pauseBtn').textContent = s === 'paused' ? 'Resume' : 'Pause';
+  $('pauseBtn').className = 'btn' + (s === 'paused' ? ' go' : '');
+  $('sog').classList.toggle('rec', s === 'rec');
+  disarmStop();
+  if (!quiet) note(s === 'rec' ? 'Recording. Keep the screen on and WakeBack open.' : s === 'paused' ? 'Paused. Nothing is added to the track until you resume.' : 'Keep WakeBack open with the screen on while you sail. Phones stop GPS for web pages when the screen locks.', s === 'rec' ? 'w' : '');
+  gpsBadge(null);
+}
+$('startBtn').onclick = () => {
+  if (!startGps()) return;
+  rec = { id: Date.now(), start: Date.now(), seg: 0, pts: [], dist: 0, max: 0, moving: 0 };
+  redrawTrack(); setState('rec'); lockScreen(); tick(); saveDraft();
+};
+$('pauseBtn').onclick = () => {
+  if (state === 'rec') { setState('paused'); saveDraft(); }
+  else { rec.seg++; setState('rec'); lockScreen(); }
+};
+let stopTimer = null;
+function disarmStop() { clearTimeout(stopTimer); $('stopBtn').classList.remove('arm'); $('stopBtn').textContent = 'Stop'; }
+$('stopBtn').onclick = () => {
+  const b = $('stopBtn');
+  if (!b.classList.contains('arm')) { b.classList.add('arm'); b.textContent = 'Tap to finish'; stopTimer = setTimeout(disarmStop, 3000); return; }
+  finish();
+};
+function finish() {
+  const r = rec; rec = null; store.del('wakeback-rec-draft');
+  stopGps(); try { wakeLock && wakeLock.release(); } catch {}
+  setState('idle');
+  if (r && r.pts.length >= 2) {
+    const s = summarise(r);
+    const ok = store.set('wakeback-rec-' + r.id, r);
+    const ids = store.get('wakeback-rec-ids', []); ids.unshift(r.id); store.set('wakeback-rec-ids', ids);
+    if (!ok) note('The phone is out of space for saved sails. Save this one as GPX now, then delete some old ones.', 'b');
+    else note(`Saved: ${(s.nm).toFixed(2)} nm in ${hm(s.ms)}, top ${f1(s.max)} kn.`);
+    if (!ok) renderSails([r]); else renderSails();
+  } else { note('Nothing recorded: the track had fewer than two good GPS fixes.', 'w'); renderSails(); }
+  shown = 0; $('sog').textContent = '0.0'; redrawTrack();
+}
+function saveDraft() { if (rec) store.set('wakeback-rec-draft', rec); }
+
+// ---------- saved sails ----------
+function summarise(r) { return { nm: r.dist * M2NM, ms: r.moving, max: r.max, avg: r.moving ? r.dist * M2NM / (r.moving / 3600000) : 0, pts: r.pts.length }; }
+function fileBase(r) { const d = new Date(r.start), p = n => String(n).padStart(2, '0'); return `phone_${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`; }
+function toGpx(r) {
+  const esc = s => String(s).replace(/[<&>]/g, c => ({ '<': '&lt;', '&': '&amp;', '>': '&gt;' }[c]));
+  const segs = {};
+  r.pts.forEach(p => (segs[p[6]] ||= []).push(p));
+  const body = Object.values(segs).map(s => '  <trkseg>\n' + s.map(p =>
+    `   <trkpt lat="${p[1]}" lon="${p[2]}"><time>${new Date(p[0]).toISOString()}</time>` +
+    (p[5] != null ? `<hdop>${(p[5] / 5).toFixed(1)}</hdop>` : '') +
+    `<extensions><speed>${(p[3] / MS2KN).toFixed(2)}</speed>${p[4] != null ? `<course>${p[4]}</course>` : ''}</extensions></trkpt>`).join('\n') + '\n  </trkseg>').join('\n');
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="WakeBack Record" xmlns="http://www.topografix.com/GPX/1/1">
+ <metadata><name>${esc('Sail ' + dateTxt(r.start) + ' ' + timeTxt(r.start))}</name><time>${new Date(r.start).toISOString()}</time></metadata>
+ <trk><name>${esc('Sail ' + dateTxt(r.start))}</name><type>sailing</type>
+${body}
+ </trk>
+</gpx>
+`;
+}
+function gpxFile(r) { return new File([toGpx(r)], fileBase(r) + '.gpx', { type: 'application/gpx+xml' }); }
+
+function renderSails(extra) {
+  const ids = store.get('wakeback-rec-ids', []);
+  const list = (extra || []).concat(ids.map(id => store.get('wakeback-rec-' + id, null)).filter(Boolean));
+  const box = $('sails'); box.innerHTML = '';
+  if (!list.length) { box.innerHTML = '<div class="empty">No sails yet. Tap <b>Start</b> when you push off.</div>'; return; }
+  list.forEach(r => {
+    const s = summarise(r), el = document.createElement('article'); el.className = 'sail';
+    el.innerHTML = `<div class="t"><strong>${dateTxt(r.start)}</strong><span>${timeTxt(r.start)} · ${hm(s.ms)}</span></div>
+      <div class="stats"><span><b>${s.nm.toFixed(2)}</b>nm</span><span><b>${f1(s.max)}</b>kn top</span><span><b>${f1(s.avg)}</b>kn avg</span></div>
+      <div class="acts">
+        <button class="a pri" type="button" data-act="send">${r.sent ? 'Sent ✓' : 'Send to WakeBack'}</button>
+        <button class="a" type="button" data-act="share">Share GPX</button>
+        <button class="a" type="button" data-act="save">Save GPX</button>
+        <button class="a" type="button" data-act="view">Show</button>
+        <button class="a del" type="button" data-act="del">Delete</button>
+      </div><div class="msg" hidden></div>`;
+    const msg = (t, c = '') => { const m = el.querySelector('.msg'); m.hidden = false; m.textContent = t; m.className = 'msg' + (c ? ' ' + c : ''); };
+    el.querySelectorAll('button').forEach(b => b.onclick = () => act(b, r, msg));
+    box.appendChild(el);
+  });
+}
+
+async function act(b, r, msg) {
+  const a = b.dataset.act;
+  if (a === 'save') {
+    const u = URL.createObjectURL(gpxFile(r)), l = document.createElement('a');
+    l.href = u; l.download = fileBase(r) + '.gpx'; document.body.appendChild(l); l.click(); l.remove();
+    setTimeout(() => URL.revokeObjectURL(u), 4000); msg('Saved to Downloads.');
+  } else if (a === 'share') {
+    const f = gpxFile(r);
+    if (navigator.canShare && navigator.canShare({ files: [f] })) {
+      try { await navigator.share({ files: [f], title: f.name }); } catch (e) { if (e.name !== 'AbortError') msg('Sharing didn’t work on this phone. Use Save GPX instead.', 'b'); }
+    } else msg('This browser can’t share files. Use Save GPX instead.', 'b');
+  } else if (a === 'send') {
+    b.disabled = true; msg('Sending…');
+    const fd = new FormData(); fd.append('file', gpxFile(r)); fd.append('visibility', 'friends');
+    try {
+      const res = await fetch(location.origin + '/api/upload', { method: 'POST', body: fd, credentials: 'same-origin' });
+      const j = await res.json().catch(() => ({}));
+      if (res.status === 401) msg('Sign in on the WakeBack page on this phone first, then send again.', 'b');
+      else if (res.ok && j.ok) { msg(`Sent to WakeBack: ${j.venue_name || j.session}.`, 'ok'); r.sent = j.session; store.set('wakeback-rec-' + r.id, r); b.textContent = 'Sent ✓'; return; }
+      else msg(j.error || `The server said no (${res.status}).`, 'b');
+    } catch { msg('Couldn’t reach the WakeBack server. Open this page from your WakeBack address, or use Save GPX.', 'b'); }
+    b.disabled = false;
+  } else if (a === 'view') {
+    if (state !== 'idle') { msg('Finish the current recording first.', 'b'); return; }
+    rec = r; redrawTrack();
+    if (map && segLines.length) { setFollow(false); map.fitBounds(L.featureGroup(segLines).getBounds(), { padding: [20, 20] }); }
+    const s = summarise(r);
+    $('dur').textContent = hms(s.ms); $('dist').innerHTML = `${s.nm.toFixed(2)}<u>nm</u>`; $('max').innerHTML = `${f1(s.max)}<u>kn</u>`; $('avg').innerHTML = `${f1(s.avg)}<u>kn</u>`;
+    $('maphint').textContent = 'Showing ' + dateTxt(r.start);
+    rec = null;                                  // shown only; the next Start begins a fresh track
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  } else if (a === 'del') {
+    if (!b.classList.contains('arm')) { b.classList.add('arm'); b.textContent = 'Tap to delete'; setTimeout(() => { b.classList.remove('arm'); b.textContent = 'Delete'; }, 3000); return; }
+    store.del('wakeback-rec-' + r.id); store.set('wakeback-rec-ids', store.get('wakeback-rec-ids', []).filter(i => i !== r.id));
+    renderSails();
+  }
+}
+
+// ---------- resume after a reload or crash ----------
+(function resume() {
+  const d = store.get('wakeback-rec-draft', null);
+  if (d && d.pts && d.pts.length) {
+    rec = d; rec.seg++; redrawTrack(); tick();
+    if (map && segLines.length) map.fitBounds(L.featureGroup(segLines).getBounds(), { padding: [20, 20] });
+    setState('paused', true);
+    note(`A recording from ${timeTxt(d.start)} was interrupted. Tap Resume to carry on, or Stop to save it.`, 'w');
+    startGps();
+  }
+  renderSails();
+})();
+addEventListener('resize', () => { if (!map) drawCanvas(); });
+</script>
+</body>
+</html>
