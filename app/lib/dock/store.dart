@@ -827,6 +827,13 @@ class DockStore {
     await f.delete();
   }
 
+  /// Remove a whole session from this phone (tracks, course, crew, stats).
+  Future<void> deleteSession(String day) => locked(() async {
+        _checkDay(day);
+        final d = dayDir(day);
+        if (await d.exists()) await d.delete(recursive: true);
+      });
+
   // ---- meta / races / crew (raw, as stored)
   Future<Map<String, dynamic>> getMeta(String day) async {
     _checkDay(day);

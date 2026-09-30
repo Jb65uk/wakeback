@@ -208,6 +208,47 @@ class _SessionListState extends State<_SessionList> {
     }
   }
 
+  /// Delete a session: from this phone, and my own tracks from the server too (a mate's track that's
+  /// still on the server comes back with the next Sync, which is right — it's theirs).
+  Future<void> _delete(Map<String, dynamic> s) async {
+    final id = s['id'] as String;
+    final (mine, _) = _mine(s);
+    final files = ((s['files'] as List?) ?? const []).length;
+    final sync = serverOrNull();
+    final onServer = sync != null && mine.isNotEmpty;
+    final ok = await confirm(
+      context,
+      'Delete this session?',
+      '${niceDate('${s['date']}')} at ${s['venue_name']}: $files track${files == 1 ? '' : 's'}, the course and any races. '
+          '${onServer ? 'Your own track${mine.length == 1 ? '' : 's'} will be removed from the server too, so your friends lose it as well. ' : ''}'
+          'This can\'t be undone.',
+      ok: 'Delete',
+      danger: true,
+    );
+    if (!ok || !mounted) return;
+    setState(() => _busy.add(id));
+    var failed = 0;
+    try {
+      if (onServer) {
+        for (final f in mine) {
+          try {
+            await sync.deleteTrack(id, f);
+          } on SyncException catch (e) {
+            if (!e.message.contains('404') && !e.message.toLowerCase().contains('not found')) failed++;
+          }
+        }
+      }
+      await app.store.deleteSession(id);
+      if (mounted) {
+        toast(context, failed > 0 ? 'Deleted from this phone; the server kept $failed track${failed > 1 ? 's' : ''} — try again after a Sync' : 'Session deleted', error: failed > 0);
+      }
+    } catch (e) {
+      if (mounted) toast(context, 'Couldn\'t delete: $e', error: true);
+    }
+    _busy.remove(id);
+    await _load();
+  }
+
   /// My tracks in this session, and whether any of them is shared with friends.
   (List<String>, bool) _mine(Map<String, dynamic> s) {
     final mine = ((s['mine'] as List?) ?? const []).cast<String>();
@@ -318,7 +359,16 @@ class _SessionListState extends State<_SessionList> {
                       ]),
                     ]),
                   ),
-                  IconButton(tooltip: 'Share a picture of this session', icon: const Icon(Icons.ios_share, size: 20), onPressed: () => _share(s)),
+                  PopupMenuButton<String>(
+                    tooltip: 'More',
+                    icon: const Icon(Icons.more_vert, size: 20),
+                    enabled: !_busy.contains(id),
+                    onSelected: (v) => v == 'share' ? _share(s) : _delete(s),
+                    itemBuilder: (_) => const [
+                      PopupMenuItem(value: 'share', child: ListTile(leading: Icon(Icons.ios_share), title: Text('Share a picture'), contentPadding: EdgeInsets.zero)),
+                      PopupMenuItem(value: 'delete', child: ListTile(leading: Icon(Icons.delete_outline, color: Color(0xFFFF6B6B)), title: Text('Delete session'), contentPadding: EdgeInsets.zero)),
+                    ],
+                  ),
                   if (mine.isNotEmpty)
                     Column(mainAxisSize: MainAxisSize.min, children: [
                       Switch(

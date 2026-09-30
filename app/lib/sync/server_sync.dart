@@ -123,6 +123,11 @@ class ServerSync {
     await _go(http.post(_u('/api/sessions/$day/tracks/$file'), headers: _authJson, body: jsonEncode({'visibility': visibility})));
   }
 
+  /// Remove one of my tracks from the server (the owner or the admin only; 404 = it was never there).
+  Future<void> deleteTrack(String day, String file) async {
+    await _go(http.delete(_u('/api/sessions/${Uri.encodeComponent(day)}/${Uri.encodeComponent(file)}'), headers: _auth));
+  }
+
   /// Is this a WakeBack dock/server? Returns its session list.
   Future<List<Map<String, dynamic>>> serverSessions() async {
     final j = await _getJson('/api/sessions');
