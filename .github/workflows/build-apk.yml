@@ -5,7 +5,7 @@ name: Build WakeBack APK
 
 on:
   push:
-    paths: ['app/**', 'viewer/**', '.github/workflows/build-apk.yml']
+    paths: ['app/**', 'viewer/**', 'tools/test_race_suggest.mjs', '.github/workflows/build-apk.yml']
   workflow_dispatch:
 
 permissions:
@@ -30,6 +30,9 @@ jobs:
         with:
           channel: stable
           cache: true
+
+      - name: Viewer checks (race suggestions against made-up fleets)
+        run: node ../tools/test_race_suggest.mjs
 
       - name: Latest viewer into the app
         run: cp ../viewer/index.html ../viewer/dock.html assets/web/
