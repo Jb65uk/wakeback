@@ -14,6 +14,7 @@ import '../widgets/common.dart';
 import 'friends_section.dart';
 import 'offline_maps.dart';
 import 'update_card.dart';
+import 'web_page.dart';
 import 'welcome_screen.dart';
 
 class SetupScreen extends StatefulWidget {
@@ -101,7 +102,7 @@ class _SetupScreenState extends State<SetupScreen> {
     return ListenableBuilder(
       listenable: Listenable.merge([app, app.demo]),
       builder: (context, _) => Scaffold(
-        appBar: AppBar(title: const Text('Setup')),
+        appBar: AppBar(title: const Text('You')),
         body: ListView(padding: const EdgeInsets.fromLTRB(12, 0, 12, 24), children: [
           // ------------------------------------------------ demo banner
           if (app.demoMode)
@@ -122,9 +123,38 @@ class _SetupScreenState extends State<SetupScreen> {
           if (app.signedIn) const FriendsSection(),
           const BoatsCard(),
 
-          // ------------------------------------------------ this phone as the dock
-          const SectionLabel('This phone is the dock'),
+          // ------------------------------------------------ tracks
+          const SectionLabel('Tracks'),
           Card(
+            child: ListTile(
+              leading: const Icon(Icons.file_open_outlined),
+              title: const Text('Import tracks'),
+              subtitle: const Text('GPX from a phone or watch, or puck CSVs'),
+              onTap: _import,
+            ),
+          ),
+
+          // ------------------------------------------------ maps for the lake
+          const SectionLabel('Maps'),
+          const OfflineMapsCard(),
+
+          // ------------------------------------------------ about / updates
+          const SectionLabel('About'),
+          const AboutCard(),
+
+          // ------------------------------------------------ advanced: pucks, server, demo (folded away)
+          const SizedBox(height: 12),
+          Card(
+            clipBehavior: Clip.antiAlias,
+            child: ExpansionTile(
+              leading: const Icon(Icons.tune),
+              title: const Text('Advanced'),
+              subtitle: const Text('Pucks and hotspot, server, demo'),
+              shape: const Border(),
+              childrenPadding: EdgeInsets.zero,
+              children: [
+          Padding(
+            padding: EdgeInsets.zero,
             child: Padding(
               padding: const EdgeInsets.all(14),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -138,10 +168,16 @@ class _SetupScreenState extends State<SetupScreen> {
                   ),
                 ]),
                 const SizedBox(height: 10),
-                const Hint('With no dock Pi, pucks upload to this phone instead — the same way they would to the dock:\n'
-                    '1. Android Settings → Hotspot: set the name and password below and turn it on.\n'
-                    '2. Keep WakeBack open (screen on is safest) while pucks are on their charging pads.\n'
-                    '3. Pucks join the hotspot, check in and upload. Watch them on the viewer\'s Dock tab.'),
+                const Hint('Pucks upload to this phone over its hotspot: turn the hotspot on with the name and password below, and keep WakeBack open while pucks are on their pads.'),
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: OutlinedButton.icon(
+                    onPressed: () => Navigator.push(context, MaterialPageRoute<void>(builder: (_) => ServerViewerPage(url: '${app.dock.localUrl}/dock', title: 'Pucks'))),
+                    icon: const Icon(Icons.sensors, size: 18),
+                    label: const Text('See your pucks'),
+                  ),
+                ),
                 const SizedBox(height: 12),
                 TextField(
                   controller: _ssid,
@@ -172,25 +208,30 @@ class _SetupScreenState extends State<SetupScreen> {
                   Text('${app.fleet}', style: t.textTheme.titleMedium),
                   IconButton(onPressed: app.fleet < 16 ? () => app.fleet = app.fleet + 1 : null, icon: const Icon(Icons.add_circle_outline)),
                 ]),
-                const Hint('So pucks that have never checked in still get a row on the Dock page.'),
               ]),
             ),
           ),
-
-          // ------------------------------------------------ tracks
-          const SectionLabel('Tracks'),
-          Card(
-            child: ListTile(
-              leading: const Icon(Icons.file_open_outlined),
-              title: const Text('Import tracks'),
-              subtitle: const Text('Puck CSVs or phone/watch GPX — filed under the day they were sailed'),
-              onTap: _import,
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.dns_outlined),
+                  title: const Text('Server'),
+                  subtitle: Text(app.serverUrl),
+                  trailing: const Icon(Icons.edit_outlined),
+                  onTap: _editServer,
+                ),
+                if (!app.demoMode)
+                  ListTile(
+                    leading: const Icon(Icons.science_outlined),
+                    title: const Text('Try the demo'),
+                    subtitle: const Text('Pretend pucks and a demo race, kept separate from your data'),
+                    onTap: () async {
+                      await app.setDemoMode(true);
+                      if (context.mounted) toast(context, 'Demo mode on: add a demo race morning, or turn on Demo pucks');
+                    },
+                  ),
+              ],
             ),
           ),
-
-          // ------------------------------------------------ maps for the lake
-          const SectionLabel('Maps'),
-          const OfflineMapsCard(),
 
           // ------------------------------------------------ demo (only in demo mode)
           if (app.demoMode) const SectionLabel('Demo'),
@@ -201,7 +242,7 @@ class _SetupScreenState extends State<SetupScreen> {
                 secondary: const Icon(Icons.science_outlined),
                 title: const Text('Demo pucks'),
                 subtitle: Text(app.demo.lastEvent ??
-                    'Five pretend pucks check in to this phone every 3 s; P4 comes back from sailing after 20 s and uploads its session. See them on the viewer\'s Dock tab.'),
+                    'Five pretend pucks check in to this phone every 3 s; P4 comes back from sailing after 20 s and uploads its session. See them under Advanced, See your pucks.'),
                 isThreeLine: true,
                 value: app.demo.running,
                 onChanged: (on) => on ? app.demo.start() : app.demo.stop(),
@@ -216,50 +257,25 @@ class _SetupScreenState extends State<SetupScreen> {
               ),
             ]),
           ),
-          if (!app.demoMode) ...[
-            const SectionLabel('Advanced'),
-            Card(
-              child: Column(children: [
-                ListTile(
-                  leading: const Icon(Icons.dns_outlined),
-                  title: const Text('Server'),
-                  subtitle: Text(app.serverUrl),
-                  trailing: const Icon(Icons.edit_outlined),
-                  onTap: () async {
-                    final c = TextEditingController(text: app.serverUrl);
-                    final v = await showDialog<String>(
-                      context: context,
-                      builder: (ctx) => AlertDialog(
-                        title: const Text('WakeBack server'),
-                        content: TextField(controller: c, keyboardType: TextInputType.url, autocorrect: false, decoration: const InputDecoration(helperText: 'Only change this if you run your own server')),
-                        actions: [
-                          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-                          FilledButton(onPressed: () => Navigator.pop(ctx, c.text), child: const Text('Save')),
-                        ],
-                      ),
-                    );
-                    if (v != null) app.serverUrl = v;
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.science_outlined),
-                  title: const Text('Try the demo'),
-                  subtitle: const Text('Pretend pucks and a demo race, kept separate from your data'),
-                  onTap: () async {
-                    await app.setDemoMode(true);
-                    if (context.mounted) toast(context, 'Demo mode on: add a demo race morning, or turn on Demo pucks');
-                  },
-                ),
-              ]),
-            ),
-          ],
-
-          // ------------------------------------------------ about / updates
-          const SectionLabel('About'),
-          const AboutCard(),
         ]),
       ),
     );
+  }
+
+  Future<void> _editServer() async {
+    final c = TextEditingController(text: app.serverUrl);
+    final v = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('WakeBack server'),
+        content: TextField(controller: c, keyboardType: TextInputType.url, autocorrect: false, decoration: const InputDecoration(helperText: 'Only change this if you run your own server')),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, c.text), child: const Text('Save')),
+        ],
+      ),
+    );
+    if (v != null) app.serverUrl = v;
   }
 
   Future<void> _exitDemo() async {
@@ -286,7 +302,7 @@ class _SetupScreenState extends State<SetupScreen> {
             ),
           ]),
           const SizedBox(height: 8),
-          const Hint('Everything this phone records is yours and syncs to your account. Your email is never shown to other sailors.'),
+          const Hint('Your sails sync to your account. Your email is never shown to other sailors.'),
           const SizedBox(height: 8),
           Wrap(spacing: 8, children: [
             OutlinedButton.icon(onPressed: _changePassword, icon: const Icon(Icons.key, size: 18), label: const Text('Change password')),
@@ -316,7 +332,7 @@ class _SetupScreenState extends State<SetupScreen> {
               onChanged: (v) => app.profileName = v,
             ),
             const SizedBox(height: 8),
-            const Hint('Not signed in: this phone works on its own with your pucks. Sign in to sync with the server and share with friends.'),
+            const Hint('Sign in to sync your sails between devices and share them with friends.'),
             const SizedBox(height: 10),
             FilledButton.icon(
               onPressed: () async {

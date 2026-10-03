@@ -110,13 +110,11 @@ class _RecordScreenState extends State<RecordScreen> {
             _controls(st),
             const SizedBox(height: 10),
             if (r.recovered)
-              const Hint('This recording was cut off (the app closed or the phone restarted). Resume to carry on, or Finish to save what\'s there.')
+              const Hint('This recording was cut off. Resume to carry on, or Finish to save what\'s there.')
             else if (st == RecState.idle && app.boats.isEmpty)
-              const Hint('Recording keeps going with the screen off (you\'ll see a WakeBack notification). '
-                  'Add your boat in Setup → Your boats and it goes on every sail you record.')
+              const Hint('Keeps recording with the screen off. Add your boat on the You tab and it goes on every sail.')
             else if (st == RecState.idle)
-              const Hint('Recording keeps going with the screen off or another app open (you\'ll see a WakeBack notification). '
-                  'Don\'t swipe WakeBack away from recent apps while you sail.')
+              const Hint('Keeps recording with the screen off. Don\'t swipe WakeBack away while you sail.')
             else if (st == RecState.paused)
               const Hint('Paused. Nothing is added to the track until you resume, and the time doesn\'t count.'),
             if (r.problem != null && st == RecState.idle) ...[

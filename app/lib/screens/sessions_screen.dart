@@ -1,5 +1,5 @@
-// The Sessions tab: every sailing session on this phone (tap one to replay it, choose which are shared
-// with friends), your totals, and the friends' league table.
+// The Sails tab: every sailing session on this phone (tap one to replay it; share, boat and delete are
+// under its ⋮), your totals, and the friends' league table. The cloud shows how sync is doing.
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -11,10 +11,11 @@ import '../share_card.dart';
 import '../sync/server_sync.dart';
 import '../widgets/boats.dart';
 import '../widgets/common.dart';
+import 'sync_screen.dart';
 import 'update_card.dart';
 
 class SessionsScreen extends StatefulWidget {
-  /// Open a session in the Replay tab.
+  /// Open a session in Replay.
   final void Function(String id) onOpen;
   const SessionsScreen({super.key, required this.onOpen});
   @override
@@ -36,10 +37,15 @@ class _SessionsScreenState extends State<SessionsScreen> with SingleTickerProvid
     return Column(children: [
       Material(
         color: t.colorScheme.surface,
-        child: TabBar(
-          controller: _tabs,
-          tabs: const [Tab(text: 'Sessions'), Tab(text: 'Stats'), Tab(text: 'League')],
-        ),
+        child: Row(children: [
+          Expanded(
+            child: TabBar(
+              controller: _tabs,
+              tabs: const [Tab(text: 'Sails'), Tab(text: 'Stats'), Tab(text: 'League')],
+            ),
+          ),
+          const _SyncCloud(),
+        ]),
       ),
       Expanded(
         child: TabBarView(controller: _tabs, children: [
@@ -113,6 +119,40 @@ String sailTimes(Iterable<Map> stats) {
 
 /// Sync to the server, when there's one to talk to.
 ServerSync? serverOrNull() => app.signedIn && !app.demoMode && app.serverUrl.isNotEmpty ? ServerSync(app.serverUrl, app.store, token: app.token) : null;
+
+/// The cloud by the tabs: how sync is doing at a glance. Tap for the Sync page.
+class _SyncCloud extends StatelessWidget {
+  const _SyncCloud();
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context);
+    return ListenableBuilder(
+      listenable: Listenable.merge([app, app.syncStatus]),
+      builder: (context, _) {
+        if (app.demoMode) return const SizedBox.shrink();
+        final (IconData icon, Color color, String tip) = !app.signedIn
+            ? (Icons.cloud_outlined, t.colorScheme.onSurfaceVariant, 'Sync with a dock or server')
+            : switch (app.syncStatus.value) {
+                'ok' => (Icons.cloud_done_outlined, Colors.greenAccent, 'Synced'),
+                'attention' => (Icons.cloud_sync_outlined, t.colorScheme.primary, 'A course differs: tap to settle it'),
+                'offline' => (Icons.cloud_off, Colors.orangeAccent, 'Offline: your sails will sync later'),
+                'error' => (Icons.cloud_off, Colors.orangeAccent, app.syncProblem ?? 'Couldn\'t sync'),
+                _ => (Icons.cloud_outlined, t.colorScheme.onSurfaceVariant, 'Sync'),
+              };
+        return Padding(
+          padding: const EdgeInsets.only(right: 4),
+          child: IconButton(
+            tooltip: tip,
+            onPressed: () => Navigator.push(context, MaterialPageRoute<void>(builder: (_) => const SyncScreen())),
+            icon: app.syncStatus.value == 'syncing' && app.signedIn
+                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                : Icon(icon, color: color),
+          ),
+        );
+      },
+    );
+  }
+}
 
 class _PeriodPicker extends StatelessWidget {
   final String value;
@@ -205,11 +245,11 @@ class _SessionListState extends State<_SessionList> with WidgetsBindingObserver 
       final bits = <String>[
         if (r.down > 0) '${r.down} track${r.down == 1 ? '' : 's'} down',
         if (r.up > 0) '${r.up} up',
-        if (r.conflictDays.isNotEmpty) 'a course differs, settle it in Sync',
+        if (r.conflictDays.isNotEmpty) 'a course differs, tap the cloud to settle it',
       ];
       if (bits.isNotEmpty) toast(context, 'Synced: ${bits.join(' · ')}');
     } on SyncException catch (e) {
-      if (force && mounted) toast(context, 'Couldn\'t sync: ${e.message}', error: true);
+      if (force && mounted) toast(context, e.message, error: !e.offline);
     } catch (_) {}
   }
 
@@ -400,7 +440,7 @@ class _SessionListState extends State<_SessionList> with WidgetsBindingObserver 
         child: ListView(children: const [
           SizedBox(height: 80),
           _Empty(Icons.sailing_outlined, 'No sessions yet',
-              'When a puck joins your hotspot its track lands here. You can also add a GPX from a phone or watch in Replay. Signed in? Pull down to fetch your sails from the server.'),
+              'Record a sail, or import a track from the You tab. Pucks that join your hotspot land here too.'),
         ]),
       );
     }
@@ -420,8 +460,8 @@ class _SessionListState extends State<_SessionList> with WidgetsBindingObserver 
             return Padding(
               padding: const EdgeInsets.fromLTRB(8, 12, 8, 0),
               child: Hint(app.signedIn
-                  ? 'Friends: your friends can see this session\'s tracks (and you appear in their league). Private: only you. The switch covers your own tracks; a mate\'s track you synced down stays theirs.'
-                  : 'Sign in (Setup → You) to share sessions with friends and see the league.'),
+                  ? 'Friends can see your sails unless you make one private (⋮).'
+                  : 'Sign in on the You tab to share sails with friends.'),
             );
           }
           final s = list[i];
@@ -443,19 +483,20 @@ class _SessionListState extends State<_SessionList> with WidgetsBindingObserver 
           }
           final others = files - mine.length;
           final times = sailTimes(counted);
+          final boat = _boat(s);
           return Card(
             margin: const EdgeInsets.symmetric(vertical: 4),
             clipBehavior: Clip.antiAlias,
             child: InkWell(
               onTap: () => widget.onOpen(id),
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
+                padding: const EdgeInsets.fromLTRB(16, 12, 4, 12),
                 child: Row(children: [
                   Expanded(
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       Text(niceDate('${s['date']}'), style: t.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
                       const SizedBox(height: 2),
-                      Text('${s['venue_name']}${s['venue_new'] == true ? '  ·  new venue, name it in Replay' : ''}',
+                      Text('${s['venue_name']}${s['venue_new'] == true ? '  ·  new venue, open it to name it' : ''}',
                           style: t.textTheme.bodyMedium?.copyWith(color: t.colorScheme.onSurfaceVariant)),
                       const SizedBox(height: 8),
                       Wrap(spacing: 14, runSpacing: 4, children: [
@@ -464,45 +505,34 @@ class _SessionListState extends State<_SessionList> with WidgetsBindingObserver 
                         _Fact(Icons.speed, top > 0 ? '${top.toStringAsFixed(1)} kn' : '—'),
                         _Fact(Icons.directions_boat_outlined, '$files track${files == 1 ? '' : 's'}${others > 0 && mine.isNotEmpty ? ' ($others mates)' : ''}'),
                         if (races > 0) _Fact(Icons.flag_outlined, '$races race${races == 1 ? '' : 's'}'),
+                        if (boat.isNotEmpty) _Fact(Icons.sailing_outlined, boat),
+                        if (mine.isNotEmpty && !shared) const _Fact(Icons.lock_outline, 'Private'),
                       ]),
-                      if (mine.isNotEmpty) ...[
-                        const SizedBox(height: 8),
-                        Builder(builder: (context) {
-                          final b = _boat(s);
-                          return ActionChip(
-                            avatar: Icon(Icons.sailing_outlined, size: 16, color: b.isEmpty ? t.colorScheme.onSurfaceVariant : t.colorScheme.primary),
-                            label: Text(b.isEmpty ? 'Which boat?' : b),
-                            labelStyle: t.textTheme.labelMedium?.copyWith(color: b.isEmpty ? t.colorScheme.onSurfaceVariant : null),
-                            visualDensity: VisualDensity.compact,
-                            onPressed: _busy.contains(id) ? null : () => _setBoat(s),
-                          );
-                        }),
-                      ],
                     ]),
                   ),
-                  PopupMenuButton<String>(
-                    tooltip: 'More',
-                    icon: const Icon(Icons.more_vert, size: 20),
-                    enabled: !_busy.contains(id),
-                    onSelected: (v) => v == 'share' ? _share(s) : _delete(s),
-                    itemBuilder: (_) => const [
-                      PopupMenuItem(value: 'share', child: ListTile(leading: Icon(Icons.ios_share), title: Text('Share a picture'), contentPadding: EdgeInsets.zero)),
-                      PopupMenuItem(value: 'delete', child: ListTile(leading: Icon(Icons.delete_outline, color: Color(0xFFFF6B6B)), title: Text('Delete session'), contentPadding: EdgeInsets.zero)),
-                    ],
-                  ),
-                  if (mine.isNotEmpty)
-                    Column(mainAxisSize: MainAxisSize.min, children: [
-                      Switch(
-                        value: shared,
-                        onChanged: _busy.contains(id) ? null : (v) => _setShared(s, v),
-                        thumbIcon: WidgetStateProperty.resolveWith((st) => Icon(st.contains(WidgetState.selected) ? Icons.group : Icons.lock_outline)),
-                      ),
-                      Text(shared ? 'Friends' : 'Private', style: t.textTheme.labelSmall?.copyWith(color: shared ? t.colorScheme.primary : t.colorScheme.onSurfaceVariant)),
-                    ])
+                  if (_busy.contains(id))
+                    const Padding(padding: EdgeInsets.all(12), child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)))
                   else
-                    Padding(
-                      padding: const EdgeInsets.only(right: 8),
-                      child: Icon(Icons.chevron_right, color: t.colorScheme.onSurfaceVariant),
+                    PopupMenuButton<String>(
+                      tooltip: 'More',
+                      icon: const Icon(Icons.more_vert, size: 22),
+                      onSelected: (v) => switch (v) {
+                        'boat' => _setBoat(s),
+                        'private' => _setShared(s, false),
+                        'friends' => _setShared(s, true),
+                        'share' => _share(s),
+                        _ => _delete(s),
+                      },
+                      itemBuilder: (_) => [
+                        if (mine.isNotEmpty)
+                          PopupMenuItem(value: 'boat', child: ListTile(leading: const Icon(Icons.sailing_outlined), title: Text(boat.isEmpty ? 'Which boat?' : 'Boat: $boat'), contentPadding: EdgeInsets.zero)),
+                        if (mine.isNotEmpty && app.signedIn)
+                          shared
+                              ? const PopupMenuItem(value: 'private', child: ListTile(leading: Icon(Icons.lock_outline), title: Text('Make private'), contentPadding: EdgeInsets.zero))
+                              : const PopupMenuItem(value: 'friends', child: ListTile(leading: Icon(Icons.group_outlined), title: Text('Share with friends'), contentPadding: EdgeInsets.zero)),
+                        const PopupMenuItem(value: 'share', child: ListTile(leading: Icon(Icons.ios_share), title: Text('Share a picture'), contentPadding: EdgeInsets.zero)),
+                        const PopupMenuItem(value: 'delete', child: ListTile(leading: Icon(Icons.delete_outline, color: Color(0xFFFF6B6B)), title: Text('Delete'), contentPadding: EdgeInsets.zero)),
+                      ],
                     ),
                 ]),
               ),
@@ -713,7 +743,7 @@ class _StatsTabState extends State<_StatsTab> {
     if (bins.isEmpty && !hasUp && !hasDown) {
       return [
         const SectionLabel('The wind'),
-        const Hint('Pull the day\'s weather in on Replay (Weather button) and this fills in: upwind and downwind speeds, best VMG, and how you go in a blow.'),
+        const Hint('Get the day\'s weather in Replay (Wind & weather) to fill this in: upwind and downwind speeds, best VMG, how you go in a blow.'),
       ];
     }
     String where(Map? m) => m == null || m.isEmpty ? '' : '${niceDate('${m['date']}')} · ${m['venue_name']}';
@@ -1047,7 +1077,7 @@ class _LeagueTabState extends State<_LeagueTab> {
         if (ranked == null && _err == null) const Padding(padding: EdgeInsets.all(40), child: Center(child: CircularProgressIndicator())),
         if (ranked != null && ranked.isEmpty)
           _Empty(Icons.emoji_events_outlined, 'No one on the board yet',
-              app.signedIn ? 'Sync your sessions and add friends (Setup → Friends): everyone\'s shared sails count here.' : 'Sign in (Setup → You) to race your friends for miles, hours and speed.'),
+              app.signedIn ? 'Add friends on the You tab: everyone\'s shared sails count here.' : 'Sign in on the You tab to race your friends for miles, hours and speed.'),
         if (ranked != null)
           for (var i = 0; i < ranked.length; i++) _row(t, i, ranked[i]),
         if (_source != null) ...[

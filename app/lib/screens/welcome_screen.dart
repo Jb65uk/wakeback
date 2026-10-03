@@ -159,7 +159,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
         const SizedBox(height: 24),
         OutlinedButton.icon(onPressed: _tryDemo, icon: const Icon(Icons.science_outlined), label: const Text('Try the demo')),
         const SizedBox(height: 6),
-        Text('Pretend pucks and a demo race, nothing saved. Leave it any time from Setup.',
+        Text('Pretend pucks and a demo race, nothing saved. Leave it any time from the You tab.',
             textAlign: TextAlign.center, style: t.textTheme.bodySmall?.copyWith(color: t.colorScheme.onSurfaceVariant)),
         if (!widget.fromSetup) ...[
           const SizedBox(height: 24),

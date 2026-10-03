@@ -193,6 +193,19 @@ body.big #raceTitle{display:block}
 #wxBig{display:none;font-family:var(--num);font-weight:600;font-size:20px;color:var(--ink);margin-top:4px}
 body.big #wxBig:not(:empty){display:flex;align-items:center;gap:8px}
 #wxBig svg{width:22px;height:22px;fill:var(--signal)}
+.tool{border-top:1px solid var(--line);padding-top:12px;flex:0 0 auto}
+.tool>summary{list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:8px;font-family:var(--num);font-weight:600;font-size:16px;color:var(--muted);letter-spacing:.04em;text-transform:uppercase;user-select:none}
+.tool>summary::-webkit-details-marker{display:none}
+.tool>summary::after{content:'';width:8px;height:8px;border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);transform:rotate(45deg);transition:transform .15s;margin-right:4px;flex:0 0 auto}
+.tool[open]>summary::after{transform:rotate(-135deg)}
+.tool>summary:hover{color:var(--ink)}
+.tool>summary small{font-family:var(--body);font-weight:400;font-size:12.5px;letter-spacing:0;text-transform:none;color:var(--muted);margin-left:auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tool>.toolbody{display:flex;flex-direction:column;gap:12px;padding-top:12px}
+.tool .course,.tool .races,.tool .train{border-top:0;padding-top:0}
+.sugline{align-self:flex-start;text-align:left;background:var(--panel-2);border:1px solid var(--signal);border-radius:999px;padding:6px 12px;cursor:pointer;font-weight:600;font-size:13.5px}
+.sugline b{color:var(--signal)}
+body.inapp #dock>h2,body.inapp #venueChips,body.inapp #sessList,body.inapp header .sub,body.inapp header h1,body.inapp #tabs{display:none}
+body.inapp #dock{border:0;padding:0;margin:0}
 .foot summary{cursor:pointer;color:var(--ink);font-weight:600;font-size:14px}
 .foot p{margin:8px 0 0}
 .foot{margin-top:auto;color:var(--muted);font-size:12px;line-height:1.5}
@@ -272,7 +285,7 @@ body.big #togglePanel,body.big #trailOnlyWrap{display:none}
     <header>
       <nav id="tabs" hidden aria-label="Sections"><a href="/" class="on" aria-current="page">Replay</a><a href="/dock">Dock<span id="dockWarn"></span></a></nav>
       <h1>Wake<span>Back</span></h1>
-      <p class="sub">Overlay everyone's tracks from pucks, phones or watches, then replay the race side by side.</p>
+      <p class="sub">Replay your sailing, side by side.</p>
       <p id="saveState" class="savest" role="status" aria-live="polite" hidden></p>
     </header>
     <div class="actions">
@@ -290,26 +303,17 @@ body.big #togglePanel,body.big #trailOnlyWrap{display:none}
       <span id="friendsNote"></span>
     </div>
     <div id="boats"></div>
-    <div class="opt"><span>Track colour</span>
-      <div class="seg" data-opt="colour"><button data-v="boat" class="on">By boat</button><button data-v="speed">By speed</button><button data-v="tack">By tack</button></div>
-      <div id="tackLegend"><span><i style="background:#E63946"></i>Port tack</span><span><i style="background:#2DC653"></i>Starboard tack</span></div>
-      <div id="speedLegend"><div class="legend"></div><div class="legend-l"><span>0 kn</span><span id="legMax">8 kn</span></div></div>
-    </div>
-    <div class="opt"><span>Timing</span>
-      <div class="seg" data-opt="timing"><button data-v="real" class="on">Real time</button><button data-v="align">Align starts</button></div>
-    </div>
-    <div class="opt"><span>Map</span>
-      <div class="seg" data-opt="base"><button data-v="sat" class="on">Satellite</button><button data-v="chart">Chart</button></div>
-    </div>
     <div class="races">
       <h2>Races</h2>
       <div class="chips" id="raceChips"></div>
-      <div id="raceEdit" style="display:flex;flex-direction:column;gap:6px"></div>
       <div id="raceSug"></div>
-      <div class="actions"><button class="btn" id="raceAdd">Add race</button><button class="btn" id="raceAuto">Suggest races</button></div>
     </div>
+    <details class="tool" id="t-races"><summary>Race times</summary><div class="toolbody">
+      <div id="raceEdit" style="display:flex;flex-direction:column;gap:6px"></div>
+      <div class="actions"><button class="btn" id="raceAdd">Add race</button><button class="btn" id="raceAuto">Suggest races</button></div>
+    </div></details>
+    <details class="tool" id="t-course"><summary>Course, start &amp; finish<small id="courseSum"></small></summary><div class="toolbody">
     <div class="course" id="courseBox">
-      <h2>Course marks</h2>
       <div class="hint" id="courseHint"></div>
       <div id="markList" style="display:flex;flex-direction:column;gap:6px"></div>
       <div class="actions"><button class="btn" id="markAdd">Add mark</button><button class="btn" id="markCopy">Copy to all races</button></div>
@@ -321,19 +325,41 @@ body.big #togglePanel,body.big #trailOnlyWrap{display:none}
         <div style="overflow-x:auto"><table class="sft" id="sfTable"></table></div>
       </div>
     </div>
+    </div></details>
+    <details class="tool" id="t-wind"><summary>Wind &amp; weather<small id="windSum"></small></summary><div class="toolbody">
     <div class="train">
       <label>Wind from <input type="number" id="wind" min="0" max="359" step="1" placeholder="°" aria-label="Wind direction, degrees from"> ° <button class="btn" id="windEst" style="padding:4px 8px;font-size:12px">Estimate</button><button class="btn" id="wxGet" style="padding:4px 8px;font-size:12px">Get weather</button></label>
       <div class="wxbox" id="wxBox" hidden></div>
+    </div>
+    </div></details>
+    <details class="tool" id="t-tacks"><summary>Tacks, gybes &amp; marks</summary><div class="toolbody">
+    <div class="train">
       <label>Analyse <select id="focus" style="flex:1"><option value="">Pick a boat…</option></select></label>
       <div class="seg" id="tkFilter"><button data-v="all" class="on">All</button><button data-v="Tack">Tacks</button><button data-v="Gybe">Gybes</button><button data-v="Mark">Marks</button></div>
       <label>Sort <select id="tkSort" style="flex:1"><option value="time">In order</option><option value="loss">Worst first</option><option value="best">Best first</option></select></label>
       <div class="tsum" id="tackSum">Pick a boat to see its tacks and gybes.</div>
       <div id="tackList"></div>
     </div>
+    </div></details>
+    <details class="tool" id="t-display"><summary>Display</summary><div class="toolbody">
+    <div class="opt"><span>Track colour</span>
+      <div class="seg" data-opt="colour"><button data-v="boat" class="on">By boat</button><button data-v="speed">By speed</button><button data-v="tack">By tack</button></div>
+      <div id="tackLegend"><span><i style="background:#E63946"></i>Port tack</span><span><i style="background:#2DC653"></i>Starboard tack</span></div>
+      <div id="speedLegend"><div class="legend"></div><div class="legend-l"><span>0 kn</span><span id="legMax">8 kn</span></div></div>
+    </div>
+    <div class="opt"><span>Timing</span>
+      <div class="seg" data-opt="timing"><button data-v="real" class="on">Real time</button><button data-v="align">Align starts</button></div>
+    </div>
+    <div class="opt"><span>Map</span>
+      <div class="seg" data-opt="base"><button data-v="sat" class="on">Satellite</button><button data-v="chart">Chart</button></div>
+    </div>
+    </div></details>
+    <details class="tool" id="t-more"><summary>Export &amp; clear</summary><div class="toolbody">
     <div class="actions">
       <button class="btn" id="export">Download all as GPX</button>
       <button class="btn" id="clear">Clear all</button>
     </div>
+    </div></details>
     <details class="foot"><summary>How to use</summary>
       <p><b>Saving:</b> every change (names, races, marks, lines, gun time, corrections) saves the moment you make it. The line under the title says when it last saved, and warns you if the dock couldn't be reached. It keeps trying until it gets through.</p>
       <p><b>Load</b> a session from the dock, or drop GPX/CSV files anywhere on the map.</p>
@@ -388,7 +414,7 @@ body.big #togglePanel,body.big #trailOnlyWrap{display:none}
       <button class="btn" id="fit">Fit</button>
       <button class="btn" id="big">Big screen</button>
       <button class="btn" id="fs">Full screen</button>
-      <button class="btn" id="togglePanel">Boats</button>
+      <button class="btn" id="togglePanel">Boats &amp; tools</button>
     </div>
     <canvas id="chart" aria-label="Speed over time, click to jump"></canvas>
     <input type="range" id="scrub" min="0" max="10000" value="0" aria-label="Replay position">
@@ -436,6 +462,7 @@ const map = L.map('map', { zoomControl: true }).setView([53.6503, -3.0102], 15);
 const renderer = L.canvas({ padding: 0.5 });
 // inside the phone app the tiles come through the phone's own dock, which keeps a copy (offline maps, Setup)
 const inApp = !!window.WakeBackApp && /^(127\.0\.0\.1|localhost)$/.test(location.hostname);
+if (inApp) document.body.classList.add('inapp');   // the app has its own list of sails: the panel starts at the boats
 const sat = L.tileLayer(inApp ? '/tiles/sat/{z}/{x}/{y}.jpg' : 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Imagery © Esri' });
 const osm = L.tileLayer(inApp ? '/tiles/osm/{z}/{x}/{y}.png' : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap contributors' });
 const seamarks = L.tileLayer(inApp ? '/tiles/sea/{z}/{x}/{y}.png' : 'https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '© OpenSeaMap' });
@@ -803,6 +830,7 @@ function applyWeatherWind() {
   windCtl.update(); return true;
 }
 function renderWx() {
+  { const ws = document.getElementById('windSum'); if (ws) ws.textContent = wind != null && boats.length ? `from ${Math.round(wind)}°` : ''; }
   const box = $('#wxBox'), wx = meta.weather;
   if (!$('#wxGet').disabled) $('#wxGet').textContent = wx ? 'Refresh weather' : 'Get weather';
   if (!wx || !boats.length) { box.hidden = true; box.innerHTML = ''; windCtl.update(); return; }
@@ -1353,6 +1381,17 @@ function suggestRaces(boats) {
 }
 // ---- race-suggest:end
 
+// ---------- tools: everything beyond boats and races is folded away until wanted ----------
+function openTool(id) { const d = document.getElementById(id); if (d && !d.open) d.open = true; return d; }
+(function () {
+  let open = []; try { open = JSON.parse(localStorage.getItem('wakeback-tools')) || []; } catch {}
+  document.querySelectorAll('details.tool').forEach(d => {
+    if (open.includes(d.id)) d.open = true;
+    d.addEventListener('toggle', () => { try { localStorage.setItem('wakeback-tools', JSON.stringify([...document.querySelectorAll('details.tool[open]')].map(x => x.id))); } catch {} });
+  });
+})();
+
+let sugOpen = false;             // the suggestions start as one line; Review unfolds them
 let sug = null, sugFor = '';     // the suggestions on show, and which tracks they were worked out from
 const sugSig = () => boats.map(b => b.id).join(',');
 const sugSkipKey = () => 'wakeback-nosug-' + (dock.session || sessionKey());
@@ -1367,7 +1406,7 @@ function findSuggestions() {
 // Called whenever the race list is drawn: a session with no races yet gets its suggestions without asking.
 function autoSuggest() {
   const sig = sugSig();
-  if (sig !== sugFor) { sug = null; sugFor = sig; }
+  if (sig !== sugFor) { sug = null; sugFor = sig; sugOpen = false; }
   if (boats.length && sug == null && !races.length) {
     let skip = false; try { skip = !!localStorage.getItem(sugSkipKey()); } catch {}
     sug = skip ? [] : findSuggestions();
@@ -1378,12 +1417,14 @@ function renderSug() {
   const box = $('#raceSug'); if (!box) return;
   const list = boats.length && sug ? sug : [];
   if (!list.length) { box.innerHTML = ''; return; }
+  if (!sugOpen) { box.innerHTML = `<button class="sugline" id="sugShow"><b>${list.length}</b> likely race${list.length > 1 ? 's' : ''} found · Review</button>`; return; }
   box.innerHTML = `<div class="sug"><div class="sughead">Likely race${list.length > 1 ? 's' : ''} found<small>Worked out from the tracks. Nothing is added until you say; you can change the times afterwards.</small></div>`
     + list.map((x, i) => `<label class="srow${x.conf === 'low' ? ' low' : ''}"><input type="checkbox" data-sg="${i}"${x.on ? ' checked' : ''}><span class="sgtime">${hhmm(x.start)}–${hhmm(x.end)}</span><span class="sgwhy">${x.conf === 'low' ? 'Maybe: ' : x.conf === 'high' ? '<b>Likely:</b> ' : ''}${esc(x.why)}</span></label>`).join('')
     + `<div class="actions"><button class="btn" id="sugAdd">Add selected</button><button class="btn" id="sugNo">Not now</button></div></div>`;
 }
 $('#raceSug').addEventListener('change', e => { const i = e.target.dataset.sg; if (i != null && sug && sug[+i]) sug[+i].on = e.target.checked; });
 $('#raceSug').addEventListener('click', e => {
+  if (e.target.closest('#sugShow')) { sugOpen = true; renderSug(); return; }
   if (e.target.id === 'sugNo') { try { localStorage.setItem(sugSkipKey(), '1'); } catch {} sug = []; renderSug(); return; }
   if (e.target.id !== 'sugAdd') return;
   const pick = (sug || []).filter(x => x.on && !sugOverlaps(x));
@@ -1395,13 +1436,13 @@ $('#raceSug').addEventListener('click', e => {
   races.sort((a, b) => a.start - b.start);
   // races still on their automatic names are numbered in the order they were sailed
   races.forEach((r, i) => { if (/^Race (\d+|\?)$/.test(r.name)) r.name = 'Race ' + (i + 1); });
-  sug = [];
+  sug = []; sugOpen = false;
   saveRaces(); selectRace(races.indexOf(added[0]));
   toast(`Added ${added.length} race${added.length > 1 ? 's' : ''}. Adjust the times if they're a little out.`);
 });
 $('#raceAuto').addEventListener('click', () => {
   try { localStorage.removeItem(sugSkipKey()); } catch {}
-  sug = findSuggestions(); sugFor = sugSig();
+  sug = findSuggestions(); sugFor = sugSig(); sugOpen = true;
   renderSug();
   if (!sug.length) toast(races.length ? 'No more races found in these tracks.' : 'Couldn\'t pick out any races from these tracks. Add them by hand.');
   else $('#raceSug').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
@@ -1499,6 +1540,7 @@ $('#sfTable').addEventListener('click', e => {
   if (t) { T = Math.max(tMin, t + shift(b)); setPlaying(false); render(); const i = idxAt(b, t); map.panTo([b.lat[i], b.lon[i]]); }
 });
 function renderMarks() {
+  { const cs = document.getElementById('courseSum'); if (cs) { const nm_ = activeCourse().marks.length, nl_ = activeLines().length; cs.textContent = boats.length && (nm_ || nl_) ? `${nm_} mark${nm_ === 1 ? '' : 's'}${nl_ ? ', ' + nl_ + ' line' + (nl_ === 1 ? '' : 's') : ''}` : ''; } }
   renderLines();
   markLayer.clearLayers();
   const ms = activeMarks();
@@ -1511,7 +1553,7 @@ function renderMarks() {
   const where = raceIdx >= 0 && races[raceIdx] ? races[raceIdx].name : (races.length ? 'the whole session (new races start with these)' : 'this session');
   $('#courseHint').innerHTML = !boats.length ? 'Load a session first.'
     : ms.length || activeLines().length ? `Course for <b>${esc(where)}</b>. Drag anything on the map to move it. Red = leave to port, green = leave to starboard. Lines: square = committee boat, circle = pin.`
-    : `Optional. Drop the marks where they were laid, and the start and finish lines (square = committee boat end, circle = pin) and roundings are detected at the real marks, with a warning if someone went the wrong way round. Marks are set per race, so if the course changes between races, just move them.`;
+    : `Optional. Add the marks and a start and finish line to get roundings, start timing and finish order. Marks are set per race.`;
   $('#markList').innerHTML = ms.map(m => `<div class="mrow"><span class="buoy ${m.side}"></span><input data-mn="${m.id}" value="${esc(m.name)}" aria-label="Mark name">
     <div class="seg"><button data-ms="${m.id}" data-side="port" class="${m.side === 'port' ? 'on port' : ''}">Port</button><button data-ms="${m.id}" data-side="stbd" class="${m.side === 'stbd' ? 'on stbd' : ''}">Stbd</button></div>
     <button class="rm" data-md="${m.id}">Delete</button></div>`).join('');
@@ -1973,7 +2015,7 @@ $('#boats').addEventListener('click', async e => {
     return;
   }
   const v = e.target.closest('[data-vis]'), r = e.target.closest('[data-rm]'), an = e.target.closest('[data-an]');
-  if (an) { focusBoat(an.dataset.an); $('.train').scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
+  if (an) { focusBoat(an.dataset.an); openTool('t-tacks').scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
   if (v) { const b = boats.find(x => x.id === v.dataset.vis); b.visible = !b.visible; buildBoat(b); recomputeTimeline(); renderList(); renderCards(); render(); }
   if (r) { const b = boats.find(x => x.id === r.dataset.rm); if (!confirm(`Remove ${label(b)} from the view? (The file stays on the dock.)`)) return; clearLayers(b); boats = boats.filter(x => x !== b); recomputeTimeline(); renderList(); renderCards(); renderTacks(); render(); }
 });
