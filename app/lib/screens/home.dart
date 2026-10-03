@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../app_state.dart';
 import '../record/recorder.dart';
+import '../widgets/common.dart';
 import 'record_screen.dart';
 import 'sessions_screen.dart';
 import 'setup_screen.dart';
@@ -32,7 +33,22 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   /// A session tapped in the Sessions tab (or a record in Stats): replay it.
-  void _open(String id) {
+  /// A sail in your server totals that isn't on this device yet (recorded on your other one) is fetched first.
+  Future<void> _open(String id) async {
+    try {
+      if ((await app.store.trackFiles(id)).isEmpty && app.signedIn && !app.demoMode) {
+        if (mounted) toast(context, 'Fetching that sail from the server…');
+        await app.autoSync(force: true);
+        if ((await app.store.trackFiles(id)).isEmpty) {
+          if (mounted) toast(context, 'That sail isn\'t on this device yet. Try Sync.', error: true);
+          return;
+        }
+      }
+    } catch (e) {
+      if (mounted) toast(context, 'Couldn\'t fetch that sail: $e', error: true);
+      return;
+    }
+    if (!mounted) return;
     setState(() => _tab = _replay);
     _viewer.currentState?.openSession(id);
   }

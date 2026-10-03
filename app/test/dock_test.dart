@@ -510,6 +510,54 @@ void main() {
     }
   });
 
+  test('sync: my own sail follows me to my other device as mine, and a delete isn\'t undone', () async {
+    final server = Dock(), tablet = Dock();
+    await server.start();
+    await tablet.start();
+    try {
+      for (final s in [d.store, tablet.store, server.store]) {
+        s.ownerName = 'James'; // the same person signed in on both devices
+      }
+      final day = '2026-09-20_southport-sc';
+      final t0 = DateTime.utc(2026, 9, 20, 10, 30);
+      await d.upload('phone_103000.csv', shortCsv(t0, seed: 1)); // recorded on the phone
+      await server.upload('puck2_103000.csv', shortCsv(t0, seed: 2), fields: {'owner_name': 'Dave'}); // a mate's
+
+      final up = await ServerSync(server.url, d.store).syncNew();
+      expect(up.up, 1);
+      expect(up.down, 1);
+
+      // the tablet has nothing: syncNew brings both down, mine as mine and Dave's as Dave's
+      final sync = ServerSync(server.url, tablet.store);
+      final r = await sync.syncNew();
+      expect(r.down, 2);
+      expect(r.up, 0);
+      final s = (await tablet.store.sessions()).single;
+      expect(s['files'], ['phone_103000.csv', 'puck2_103000.csv']);
+      expect(s['mine'], ['phone_103000.csv']);
+      expect((await tablet.store.myStats('all'))['tracks'], 1);
+
+      // nothing new: nothing moves
+      final again = await sync.syncNew();
+      expect(again.up + again.down, 0);
+
+      // an older app filed my own sail as a mate's when it came down: the next sync takes it back
+      await tablet.store.setOwner(day, 'phone_103000.csv', {'name': 'James', 'visibility': 'friends', 'remote': true});
+      expect((await tablet.store.sessions()).single['mine'], isEmpty);
+      await sync.syncNew();
+      expect((await tablet.store.sessions()).single['mine'], ['phone_103000.csv']);
+
+      // deleted from the server on the phone: the tablet doesn't send it back up
+      expect((await server.req('DELETE', '/api/sessions/$day/phone_103000.csv')).$1, 200);
+      final after = await sync.syncNew();
+      expect(after.up, 0);
+      expect(((await server.req('GET', '/api/sessions')).$2 as List).single['files'], ['puck2_103000.csv']);
+    } finally {
+      await server.stop();
+      await tablet.stop();
+    }
+  });
+
   test('sync: venues match up both ways before tracks move', () async {
     final server = Dock();
     await server.start();

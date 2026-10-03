@@ -186,7 +186,9 @@ class _SyncScreenState extends State<SyncScreen> {
                   const Hint('Not signed in: sync works with a dock Pi or a server without accounts. For your WakeBack account, sign in from Setup → You.'),
                 ],
                 const SizedBox(height: 8),
-                const Hint('Sync copies each session\'s tracks, names, races and course both ways, and brings down your friends\' sails.'),
+                Hint(app.signedIn
+                    ? 'Your sails sync on their own when you open the app (or pull down on Sessions), so a sail from your phone is on your tablet too. Here you can see each day, sync names, races and course, and settle any that differ.'
+                    : 'Sync copies each session\'s tracks, names, races and course both ways, and brings down your friends\' sails.'),
                 const SizedBox(height: 12),
                 Wrap(spacing: 8, runSpacing: 8, children: [
                   FilledButton.icon(
