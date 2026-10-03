@@ -720,8 +720,9 @@ class _StatsTabState extends State<_StatsTab> {
       _Record(Icons.speed, 'Fastest average', '${(st['best_avg_kn'] as num).toStringAsFixed(1)} kn', where(bestT), () => _open(bestT)),
       _Record(Icons.straighten, 'Longest sail', '${nm((st['longest_nm'] as num?) ?? 0)} nm', where(longT), () => _open(longT)),
       if (st['favourite_venue'] != null)
-        _Record(Icons.place_outlined, 'Favourite venue', '${st['favourite_venue']}',
-            '${st['venues']} venue${st['venues'] == 1 ? '' : 's'} · since ${niceDate('${st['first_date']}')}', null),
+        // the venue's name is the headline here: as a value on the right it squeezed the label to a sliver
+        _Record(Icons.place_outlined, '${st['favourite_venue']}', '',
+            'Favourite venue · ${st['venues']} venue${st['venues'] == 1 ? '' : 's'} sailed · since ${niceDate('${st['first_date']}')}', null),
       const SizedBox(height: 12),
       _FunFact(dist, h, t),
       if (months.length > 1) ...[
@@ -832,7 +833,13 @@ class _Record extends StatelessWidget {
         leading: Icon(icon, color: t.colorScheme.primary),
         title: Text(title),
         subtitle: sub.isEmpty ? null : Text(sub),
-        trailing: Text(value, style: t.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
+        // a value never takes more than a third of the row; a long one shrinks rather than crushing the label
+        trailing: value.isEmpty
+            ? null
+            : ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.34),
+                child: FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerRight, child: Text(value, style: t.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800))),
+              ),
         onTap: onTap,
       ),
     );
@@ -1064,13 +1071,21 @@ class _LeagueTabState extends State<_LeagueTab> {
           }),
         ),
         const SizedBox(height: 10),
-        Center(
-          child: SegmentedButton<_Cat>(
-            showSelectedIcon: false,
-            segments: [for (final c in _Cat.values) ButtonSegment(value: c, icon: Icon(c.icon, size: 16), label: Text(c.label))],
-            selected: {_cat},
-            onSelectionChanged: (s) => setState(() => _cat = s.first),
-          ),
+        // chips, not a segmented bar: four labels don't fit one on a phone without breaking mid-word
+        Wrap(
+          alignment: WrapAlignment.center,
+          spacing: 8,
+          runSpacing: 4,
+          children: [
+            for (final c in _Cat.values)
+              ChoiceChip(
+                avatar: Icon(c.icon, size: 16),
+                label: Text(c.label),
+                showCheckmark: false,
+                selected: _cat == c,
+                onSelected: (_) => setState(() => _cat = c),
+              ),
+          ],
         ),
         const SizedBox(height: 12),
         if (ranked == null && _err != null) _Empty(Icons.error_outline, 'Couldn\'t load the league', _err!),
