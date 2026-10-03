@@ -6,6 +6,9 @@
 //   crew    — merged; where both named the same puck differently, the phone wins
 //   races / course (marks, lines, gun, corrections) — copied to whichever side has none;
 //             if both sides have a different one, you choose which to keep
+//
+// Your own sails follow you: one you recorded on your phone comes down to your tablet as yours (not as
+// a mate's), and syncNew() does all of this without being asked, for the days whose tracks differ.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -28,7 +31,11 @@ class DayCompare {
 
   /// Who sent each of the server's tracks (names only) and how they're shared, so downloads keep both.
   final Map<String, String> serverOwners, serverSharing, serverBoats;
-  const DayCompare(this.day, this.phoneOnly, this.serverOnly, this.both, {this.serverOwners = const {}, this.serverSharing = const {}, this.serverBoats = const {}});
+
+  /// The server's tracks it counts as the signed-in person's own.
+  final Set<String> serverMine;
+  const DayCompare(this.day, this.phoneOnly, this.serverOnly, this.both,
+      {this.serverOwners = const {}, this.serverSharing = const {}, this.serverBoats = const {}, this.serverMine = const {}});
   bool get onPhone => phoneOnly.isNotEmpty || both.isNotEmpty;
   bool get onServer => serverOnly.isNotEmpty || both.isNotEmpty;
   bool get tracksInSync => phoneOnly.isEmpty && serverOnly.isEmpty;
@@ -38,6 +45,9 @@ class SyncReport {
   int up = 0, down = 0;
   final List<String> changed = []; // human-readable notes
   final List<String> conflicts = []; // 'races' / 'meta' that differ and need a choice
+
+  /// Days whose course differs on both sides (syncNew leaves those for the Sync tab).
+  final List<String> conflictDays = [];
 }
 
 /// Deep equality for decoded JSON, comparing numbers by value (5 == 5.0).
@@ -183,6 +193,7 @@ class ServerSync {
     final boats = {
       for (final s in ss) '${s['id']}': {for (final e in ((s['boats'] as Map?) ?? const {}).entries) '${e.key}': '${e.value}'}
     };
+    final mine = {for (final s in ss) '${s['id']}': ((s['mine'] as List?) ?? const []).map((e) => '$e').toSet()};
     final phone = {for (final s in await store.sessions()) '${s['id']}': ((s['files'] as List?) ?? const []).map((e) => '$e').toSet()};
     final days = {...server.keys, ...phone.keys}.toList()..sort((a, b) => b.compareTo(a));
     return [
@@ -195,11 +206,13 @@ class ServerSync {
           serverOwners: owners[d] ?? const {},
           serverSharing: sharing[d] ?? const {},
           serverBoats: boats[d] ?? const {},
+          serverMine: mine[d] ?? const {},
         ),
     ];
   }
 
-  Future<void> _uploadTrack(String day, String name) async {
+  /// Returns where the track ended up (session, file) once the server has filed it.
+  Future<(String, String)> _uploadTrack(String day, String name) async {
     final f = await store.trackFile(day, name);
     final owner = await store.ownerOf(day, name);
     final req = http.MultipartRequest('POST', _u('/api/upload'))
@@ -217,8 +230,67 @@ class ServerSync {
     try {
       final j = (jsonDecode(utf8.decode(r.bodyBytes)) as Map).cast<String, dynamic>();
       final sDay = '${j['session'] ?? day}', sFile = '${j['file'] ?? name}';
-      if (sDay != day || sFile != name) await store.moveTrack(day, name, sDay, sFile);
+      if (sDay != day || sFile != name) {
+        await store.moveTrack(day, name, sDay, sFile);
+        return (sDay, sFile);
+      }
     } catch (_) {}
+    return (day, name);
+  }
+
+  /// Is this one of the server's tracks my own (my account's, under my name)?
+  bool _mineOnServer(DayCompare c, String f) => store.ownerName.isNotEmpty && c.serverMine.contains(f) && c.serverOwners[f] == store.ownerName;
+
+  /// The owner record for a track that came from the server: mine stays mine on every device I sign in
+  /// on; anyone else's is marked remote, so it's never uploaded back as ours.
+  Map<String, dynamic> _ownerFromServer(DayCompare c, String f) {
+    final boat = c.serverBoats[f];
+    final common = {'visibility': c.serverSharing[f] ?? 'friends', if (boat != null && boat.isNotEmpty) 'boat': boat};
+    if (_mineOnServer(c, f)) {
+      return {'name': store.ownerName, if (store.ownerEmail.isNotEmpty) 'email': store.ownerEmail, ...common, 'synced': true};
+    }
+    return {'name': c.serverOwners[f] ?? '', ...common, 'remote': true};
+  }
+
+  /// A track here that the server has had (it came from there, or we sent it): if the server no longer
+  /// has it, it was deleted on another device and mustn't be sent back up.
+  static bool _serverHadIt(Map<String, dynamic>? o) => o != null && (o['remote'] == true || o['synced'] == true);
+
+  /// Tracks on both sides: note that the server has them, and take back any of my own that an older
+  /// version of the app filed as a mate's when it came down.
+  Future<void> _settleOwners(DayCompare c) async {
+    for (final f in c.both) {
+      final o = await store.ownerOf(c.day, f);
+      if (o == null) continue;
+      if (o['remote'] == true) {
+        if (_mineOnServer(c, f)) await store.setOwner(c.day, f, _ownerFromServer(c, f));
+      } else if (o['synced'] != true) {
+        await store.setOwner(c.day, f, {...o, 'synced': true});
+      }
+    }
+  }
+
+  /// Sync without being asked: every day whose tracks differ, both ways. A course that differs on both
+  /// sides is left alone (conflictDays) for the Sync tab to ask about.
+  Future<SyncReport> syncNew({void Function(String)? progress}) async {
+    final total = SyncReport();
+    for (final c in await compare()) {
+      var need = c.serverOnly.isNotEmpty;
+      for (final f in c.phoneOnly) {
+        if (need) break;
+        need = !_serverHadIt(await store.ownerOf(c.day, f));
+      }
+      if (!need) {
+        await _settleOwners(c);
+        continue;
+      }
+      final r = await syncDay(c, progress: progress);
+      total.up += r.up;
+      total.down += r.down;
+      total.changed.addAll(r.changed);
+      if (r.conflicts.isNotEmpty) total.conflictDays.add(c.day);
+    }
+    return total;
   }
 
   Future<Uint8List> _downloadTrack(String day, String name) async =>
@@ -230,21 +302,27 @@ class ServerSync {
     final rep = SyncReport();
 
     // ---- tracks
+    var gone = 0;
     for (final f in c.phoneOnly) {
       final o = await store.ownerOf(day, f);
       if (o != null && o['remote'] == true) continue; // a friend's track we downloaded: theirs to manage, not ours to re-upload
+      if (_serverHadIt(o)) {
+        gone++; // deleted from the server on another device: don't bring it back
+        continue;
+      }
       progress?.call('Uploading $f');
-      await _uploadTrack(day, f);
+      final (uDay, uFile) = await _uploadTrack(day, f);
+      final uo = await store.ownerOf(uDay, uFile);
+      if (uo != null) await store.setOwner(uDay, uFile, {...uo, 'synced': true});
       rep.up++;
     }
+    if (gone > 0) rep.changed.add('$gone no longer on the server (deleted on another device), kept here');
+    await _settleOwners(c);
     for (final f in c.serverOnly) {
       progress?.call('Downloading $f');
       if (await store.putTrack(day, f, await _downloadTrack(day, f))) {
         rep.down++;
-        final who = c.serverOwners[f];
-        // remember it came from the server, so it's never uploaded back as ours
-        final boat = c.serverBoats[f];
-        await store.setOwner(day, f, {'name': who ?? '', 'visibility': c.serverSharing[f] ?? 'friends', if (boat != null && boat.isNotEmpty) 'boat': boat, 'remote': true});
+        await store.setOwner(day, f, _ownerFromServer(c, f));
       }
     }
 

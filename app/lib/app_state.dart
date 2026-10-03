@@ -13,6 +13,7 @@ import 'demo/demo_pucks.dart';
 import 'dock/pocket_dock.dart';
 import 'dock/store.dart';
 import 'dock/tiles.dart';
+import 'sync/server_sync.dart';
 import 'updates.dart';
 
 /// Your WakeBack server. Change in Setup → Advanced if you run your own.
@@ -285,8 +286,33 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// A track was added outside the dock (e.g. a phone recording): lists reload.
-  void tracksChanged() => notifyListeners();
+  /// A track was added outside the dock (e.g. a phone recording): lists reload, and it's sent up soon.
+  void tracksChanged() {
+    _lastSync = 0;
+    notifyListeners();
+  }
+
+  // ------------------------------------------------------------------ sync on its own
+  bool _syncing = false;
+  int _lastSync = 0;
+
+  /// Signed in: bring this device and the server level (new sails up, yours and your friends' down)
+  /// without being asked. At most every 5 minutes unless [force]. Null = didn't run. Throws
+  /// SyncException if the server can't be reached.
+  Future<SyncReport?> autoSync({bool force = false}) async {
+    if (!signedIn || demoMode || serverUrl.isEmpty || _syncing) return null;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (!force && now - _lastSync < 5 * 60 * 1000) return null;
+    _syncing = true;
+    _lastSync = now;
+    try {
+      final r = await ServerSync(serverUrl, store, token: token).syncNew();
+      if (r.up + r.down > 0) notifyListeners();
+      return r;
+    } finally {
+      _syncing = false;
+    }
+  }
 }
 
 AppState get app => AppState.instance;

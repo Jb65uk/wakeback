@@ -135,7 +135,7 @@ class _SessionList extends StatefulWidget {
   State<_SessionList> createState() => _SessionListState();
 }
 
-class _SessionListState extends State<_SessionList> {
+class _SessionListState extends State<_SessionList> with WidgetsBindingObserver {
   List<Map<String, dynamic>>? _list;
   String? _err;
   Timer? _refresh;
@@ -145,15 +145,50 @@ class _SessionListState extends State<_SessionList> {
   void initState() {
     super.initState();
     _load();
-    app.addListener(_load); // demo on/off, sign in/out: different data
+    _auto();
+    app.addListener(_onApp); // demo on/off, sign in/out: different data
+    WidgetsBinding.instance.addObserver(this);
     _refresh = Timer.periodic(const Duration(seconds: 30), (_) => _load()); // a puck may have just landed
   }
 
   @override
   void dispose() {
     _refresh?.cancel();
-    app.removeListener(_load);
+    app.removeListener(_onApp);
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  void _onApp() {
+    _load();
+    _auto(); // just signed in, or a sail just recorded: sync it (no-op if it ran in the last few minutes)
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _auto(); // back in the app: a sail from your other device may be waiting
+  }
+
+  /// Sync with the server without being asked, so a sail recorded on your phone is on your tablet too.
+  /// Quiet unless something moved; says why it failed only when you asked for it (pull down).
+  Future<void> _auto({bool force = false}) async {
+    try {
+      final r = await app.autoSync(force: force);
+      if (r == null || !mounted) return;
+      final bits = <String>[
+        if (r.down > 0) '${r.down} track${r.down == 1 ? '' : 's'} down',
+        if (r.up > 0) '${r.up} up',
+        if (r.conflictDays.isNotEmpty) 'a course differs, settle it in Sync',
+      ];
+      if (bits.isNotEmpty) toast(context, 'Synced: ${bits.join(' · ')}');
+    } on SyncException catch (e) {
+      if (force && mounted) toast(context, 'Couldn\'t sync: ${e.message}', error: true);
+    } catch (_) {}
+  }
+
+  Future<void> _pulled() async {
+    await _auto(force: true);
+    await _load();
   }
 
   Future<void> _load() async {
@@ -334,11 +369,11 @@ class _SessionListState extends State<_SessionList> {
     if (list == null) return _err == null ? const Center(child: CircularProgressIndicator()) : _Empty(Icons.error_outline, 'Couldn\'t read your sessions', _err!);
     if (list.isEmpty) {
       return RefreshIndicator(
-        onRefresh: _load,
+        onRefresh: _pulled,
         child: ListView(children: const [
           SizedBox(height: 80),
           _Empty(Icons.sailing_outlined, 'No sessions yet',
-              'When a puck joins your hotspot its track lands here. You can also add a GPX from a phone or watch in Replay, or pull your sessions down from the server in Sync.'),
+              'When a puck joins your hotspot its track lands here. You can also add a GPX from a phone or watch in Replay. Signed in? Pull down to fetch your sails from the server.'),
         ]),
       );
     }
@@ -346,7 +381,7 @@ class _SessionListState extends State<_SessionList> {
     final update = app.pendingUpdate;
     final head = (records.isEmpty ? 0 : 1) + (update == null ? 0 : 1);
     return RefreshIndicator(
-      onRefresh: _load,
+      onRefresh: _pulled,
       child: ListView.builder(
         padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
         itemCount: list.length + 1 + head,
