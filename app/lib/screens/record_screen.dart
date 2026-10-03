@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../record/recorder.dart';
 import '../record/track_log.dart';
+import '../widgets/boats.dart';
 import '../widgets/common.dart';
 
 const _yellow = Color(0xFFFFC72C), _red = Color(0xFFFF6B6B), _green = Color(0xFF6FD3A4);
@@ -40,7 +41,18 @@ class _RecordScreenState extends State<RecordScreen> {
     if (mounted) setState(() => _busy = false);
   }
 
+  /// Which boat this sail is in: asked once before the first recording, then one tap to change.
+  Future<void> _pickBoat() async {
+    final b = await pickBoat(context, current: app.recordBoat);
+    if (b != null) await app.setRecordBoat(b);
+    if (mounted) setState(() {});
+  }
+
   Future<void> _start() => _run(() async {
+        if (app.boats.isEmpty && app.recordBoat.isEmpty) {
+          await _pickBoat(); // no boats yet: ask now (dismiss to record without one)
+          if (!mounted) return;
+        }
         if (!await recorder.start() && mounted && recorder.problem != null) toast(context, recorder.problem!, error: true);
       });
 
@@ -77,7 +89,7 @@ class _RecordScreenState extends State<RecordScreen> {
   Widget build(BuildContext context) {
     final t = Theme.of(context);
     return ListenableBuilder(
-      listenable: recorder,
+      listenable: Listenable.merge([recorder, app]),
       builder: (context, _) {
         final r = recorder, l = r.log, st = r.state;
         return ListView(
@@ -106,13 +118,23 @@ class _RecordScreenState extends State<RecordScreen> {
                     : CustomPaint(painter: _TracePainter(l.fixes), size: Size.infinite),
               ),
             ),
-            const SizedBox(height: 14),
+            const SizedBox(height: 12),
+            Card(
+              margin: EdgeInsets.zero,
+              clipBehavior: Clip.antiAlias,
+              child: ListTile(
+                leading: Icon(Icons.sailing_outlined, color: app.recordBoat.isEmpty ? t.colorScheme.onSurfaceVariant : t.colorScheme.primary),
+                title: Text(app.recordBoat.isEmpty ? 'Which boat are you sailing?' : app.recordBoat),
+                subtitle: Text(app.recordBoat.isEmpty ? 'Pick one so this sail counts for that boat' : (st == RecState.idle ? 'This sail will be saved to this boat' : 'This sail is in this boat')),
+                trailing: Text(app.recordBoat.isEmpty ? 'Choose' : 'Change', style: t.textTheme.labelLarge?.copyWith(color: t.colorScheme.primary)),
+                onTap: _busy ? null : _pickBoat,
+              ),
+            ),
+            const SizedBox(height: 12),
             _controls(st),
             const SizedBox(height: 10),
             if (r.recovered)
               const Hint('This recording was cut off. Resume to carry on, or Finish to save what\'s there.')
-            else if (st == RecState.idle && app.boats.isEmpty)
-              const Hint('Keeps recording with the screen off. Add your boat on the You tab and it goes on every sail.')
             else if (st == RecState.idle)
               const Hint('Keeps recording with the screen off. Don\'t swipe WakeBack away while you sail.')
             else if (st == RecState.paused)

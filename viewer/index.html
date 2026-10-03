@@ -239,7 +239,7 @@ body.big #togglePanel,body.big #trailOnlyWrap{display:none}
 .chip{border:1px solid var(--line);border-radius:999px;padding:4px 10px;font-size:13px;color:var(--muted);cursor:pointer;background:var(--panel-2)}
 .chip.on{background:var(--signal);color:var(--panel);border-color:var(--signal);font-weight:600}
 .card{border-left:8px solid var(--c);background:var(--panel-2);padding:10px 12px 12px;border-radius:0 8px 8px 0}
-.card.off{opacity:.4}
+.card .csub{color:var(--muted);font-size:13px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .card input.nm{font-family:var(--num);font-weight:700;font-size:30px;line-height:1;background:transparent;border:0;border-bottom:1px solid transparent;width:100%;padding:0;color:var(--ink)}
 .card input.nm:hover,.card input.nm:focus{border-bottom-color:var(--line);outline:none}
 .card .top{display:flex;align-items:center;gap:8px}
@@ -1204,12 +1204,33 @@ function renameBoat(id, name) {
 function renderChips() {
   $('#fieldChips').innerHTML = FIELDS.map(([k, l]) => `<button class="chip${fields.has(k) ? ' on' : ''}" data-field="${k}">${l}</button>`).join('');
 }
+// What tells two tracks apart when the name can't: the boat sailed, and (when one person has more than
+// one track in the session) the time the track started.
+function boatSub(b) {
+  const boat = (dock.boats && dock.boats[b.file]) || '';
+  const twice = boats.filter(x => x.name === b.name).length > 1;
+  return [boat, twice ? hhmm(b.start) : ''].filter(Boolean).join(' · ');
+}
+// Long names shrink to fit their card rather than being cut off.
+function fitCardNames() {
+  document.querySelectorAll('#cardList input.nm').forEach(el => {
+    el.style.fontSize = '';
+    if (!el.clientWidth) return;   // cards aren't on show
+    let size = 30;
+    while (el.scrollWidth > el.clientWidth + 1 && size > 15) el.style.fontSize = (--size) + 'px';
+  });
+}
+window.addEventListener('resize', fitCardNames);
 function renderCards() {
-  $('#cardList').innerHTML = boats.map(b => `
-    <div class="card${b.visible && b.inRace ? '' : ' off'}" style="--c:${b.color}">
+  // only the boats on show: one you've unticked, or one that wasn't out in this race, has no card
+  const shown = boats.filter(b => b.visible && b.inRace);
+  $('#cardList').innerHTML = shown.map(b => `
+    <div class="card" style="--c:${b.color}">
       <div class="top">${badge(b)}<input class="nm" data-cname="${b.id}" value="${esc(b.name)}" list="sailors" aria-label="Who sailed ${puckNum(b) ? 'puck ' + puckNum(b) : 'this track'}"></div>
+      ${boatSub(b) ? `<div class="csub">${esc(boatSub(b))}</div>` : ''}
       <div class="vals">${[...fields].map(f => `<div><div class="v" data-cv="${b.id}:${f}">–</div><div class="l">${FIELDS.find(x => x[0] === f)[1]}</div></div>`).join('')}</div>
-    </div>`).join('');
+    </div>`).join('') || (boats.length ? '<div class="empty">No boats selected. Tick a boat in the list to show it here.</div>' : '');
+  fitCardNames();
 }
 $('#fieldChips').addEventListener('click', e => {
   const c = e.target.closest('[data-field]'); if (!c) return;
@@ -1944,7 +1965,7 @@ async function openSession(id) {
   try {
     const list = await (await fetch('/api/sessions', { cache: 'no-store' })).json();
     const sx = list.find(x => x.id === id); if (!sx) { toast('That session isn\'t here any more'); return false; }
-    $('#clear').click(); dock.session = id; dock.owners = sx.owners || {}; dock.sharing = sx.sharing || {}; dock.mine = sx.mine || null; venueEdit = null; if (!unsaved.size) $('#saveState').hidden = true;
+    $('#clear').click(); dock.session = id; dock.owners = sx.owners || {}; dock.boats = sx.boats || {}; dock.sharing = sx.sharing || {}; dock.mine = sx.mine || null; venueEdit = null; if (!unsaved.size) $('#saveState').hidden = true;
     renderSessions.last = null; renderSessions(list);
     const files = await Promise.all(sx.files.map(async f => new File([await (await fetch(`/api/sessions/${id}/${f}`)).blob()], f)));
     await loadFiles(files);
@@ -2000,7 +2021,7 @@ function renderList() {
       <button class="sw" data-vis="${b.id}" aria-label="Show or hide ${esc(b.name)}"></button>
       <div class="nmrow">${badge(b)}<input class="name" data-name="${b.id}" value="${esc(b.name)}" list="sailors" placeholder="Who's sailing?" aria-label="Who sailed ${puckNum(b) ? 'puck ' + puckNum(b) : 'this track'}"></div>
       <div class="live" data-live="${b.id}">–</div>
-      <div class="meta"><span>Max <b>${b.stats.max.toFixed(1)}</b></span><span>Avg <b>${b.stats.avg.toFixed(1)}</b></span><span><b>${b.stats.dist.toFixed(2)}</b> nm</span><span>${fmtDur(b.stats.dur)}</span>${dock.owners && dock.owners[b.file] && dock.owners[b.file] !== b.name ? `<span>from <b>${esc(dock.owners[b.file])}</b></span>` : ''}${dock.on && dock.mine && boatSide(b) === 'mine' && dock.sharing && dock.sharing[b.file] ? `<button class="share${dock.sharing[b.file] === 'private' ? ' priv' : ''}" data-share="${b.id}" title="Who can see this track">${dock.sharing[b.file] === 'private' ? '🔒 Private' : '👥 Friends'}</button>` : ''}${b.stats.up != null ? `<span>Up <b>${b.stats.up.toFixed(1)}</b></span>` : ''}${wind != null && b.stats.loss != null ? `<span>Tack loss <b>${b.stats.loss.toFixed(0)}</b> m</span>` : ''}${wind != null && b.stats.gloss != null ? `<span>Gybe loss <b>${b.stats.gloss.toFixed(0)}</b> m</span>` : ''}<button class="lnk" data-an="${b.id}">${wind != null ? `${b.stats.tacks || 0} tacks, ${b.stats.gybes || 0} gybes` : 'Tacks & gybes'}</button><button class="rm" data-rm="${b.id}">Remove</button></div>
+      <div class="meta">${boatSub(b) ? `<span><b>${esc(boatSub(b))}</b></span>` : ''}<span>Max <b>${b.stats.max.toFixed(1)}</b></span><span>Avg <b>${b.stats.avg.toFixed(1)}</b></span><span><b>${b.stats.dist.toFixed(2)}</b> nm</span><span>${fmtDur(b.stats.dur)}</span>${dock.owners && dock.owners[b.file] && dock.owners[b.file] !== b.name ? `<span>from <b>${esc(dock.owners[b.file])}</b></span>` : ''}${dock.on && dock.mine && boatSide(b) === 'mine' && dock.sharing && dock.sharing[b.file] ? `<button class="share${dock.sharing[b.file] === 'private' ? ' priv' : ''}" data-share="${b.id}" title="Who can see this track">${dock.sharing[b.file] === 'private' ? '🔒 Private' : '👥 Friends'}</button>` : ''}${b.stats.up != null ? `<span>Up <b>${b.stats.up.toFixed(1)}</b></span>` : ''}${wind != null && b.stats.loss != null ? `<span>Tack loss <b>${b.stats.loss.toFixed(0)}</b> m</span>` : ''}${wind != null && b.stats.gloss != null ? `<span>Gybe loss <b>${b.stats.gloss.toFixed(0)}</b> m</span>` : ''}<button class="lnk" data-an="${b.id}">${wind != null ? `${b.stats.tacks || 0} tacks, ${b.stats.gybes || 0} gybes` : 'Tacks & gybes'}</button><button class="rm" data-rm="${b.id}">Remove</button></div>
     </div>`).join('');
 }
 $('#boats').addEventListener('click', async e => {

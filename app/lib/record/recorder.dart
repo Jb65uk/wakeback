@@ -187,7 +187,15 @@ class Recorder extends ChangeNotifier {
     final done = log;
     Map<String, dynamic>? res;
     if (done.fixes.length >= 2) {
-      res = await app.store.upload('${done.fileBase()}.csv', Uint8List.fromList(done.toCsv().codeUnits));
+      // the boat picked on the Record tab goes on the track, so it counts for that boat on your account
+      final boat = app.recordBoat;
+      res = await app.store.upload('${done.fileBase()}.csv', Uint8List.fromList(done.toCsv().codeUnits), boat: boat);
+      if (boat.isEmpty && app.defaultBoat.isNotEmpty) {
+        // "no boat" was chosen on purpose: don't let the usual boat be filled in
+        try {
+          await app.store.trackSettings('${res['session']}', '${res['file']}', {'boat': ''});
+        } catch (_) {}
+      }
       lastSaved = res;
       lastSavedLog = done;
     }
