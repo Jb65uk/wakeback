@@ -1699,7 +1699,7 @@ function jumpToTack(b, tk) {
 function renderTacks() {
   const sel = $('#focus');
   if (focusId && !boats.some(b => b.id === focusId)) focusId = '';
-  sel.innerHTML = `<option value="">${boats.length ? 'Pick a boat…' : 'No boats loaded'}</option>` + boats.map(b => `<option value="${b.id}"${b.id === focusId ? ' selected' : ''}>${esc(label(b))}</option>`).join('');
+  sel.innerHTML = `<option value="">${boats.length ? 'Pick a boat…' : 'No boats loaded'}</option>` + boats.map(b => `<option value="${b.id}"${b.id === focusId ? ' selected' : ''}>${esc(label(b) + (boatSub(b) ? ' · ' + boatSub(b) : ''))}</option>`).join('');
   const b = boats.find(x => x.id === focusId);
   const list = $('#tackList'), sum = $('#tackSum');
   const fbtns = [...document.querySelectorAll('#tkFilter button')];
