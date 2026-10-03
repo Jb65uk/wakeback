@@ -272,6 +272,19 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// The boat the next recording is for: the one you picked on the Record tab (it stays picked for next
+  /// time), else your usual boat. '' = none.
+  String get recordBoat {
+    final b = _p.getString('recordBoat');
+    if (b == null) return defaultBoat;
+    return b.isEmpty || boats.contains(b) ? b : defaultBoat; // a boat since removed from your list
+  }
+
+  Future<void> setRecordBoat(String b) async {
+    await _p.setString('recordBoat', b.trim());
+    notifyListeners();
+  }
+
   /// A boat named on a session that isn't in the list yet: keep it, so it's there next time.
   Future<void> rememberBoat(String b) async {
     if (b.trim().isEmpty || boats.contains(b.trim())) return;
