@@ -262,11 +262,26 @@ body.big #togglePanel,body.big #trailOnlyWrap{display:none}
 .leaflet-container{background:#0d2231;font-family:var(--body)}
 @media (max-width:760px){
   #app{grid-template-columns:1fr;grid-template-rows:1fr auto}
-  body.big #app{grid-template-columns:1fr;grid-template-rows:1fr auto auto}
-  body.big #cards{grid-row:2;grid-column:1;flex-direction:row;overflow-x:auto;border-left:0;border-top:1px solid var(--line);max-height:44%}
-  body.big #cards .chips{flex:0 0 auto;flex-direction:column;justify-content:flex-start}
-  body.big #cards .card{flex:0 0 200px}
-  body.big #replay{grid-row:3}
+  /* big screen on a phone held upright: map, then one slim row per boat, then a short replay bar */
+  body.big #app{grid-template-columns:1fr;grid-template-rows:minmax(180px,1fr) auto auto}
+  body.big #cards{grid-row:2;grid-column:1;flex-direction:column;gap:6px;padding:8px 10px;overflow-y:auto;overflow-x:hidden;border-left:0;border-top:1px solid var(--line);max-height:40vh}
+  body.big #raceTitle,body.big #wxBig{display:none}   /* the wind is on the map; the race is the lit chip */
+  body.big #cards .chips{flex:0 0 auto;flex-wrap:nowrap;overflow-x:auto}
+  body.big #cards .chip{white-space:nowrap;font-size:14px;padding:5px 12px}
+  body.big #fieldBox{font-size:13px}
+  body.big #cards .card{flex:0 0 auto;display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:12px;align-items:center;padding:7px 10px;border-left-width:6px}
+  body.big #cards .card .top{grid-column:1;min-width:0}
+  body.big #cards .card .csub{grid-column:1;font-size:12px;margin-top:1px}
+  body.big #cards .card .vals{grid-column:2;grid-row:1/span 2;display:flex;gap:14px;margin-top:0}
+  body.big #cards .card .vals>div:nth-child(n+4){display:none}   /* room for three numbers a boat */
+  body.big #cards .card input.nm{font-size:19px}
+  body.big #cards .card .pb{height:22px;min-width:32px;font-size:15px}
+  body.big #cards .card .v{font-size:24px}
+  body.big #cards .card .v small{font-size:11px}
+  body.big #cards .card .l{font-size:10.5px;margin-top:1px}
+  body.big #replay{grid-row:3;padding:8px 10px;gap:6px}
+  body.big #metric,body.big #fit,body.big label:has(#loop){display:none}
+  body.big #chart{height:54px}
   #map{grid-column:1}
   #replay{grid-column:1}
   #panel{position:fixed;left:0;right:0;bottom:0;max-height:78%;border-right:0;border-top:1px solid var(--line);border-radius:14px 14px 0 0;transform:translateY(105%);transition:transform .25s ease;padding-bottom:calc(20px + env(safe-area-inset-bottom,0px));z-index:1500}
@@ -1216,8 +1231,9 @@ function fitCardNames() {
   document.querySelectorAll('#cardList input.nm').forEach(el => {
     el.style.fontSize = '';
     if (!el.clientWidth) return;   // cards aren't on show
-    let size = 30;
-    while (el.scrollWidth > el.clientWidth + 1 && size > 15) el.style.fontSize = (--size) + 'px';
+    let size = Math.round(parseFloat(getComputedStyle(el).fontSize)) || 30;
+    const least = Math.max(12, Math.round(size / 2));
+    while (el.scrollWidth > el.clientWidth + 1 && size > least) el.style.fontSize = (--size) + 'px';
   });
 }
 window.addEventListener('resize', fitCardNames);
@@ -1244,7 +1260,7 @@ function setBig(on) {
   document.body.classList.toggle('big', on);
   $('#big').textContent = on ? 'Normal view' : 'Big screen';
   if (on) { renderChips(); renderCards(); render(); }
-  setTimeout(() => map.invalidateSize(), 50);
+  setTimeout(() => { map.invalidateSize(); fitCardNames(); drawChartBase(); render(); }, 50);
 }
 $('#big').addEventListener('click', () => setBig(!document.body.classList.contains('big')));
 $('#fs').addEventListener('click', () => {
