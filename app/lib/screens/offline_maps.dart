@@ -130,8 +130,7 @@ class _OfflineMapsCardState extends State<OfflineMapsCard> {
           }),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-          child: Hint('Satellite and street map for about 2.5 km round the venue, zoomed right in: roughly 30–50 MB each. '
-              'Do it on WiFi. Anything you look at in Replay with signal is kept too.'),
+          child: Hint('Download a venue\'s map to replay there with no signal. About 30–50 MB each, so do it on WiFi.'),
         ),
         if (_venues.isEmpty) const Padding(padding: EdgeInsets.fromLTRB(16, 0, 16, 12), child: Hint('Venues appear here once you have sailed somewhere (or synced).')),
         Padding(padding: const EdgeInsets.fromLTRB(16, 0, 16, 12), child: Text('Map data © OpenStreetMap contributors, imagery © Esri', style: t.textTheme.labelSmall?.copyWith(color: t.colorScheme.onSurfaceVariant))),

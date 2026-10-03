@@ -16,7 +16,7 @@ import 'dock/tiles.dart';
 import 'sync/server_sync.dart';
 import 'updates.dart';
 
-/// Your WakeBack server. Change in Setup → Advanced if you run your own.
+/// Your WakeBack server. Change in You → Advanced if you run your own.
 const String kDefaultServer = 'https://wakeback.bridgesolutions.uk';
 
 class AppState extends ChangeNotifier {
@@ -296,6 +296,13 @@ class AppState extends ChangeNotifier {
   bool _syncing = false;
   int _lastSync = 0;
 
+  /// How the last sync went, for the cloud on the Sails tab:
+  /// 'idle' (not run yet) | 'syncing' | 'ok' | 'attention' (a course differs) | 'offline' | 'error'.
+  final ValueNotifier<String> syncStatus = ValueNotifier('idle');
+
+  /// What went wrong last time, in plain English (null when it went fine).
+  String? syncProblem;
+
   /// Signed in: bring this device and the server level (new sails up, yours and your friends' down)
   /// without being asked. At most every 5 minutes unless [force]. Null = didn't run. Throws
   /// SyncException if the server can't be reached.
@@ -305,10 +312,21 @@ class AppState extends ChangeNotifier {
     if (!force && now - _lastSync < 5 * 60 * 1000) return null;
     _syncing = true;
     _lastSync = now;
+    syncStatus.value = 'syncing';
     try {
       final r = await ServerSync(serverUrl, store, token: token).syncNew();
+      syncProblem = null;
+      syncStatus.value = r.conflictDays.isEmpty ? 'ok' : 'attention';
       if (r.up + r.down > 0) notifyListeners();
       return r;
+    } on SyncException catch (e) {
+      syncProblem = e.message;
+      syncStatus.value = e.offline ? 'offline' : 'error';
+      rethrow;
+    } catch (e) {
+      syncProblem = '$e';
+      syncStatus.value = 'error';
+      rethrow;
     } finally {
       _syncing = false;
     }

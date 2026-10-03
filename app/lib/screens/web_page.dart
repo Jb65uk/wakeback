@@ -17,7 +17,7 @@ import '../app_state.dart';
 class WakeWebView extends StatefulWidget {
   final String url;
 
-  /// Handle the Android back button itself (a pushed page). The home screen handles it for the Replay tab.
+  /// Handle the Android back button itself (a pushed page). The home screen handles it for Replay.
   final bool ownBack;
   const WakeWebView({super.key, required this.url, this.ownBack = true});
 
@@ -226,13 +226,14 @@ class WakeWebViewState extends State<WakeWebView> with AutomaticKeepAliveClientM
   }
 }
 
-/// Full-screen page for your server's viewer (pushed from the Sync tab).
+/// Full-screen page for a viewer page: your server's (from Sync) or this phone's Dock page (from You).
 class ServerViewerPage extends StatelessWidget {
   final String url;
-  const ServerViewerPage({super.key, required this.url});
+  final String? title;
+  const ServerViewerPage({super.key, required this.url, this.title});
   @override
   Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: Text(Uri.parse(url).host), toolbarHeight: 44),
+        appBar: AppBar(title: Text(title ?? Uri.parse(url).host), toolbarHeight: 44),
         body: SafeArea(top: false, child: WakeWebView(url: url)),
       );
 }

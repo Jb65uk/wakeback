@@ -91,7 +91,7 @@ class _FriendsSectionState extends State<FriendsSection> {
             if (_loading) const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) else IconButton(icon: const Icon(Icons.refresh), onPressed: _load, tooltip: 'Refresh'),
             FilledButton.tonalIcon(onPressed: _add, icon: const Icon(Icons.person_add_alt), label: const Text('Add')),
           ]),
-          const Hint('Friends see each other\'s sails (unless a sail is set private), so you can replay who you raced against.'),
+          const Hint('Friends see each other\'s sails, unless a sail is private.'),
           if (_error != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text(_error!, style: TextStyle(color: t.colorScheme.error))),
           if (l != null) ...[
             if (l.incoming.isNotEmpty) ...[

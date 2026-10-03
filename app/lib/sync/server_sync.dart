@@ -20,13 +20,32 @@ import '../dock/store.dart';
 class SyncException implements Exception {
   final String message;
   final bool signedOut; // the server no longer accepts our token
-  const SyncException(this.message, {this.signedOut = false});
+  /// This device has no internet (as opposed to the server being down or saying no).
+  final bool offline;
+
+  /// The technical error behind a plain-English message, for the Details line.
+  final String? detail;
+  const SyncException(this.message, {this.signedOut = false, this.offline = false, this.detail});
   @override
   String toString() => message;
+
+  /// A network failure in plain English: your sails are safe either way.
+  factory SyncException.network(Object e) {
+    final d = '$e';
+    final noNet = d.contains('Failed host lookup') || d.contains('Network is unreachable') || d.contains('No address associated') || d.contains('errno = 101') || d.contains('errno = 7)');
+    return SyncException(
+      noNet ? 'No internet on this device. Your sails are safe and will sync when you\'re back online.' : 'The WakeBack server isn\'t answering. Your sails are safe; it will try again later.',
+      offline: noNet,
+      detail: d,
+    );
+  }
 }
 
 class DayCompare {
   final String day;
+
+  /// The sailing date ('2026-10-03') and venue name, for showing the day to a person.
+  final String date, venueName;
   final List<String> phoneOnly, serverOnly, both;
 
   /// Who sent each of the server's tracks (names only) and how they're shared, so downloads keep both.
@@ -35,7 +54,7 @@ class DayCompare {
   /// The server's tracks it counts as the signed-in person's own.
   final Set<String> serverMine;
   const DayCompare(this.day, this.phoneOnly, this.serverOnly, this.both,
-      {this.serverOwners = const {}, this.serverSharing = const {}, this.serverBoats = const {}, this.serverMine = const {}});
+      {this.serverOwners = const {}, this.serverSharing = const {}, this.serverBoats = const {}, this.serverMine = const {}, this.date = '', this.venueName = ''});
   bool get onPhone => phoneOnly.isNotEmpty || both.isNotEmpty;
   bool get onServer => serverOnly.isNotEmpty || both.isNotEmpty;
   bool get tracksInSync => phoneOnly.isEmpty && serverOnly.isEmpty;
@@ -46,7 +65,7 @@ class SyncReport {
   final List<String> changed = []; // human-readable notes
   final List<String> conflicts = []; // 'races' / 'meta' that differ and need a choice
 
-  /// Days whose course differs on both sides (syncNew leaves those for the Sync tab).
+  /// Days whose course differs on both sides (syncNew leaves those for the Sync page).
   final List<String> conflictDays = [];
 }
 
@@ -90,7 +109,7 @@ class ServerSync {
   Future<http.Response> _go(Future<http.Response> f, {Duration timeout = const Duration(seconds: 20)}) async {
     try {
       final r = await f.timeout(timeout);
-      if (r.statusCode == 401) throw const SyncException('Please sign in to your WakeBack account (Setup → You)', signedOut: true);
+      if (r.statusCode == 401) throw const SyncException('Please sign in to your WakeBack account (You tab)', signedOut: true);
       if (r.statusCode == 301 || r.statusCode == 302) {
         throw const SyncException('Something in front of the server (Cloudflare Access?) is asking for its own login. Limit it to /admin.');
       }
@@ -105,11 +124,11 @@ class ServerSync {
       }
       return r;
     } on TimeoutException {
-      throw const SyncException('Server didn\'t answer — check the address and your signal');
+      throw const SyncException('The WakeBack server didn\'t answer in time. Your sails are safe; it will try again later.', detail: 'timed out');
     } on SyncException {
       rethrow;
     } catch (e) {
-      throw SyncException('Can\'t reach the server: $e');
+      throw SyncException.network(e);
     }
   }
 
@@ -194,7 +213,10 @@ class ServerSync {
       for (final s in ss) '${s['id']}': {for (final e in ((s['boats'] as Map?) ?? const {}).entries) '${e.key}': '${e.value}'}
     };
     final mine = {for (final s in ss) '${s['id']}': ((s['mine'] as List?) ?? const []).map((e) => '$e').toSet()};
-    final phone = {for (final s in await store.sessions()) '${s['id']}': ((s['files'] as List?) ?? const []).map((e) => '$e').toSet()};
+    final ps = await store.sessions();
+    final phone = {for (final s in ps) '${s['id']}': ((s['files'] as List?) ?? const []).map((e) => '$e').toSet()};
+    final dates = {for (final s in [...ss, ...ps]) '${s['id']}': '${s['date'] ?? ''}'};
+    final venueNames = {for (final s in [...ss, ...ps]) '${s['id']}': '${s['venue_name'] ?? ''}'};
     final days = {...server.keys, ...phone.keys}.toList()..sort((a, b) => b.compareTo(a));
     return [
       for (final d in days)
@@ -207,6 +229,8 @@ class ServerSync {
           serverSharing: sharing[d] ?? const {},
           serverBoats: boats[d] ?? const {},
           serverMine: mine[d] ?? const {},
+          date: dates[d] ?? '',
+          venueName: venueNames[d] ?? '',
         ),
     ];
   }
@@ -271,7 +295,7 @@ class ServerSync {
   }
 
   /// Sync without being asked: every day whose tracks differ, both ways. A course that differs on both
-  /// sides is left alone (conflictDays) for the Sync tab to ask about.
+  /// sides is left alone (conflictDays) for the Sync page to ask about.
   Future<SyncReport> syncNew({void Function(String)? progress}) async {
     final total = SyncReport();
     for (final c in await compare()) {

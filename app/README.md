@@ -3,7 +3,7 @@
 **The dock in your pocket.** The app runs the same API as `server/app.py` on the phone and shows the
 **real viewer** (`viewer/index.html`) — races, marks, start/finish lines, tacks & gybes, wind, big screen,
 crew names, venues, weather, the Dock page — all saved on the phone. Every session is a date + venue, and everything
-your phone records is marked as yours (Setup → You).
+your phone records is marked as yours (the You tab).
 
 - **No dock Pi yet?** Turn on the phone's hotspot. Pucks join it and upload to the phone exactly as they
   would to the Pi (same `/api/pucks/checkin` and `/api/upload`).
@@ -22,7 +22,7 @@ app/
   lib/updates.dart            checks GitHub releases, downloads + installs a newer build
   lib/sync/server_sync.dart   two-way sync with your server (existing endpoints only)
   lib/demo/                   fake_pucks.py + gen_fake_data.py, ported
-  lib/screens/                Sessions (list, Stats, League), Replay (the viewer), Sync, Setup
+  lib/screens/                three tabs: Sails (list, Stats, League), Record, You. Replay (the viewer) opens when you tap a sail; Sync is behind the cloud on Sails
   assets/web/                 viewer pages (copied from ..\viewer by setup.ps1) + Leaflet
   test/dock_test.dart         checks the phone dock answers like app.py (incl. stats), and sync between two docks
   test/fixtures/              two small tracks whose numbers were taken from server/stats.py
@@ -57,10 +57,10 @@ Press `r` in the terminal to reload after a change, `q` to quit.
 
 ## 4. Try it
 
-1. **Setup → Add a demo race morning.** Back on **Replay**, open the sessions list (on a phone: the
+1. **You → Advanced → Try the demo → Add a demo race morning.** Back on **Sails**, tap the day to replay it; in Replay open the panel (on a phone: the
    panel button) → today's date → it's the full viewer: suggested races, Race 1, Estimate wind, tacks & gybes,
    start results, **Big screen**, **Full screen**.
-2. **Setup → Demo pucks** on, then the viewer's **Dock** tab: five pucks charging; P4 comes back after
+2. **You → Demo pucks** on, then **Advanced → See your pucks**: five pucks charging; P4 comes back after
    ~20 s and uploads a session that appears in the list.
 3. **Sync:** run your server on the PC (`python server\app.py`), then in the emulator use
    `http://10.0.2.2:5000` (the emulator's name for your PC) → **Check** → **Sync**. Open
@@ -69,7 +69,7 @@ Press `r` in the terminal to reload after a change, `q` to quit.
 
 ## Pucks uploading to the phone (no dock)
 
-1. Android Settings → Hotspot: name **wakeback** (or whatever you set in Setup) and the password your
+1. Android Settings → Hotspot: name **wakeback** (or whatever you set in You → Advanced) and the password your
    pucks use. Turn it on.
 2. Open WakeBack and keep it open (screen on is safest) while pucks sit on their charging pads.
 3. Pucks join, check in every ~30 s and upload. Watch them on the viewer's **Dock** tab.
@@ -83,7 +83,7 @@ port 5000, which is the Pi on its own WiFi and the phone on its hotspot — one 
 |---|---|
 | `flutter` not recognised | PATH not set, or terminal opened before you set it |
 | Build asks for a different NDK version | copy the `ndkVersion = "…"` line it prints into `android\app\build.gradle.kts` under `android {` |
-| Setup shows "Couldn't open port 5000" | another app has it; restart the phone. Replays still work, pucks can't upload until then |
+| You → Advanced shows "Couldn't open port 5000" | another app has it; restart the phone. Replays still work, pucks can't upload until then |
 | Sync: "Can't reach the server" | check the address (include `http://` or `https://`); from the emulator the PC is `10.0.2.2` |
 | Map background blank | no internet for tiles — tracks, marks and lines still draw |
 
