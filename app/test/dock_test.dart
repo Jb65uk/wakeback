@@ -11,6 +11,7 @@ import 'package:wakeback/dock/badges.dart';
 import 'package:wakeback/dock/stats.dart';
 import 'package:wakeback/dock/tiles.dart';
 import 'package:wakeback/dock/store.dart';
+import 'package:wakeback/screens/sessions_screen.dart' show sailTimes;
 import 'package:wakeback/sync/server_sync.dart';
 
 Future<Uint8List?> diskAssets(String name) async {
@@ -575,6 +576,18 @@ void main() {
     } finally {
       await server.stop();
     }
+  });
+
+  test('session card times: one span per sail, a short break is the same sail', () {
+    int at(int h, int m) => DateTime(2026, 10, 3, h, m).millisecondsSinceEpoch;
+    Map st(int a, int b) => {'start_ms': a, 'end_ms': b};
+    expect(sailTimes([]), '');
+    expect(sailTimes([st(at(10, 30), at(12, 16))]), '10:30–12:16');
+    // overlapping tracks, and one that restarts ten minutes later: still one sail
+    expect(sailTimes([st(at(10, 40), at(12, 16)), st(at(10, 30), at(11, 0)), st(at(12, 26), at(12, 50))]), '10:30–12:50');
+    // back out after lunch: two sails
+    expect(sailTimes([st(at(14, 5), at(15, 40)), st(at(10, 30), at(12, 16))]), '10:30–12:16, 14:05–15:40');
+    expect(sailTimes([{'points': 3}]), '');
   });
 
   test('sync reports a server that isn\'t WakeBack', () async {

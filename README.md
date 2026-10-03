@@ -28,7 +28,7 @@ wakeback/
 2. `Terminal > Run Task > Install requirements` (or `pip install -r server/requirements.txt`).
 3. Press F5 with **Run dock server** selected, then open http://localhost:5000.
 4. The panel shows two demo sessions from the fake data: click **Sun 20 Sep, Southport SC** to load Sunday (three pucks plus Steve's phone, two races back to back in one log), press **Play**, then **B** for the big-screen projector view.
-5. The course is already laid for the demo day (three marks, left to starboard). Click **Auto split** under Races: it finds the gap between the races. Pick **Race 1**, then **Estimate** next to Wind. Tap **Tacks & gybes** under a boat, then filter to Tacks or Gybes, sort Worst first, and tap any one to jump the replay there.
+5. The course is already laid for the demo day (three marks, left to starboard). Under Races, WakeBack offers the likely races it found in the tracks: tick them and press **Add selected** (or press **Suggest races** to look again). Pick **Race 1**, then **Estimate** next to Wind. Tap **Tacks & gybes** under a boat, then filter to Tacks or Gybes, sort Worst first, and tap any one to jump the replay there.
 6. `Run Task > Fake puck upload` to watch a session appear on the dock as a puck would post it.
 
 No server? Just open `viewer/index.html` in a browser and drag files from `data/sessions/` onto it. Everything works except the sessions list and shared puck names.
@@ -70,7 +70,7 @@ download to the app; in a browser or on the Pi it behaves exactly as before.
 
 - Replay all boats on one clock, live speed/heel/pitch/VMG cards, 60 s trails, heading arrows
 - Colour tracks by boat or by speed; satellite or OpenSeaMap chart base
-- Races: split a day into time windows by hand (11:00–12:00, 12:00–13:30) or with Auto split (gaps where nobody moved for 5 min); stats, tacks, chart and replay all follow the selected race, and races are saved on the dock per day
+- Races: split a day into time windows by hand (11:00–12:00, 12:00–13:30) or from the suggestions WakeBack works out from the tracks (boats milling about, then setting off together, then stopping; nothing is added until you tick it); stats, tacks, chart and replay all follow the selected race, and races are saved on the dock per day
 - Wind direction typed in, estimated from the beating headings, or from **Get weather** (Open-Meteo: direction, speed and gusts for where and when you sailed, saved with the day, set per race, live on the map and big screen) → VMG, true wind angle, upwind/downwind averages, wind arrow on the map
 - Tacks, gybes and mark roundings told apart, each with speed before/min, time back up to speed and metres lost; averages for each (tack loss, gybe loss, mark loss); click any one to jump the replay there
 - Course marks: add them on the map, drag to adjust, set each to port (red) or starboard (green). Set per race, so a moved windward mark between races is fine. With marks placed, roundings are found at the real marks on any course shape (reaches included), and a rounding the wrong way is flagged

@@ -58,7 +58,7 @@ Press `r` in the terminal to reload after a change, `q` to quit.
 ## 4. Try it
 
 1. **Setup → Add a demo race morning.** Back on **Replay**, open the sessions list (on a phone: the
-   panel button) → today's date → it's the full viewer: Auto split, Race 1, Estimate wind, tacks & gybes,
+   panel button) → today's date → it's the full viewer: suggested races, Race 1, Estimate wind, tacks & gybes,
    start results, **Big screen**, **Full screen**.
 2. **Setup → Demo pucks** on, then the viewer's **Dock** tab: five pucks charging; P4 comes back after
    ~20 s and uploads a session that appears in the list.

@@ -84,6 +84,33 @@ String niceHours(num h) {
 
 String nm(num v, [int dp = 1]) => v.toStringAsFixed(v >= 100 ? 0 : dp);
 
+/// When the sailing happened, from the tracks' own first and last fixes: '10:30–12:16', or one span per
+/// sail when there was a break ashore ('10:30–12:16, 14:05–15:40'), so two sails in a day read as two.
+String sailTimes(Iterable<Map> stats) {
+  final spans = <List<int>>[];
+  for (final st in stats) {
+    final a = (st['start_ms'] as num?)?.toInt(), b = (st['end_ms'] as num?)?.toInt();
+    if (a != null && b != null && b > a) spans.add([a, b]);
+  }
+  if (spans.isEmpty) return '';
+  spans.sort((x, y) => x[0].compareTo(y[0]));
+  final merged = <List<int>>[spans.first];
+  for (final sp in spans.skip(1)) {
+    // tracks that overlap, or stop and start within 20 minutes, are the same sail
+    if (sp[0] <= merged.last[1] + 20 * 60000) {
+      if (sp[1] > merged.last[1]) merged.last[1] = sp[1];
+    } else {
+      merged.add(sp);
+    }
+  }
+  String hm(int ms) {
+    final d = DateTime.fromMillisecondsSinceEpoch(ms);
+    return '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+  }
+  final shown = merged.take(3).map((m) => '${hm(m[0])}–${hm(m[1])}').join(', ');
+  return merged.length > 3 ? '$shown +${merged.length - 3}' : shown;
+}
+
 /// Sync to the server, when there's one to talk to.
 ServerSync? serverOrNull() => app.signedIn && !app.demoMode && app.serverUrl.isNotEmpty ? ServerSync(app.serverUrl, app.store, token: app.token) : null;
 
@@ -404,15 +431,18 @@ class _SessionListState extends State<_SessionList> with WidgetsBindingObserver 
           final stats = (s['stats'] as Map?) ?? const {};
           final (mine, shared) = _mine(s);
           double dist = 0, top = 0;
+          final counted = <Map>[];
           for (final f in mine.isNotEmpty ? mine : (s['files'] as List).cast<String>()) {
             final st = stats[f];
             if (st is Map) {
+              counted.add(st);
               dist += (st['dist_nm'] as num?)?.toDouble() ?? 0;
               final mk = (st['max_kn'] as num?)?.toDouble() ?? 0;
               if (mk > top) top = mk;
             }
           }
           final others = files - mine.length;
+          final times = sailTimes(counted);
           return Card(
             margin: const EdgeInsets.symmetric(vertical: 4),
             clipBehavior: Clip.antiAlias,
@@ -429,6 +459,7 @@ class _SessionListState extends State<_SessionList> with WidgetsBindingObserver 
                           style: t.textTheme.bodyMedium?.copyWith(color: t.colorScheme.onSurfaceVariant)),
                       const SizedBox(height: 8),
                       Wrap(spacing: 14, runSpacing: 4, children: [
+                        if (times.isNotEmpty) _Fact(Icons.schedule, times),
                         _Fact(Icons.route_outlined, dist > 0 ? '${nm(dist)} nm' : '—'),
                         _Fact(Icons.speed, top > 0 ? '${top.toStringAsFixed(1)} kn' : '—'),
                         _Fact(Icons.directions_boat_outlined, '$files track${files == 1 ? '' : 's'}${others > 0 && mine.isNotEmpty ? ' ($others mates)' : ''}'),

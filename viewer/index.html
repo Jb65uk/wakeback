@@ -144,6 +144,16 @@ body.nodemo #demo{display:none}
 .races h2{font-family:var(--num);font-weight:600;font-size:16px;margin:0;color:var(--muted);letter-spacing:.04em;text-transform:uppercase}
 .rrow{display:grid;grid-template-columns:1fr 1fr auto;gap:6px;align-items:center;background:var(--panel-2);border-radius:6px;padding:6px}
 .rrow input[type=text]{grid-column:1/-1;background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:6px 8px;min-width:0;font-family:var(--num);font-size:16px}
+.sug{display:flex;flex-direction:column;gap:6px;background:var(--panel-2);border:1px solid var(--signal);border-radius:6px;padding:8px}
+.sug .sughead{font-weight:600;font-size:14px}
+.sug .sughead small{display:block;font-weight:400;color:var(--muted);font-size:12px;margin-top:2px}
+.srow{display:grid;grid-template-columns:auto 1fr;gap:2px 8px;align-items:center;font-size:14px;cursor:pointer;padding:4px 0}
+.srow .sgwhy{grid-column:2}
+.srow input{width:18px;height:18px;accent-color:var(--signal)}
+.srow .sgtime{font-family:var(--num);font-size:16px;font-weight:600;white-space:nowrap}
+.srow .sgwhy{color:var(--muted);font-size:12.5px;line-height:1.25}
+.srow .sgwhy b{font-weight:600;color:var(--ink)}
+.srow.low .sgtime{color:var(--muted)}
 .rrow input[type=time]{min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:5px 6px;font-family:var(--num);font-size:15px;color-scheme:dark}
 #fieldBox summary{cursor:pointer;color:var(--muted);font-size:13px}
 #raceTitle{display:none;font-family:var(--num);font-weight:700;font-size:26px;line-height:1;color:var(--signal)}
@@ -295,7 +305,8 @@ body.big #togglePanel,body.big #trailOnlyWrap{display:none}
       <h2>Races</h2>
       <div class="chips" id="raceChips"></div>
       <div id="raceEdit" style="display:flex;flex-direction:column;gap:6px"></div>
-      <div class="actions"><button class="btn" id="raceAdd">Add race</button><button class="btn" id="raceAuto">Auto split</button></div>
+      <div id="raceSug"></div>
+      <div class="actions"><button class="btn" id="raceAdd">Add race</button><button class="btn" id="raceAuto">Suggest races</button></div>
     </div>
     <div class="course" id="courseBox">
       <h2>Course marks</h2>
@@ -327,7 +338,7 @@ body.big #togglePanel,body.big #trailOnlyWrap{display:none}
       <p><b>Saving:</b> every change (names, races, marks, lines, gun time, corrections) saves the moment you make it. The line under the title says when it last saved, and warns you if the dock couldn't be reached. It keeps trying until it gets through.</p>
       <p><b>Load</b> a session from the dock, or drop GPX/CSV files anywhere on the map.</p>
       <p><b>Names:</b> puck numbers never change (P3 is always P3, always the same colour). Tap a name to say who had that puck today. It's saved for this session only.</p>
-      <p><b>Races:</b> Auto split finds the breaks between races, or add them by hand with start and end times. Everything follows the race you pick.</p>
+      <p><b>Races:</b> WakeBack works out the likely races from the tracks (boats milling about, then setting off together, then stopping) and offers them under Races: tick the ones that are right and Add selected, then nudge the times if you need to. Nothing is added until you say. Suggest races looks again; or add them by hand with start and end times. Everything follows the race you pick. With one track it's a rougher guess than with a fleet.</p>
       <p><b>Weather:</b> Get weather fetches the wind (direction, speed, gusts) for where and when you sailed, from Open-Meteo (free, needs internet once). It's saved with the day, sets the wind for each race, and shows live on the map and the big screen. Estimate or typing a direction still overrides it.</p>
       <p><b>Wind:</b> type the direction it blows from, or press Estimate. You then get VMG, and tacks, gybes and mark roundings told apart.</p>
       <p><b>Tacks & gybes:</b> tap it under a boat, filter, sort Worst first, tap one to jump the replay there. Loss is metres of VMG lost until the boat's back to 95% of its speed before.</p>
@@ -1226,6 +1237,7 @@ function renderRaces() {
   $('#raceTitle').textContent = raceIdx >= 0 ? `${races[raceIdx].name}  ${hhmm(races[raceIdx].start)}–${hhmm(races[raceIdx].end)}` : (boats.length ? 'Whole session' : '');
   $('#raceEdit').innerHTML = races.map((r, i) => `<div class="rrow"><input type="text" data-rn="${i}" value="${esc(r.name)}" aria-label="Race name"><input type="time" data-rs="${i}" value="${hhmm(r.start)}" aria-label="${esc(r.name)} start"><input type="time" data-re="${i}" value="${hhmm(r.end)}" aria-label="${esc(r.name)} end"><button class="rm" data-rr="${i}">Delete</button></div>`).join('');
   $('#raceAdd').style.display = $('#raceAuto').style.display = boats.length ? '' : 'none';
+  autoSuggest();
 }
 document.addEventListener('click', e => {
   const c = e.target.closest('[data-race]'); if (c) { selectRace(+c.dataset.race); return; }
@@ -1245,31 +1257,154 @@ $('#raceAdd').addEventListener('click', () => {
   races.push({ name: 'Race ' + (races.length + 1), start, end: e0, marks: copyMarks(last ? last.marks : meta.marks), lines: copyLines(last ? last.lines : meta.lines) });
   saveRaces(); selectRace(races.length - 1);
 });
-$('#raceAuto').addEventListener('click', () => {
-  // any boat moving (>1.5 kn) per 30 s bin; races are moving stretches separated by >= 5 min of nobody moving
-  const s0 = Math.min(...boats.map(b => b.start)), e0 = Math.max(...boats.map(b => b.end));
-  const bin = 30000, nb = Math.ceil((e0 - s0) / bin) + 1, moving = new Uint8Array(nb);
-  for (const b of boats) {
-    let k0 = 0;
-    for (let i = 0; i < b.n; i++) {
-      while (b.t[i] - b.t[k0] > bin) k0++;
-      const dt = (b.t[i] - b.t[k0]) / 1000;
-      if (dt > bin / 2000 && hav(b.lat[k0], b.lon[k0], b.lat[i], b.lon[i]) / dt * KN > 1.5) moving[Math.floor((b.t[i] - s0) / bin)] = 1;
+// ---- race-suggest:begin (pure: only needs hav(); tools/test_race_suggest.mjs runs this block under node)
+// Likely races, worked out from the tracks. Every fix has its time, so no extra logging is needed:
+// a boat is "racing" when it is going somewhere (fairly straight, at a good share of its own pace) and
+// "milling" when it is slow or turning about (before a start, after a finish, ashore). A race is a
+// stretch where most of the fleet is racing; a real start shows as the boats that were milling all
+// setting off inside the same minute, close together. Returns [{start, end, conf, why, boats}],
+// oldest first; conf is 'high' | 'medium' | 'low'.
+function suggestRaces(boats) {
+  const BIN = 10000, KN_ = 1.943844;
+  const fleet = boats.filter(b => b.n > 20 && b.end - b.start >= 5 * 60000);
+  if (!fleet.length) return [];
+  const s0 = Math.min(...fleet.map(b => b.start)), e0 = Math.max(...fleet.map(b => b.end));
+  const nb = Math.floor((e0 - s0) / BIN) + 1;
+  if (nb < 30) return [];
+  const per = fleet.map(b => {
+    // where the boat was at the start of each 10 s bin (NaN = no track then)
+    const la = new Float64Array(nb).fill(NaN), lo = new Float64Array(nb).fill(NaN);
+    for (let i = 0; i < b.n; i++) { const k = Math.floor((b.t[i] - s0) / BIN); if (k >= 0 && k < nb && isNaN(la[k])) { la[k] = b.lat[i]; lo[k] = b.lon[i]; } }
+    const step = new Float64Array(nb);     // metres from this bin to the next
+    for (let k = 0; k + 1 < nb; k++) step[k] = isNaN(la[k]) || isNaN(la[k + 1]) ? NaN : hav(la[k], lo[k], la[k + 1], lo[k + 1]);
+    // this boat's own pace: the 90th percentile of its 10 s speeds, so a slow boat or a light day still counts
+    const sp = Array.from(step).filter(v => !isNaN(v)).map(v => v / (BIN / 1000) * KN_).sort((x, y) => x - y);
+    const top = sp.length ? sp[Math.floor(sp.length * 0.9)] : 0;
+    const racing = new Int8Array(nb).fill(-1);   // -1 no track, 0 milling, 1 racing
+    const W = 3;                                 // look 30 s either side
+    for (let k = 0; k < nb; k++) {
+      if (isNaN(la[k])) continue;
+      const a = Math.max(0, k - W), z = Math.min(nb - 1, k + W);
+      let gross = 0, ok = !isNaN(la[a]) && !isNaN(la[z]);
+      for (let j = a; j < z && ok; j++) { if (isNaN(step[j])) ok = false; else gross += step[j]; }
+      if (!ok || z - a < 4) { racing[k] = 0; continue; }
+      const kn = gross / ((z - a) * BIN / 1000) * KN_;
+      const straight = gross > 15 ? hav(la[a], lo[a], la[z], lo[z]) / gross : 0;
+      racing[k] = straight >= 0.6 && kn >= Math.max(1.2, 0.6 * top) ? 1 : 0;
     }
-  }
-  const found = []; let run = null, gap = 0;
+    // milling has its straight, quick moments too (a reach along the line): only call it racing when
+    // most of the two minutes around it are, which a tack or a mark rounding doesn't break
+    const raw = racing.slice();
+    for (let k = 0; k < nb; k++) {
+      if (raw[k] < 0) continue;
+      let on = 0, c = 0;
+      for (let j = Math.max(0, k - 6); j <= Math.min(nb - 1, k + 6); j++) if (raw[j] >= 0) { c++; on += raw[j]; }
+      racing[k] = on >= c * 0.6 ? 1 : 0;
+    }
+    return { la, lo, racing };
+  });
+  // share of the boats on the water that are racing, smoothed over about a minute
+  const F = new Float64Array(nb), present = new Int16Array(nb);
+  for (let k = 0; k < nb; k++) { let r = 0, p = 0; for (const b of per) if (b.racing[k] >= 0) { p++; r += b.racing[k]; } present[k] = p; F[k] = p ? r / p : 0; }
+  const Fs = new Float64Array(nb);
+  for (let k = 0; k < nb; k++) { let sum = 0, c = 0; for (let j = Math.max(0, k - 3); j <= Math.min(nb - 1, k + 3); j++) { sum += F[j]; c++; } Fs[k] = sum / c; }
+  // a race: most boats racing (>= half to begin, and it carries on while a quarter still are), ended by
+  // three minutes of milling. Tacks, roundings and lulls are shorter than that.
+  const blocks = []; let cur = null, quiet = 0;
   for (let k = 0; k < nb; k++) {
-    if (moving[k]) { if (!run) run = { a: k, b: k }; run.b = k; gap = 0; }
-    else if (run && ++gap >= 10) { found.push(run); run = null; gap = 0; }
+    if (!cur) { if (Fs[k] >= 0.5) { cur = { a: k, b: k }; quiet = 0; } continue; }
+    if (Fs[k] >= 0.3) { cur.b = k; quiet = 0; }
+    else if (++quiet >= 18) { blocks.push(cur); cur = null; }
   }
-  if (run) found.push(run);
-  const good = found.filter(r => (r.b - r.a + 1) * bin >= 10 * 60000);
-  if (!good.length) return toast('No obvious gaps found. Add races by hand.');
+  if (cur) blocks.push(cur);
+  const out = [];
+  for (const bl of blocks) {
+    if ((bl.b - bl.a + 1) * BIN < 8 * 60000) continue;
+    // the smoothing blurs the edge: step back to where half the fleet first got going
+    let a = bl.a; for (let j = bl.a - 1; j >= Math.max(0, bl.a - 6) && F[j] >= 0.5; j--) a = j;
+    // who was there, and did they set off together? (milling just before, racing just after)
+    const here = [], pos = []; let together = 0, noLead = 0;
+    per.forEach(b => {
+      if (b.racing[a] < 0) return;
+      here.push(b);
+      let before = 0, bn = 0, after = 0, an = 0;
+      for (let j = Math.max(0, a - 12); j <= a - 3; j++) if (b.racing[j] >= 0) { bn++; if (!b.racing[j]) before++; }
+      for (let j = a; j <= Math.min(nb - 1, a + 6); j++) if (b.racing[j] >= 0) { an++; after += b.racing[j]; }
+      if (bn < 4) noLead++;   // its track begins here: nothing to show what it was doing before
+      if (bn >= 4 && before >= bn * 0.4 && an >= 4 && after >= an * 0.6) together++;
+      pos.push([b.la[a], b.lo[a]]);
+    });
+    const n = here.length; if (!n) continue;
+    const cla = pos.reduce((x, p) => x + p[0], 0) / n, clo = pos.reduce((x, p) => x + p[1], 0) / n;
+    const spread = Math.max(...pos.map(p => hav(cla, clo, p[0], p[1])));
+    const share = together / n, close = spread <= 300;
+    let conf, why;
+    if (n >= 3 && share >= 0.6 && close) { conf = 'high'; why = `${together} of ${n} boats set off together`; }
+    else if (n >= 2 && share >= 0.5 && close) { conf = 'medium'; why = n === 2 ? 'both boats set off together' : `${together} of ${n} boats set off together`; }
+    else if (n === 1) { conf = 'low'; why = noLead ? 'one track, and it begins already sailing' : together ? 'one track: milling about, then off' : 'one track: a guess from when it was sailing hard'; }
+    else if (noLead > n / 2) { conf = 'low'; why = 'the tracks begin already sailing, so there\'s no start to go on'; }
+    else { conf = 'low'; why = close ? 'boats didn\'t set off together: could be sailing out or home' : 'boats were spread out: could be sailing out or home'; }
+    // whole minutes: the window opens on the minute the fleet got going, and closes after the last boat stops
+    const start = Math.floor((s0 + a * BIN) / 60000) * 60000;
+    const end = Math.min(Math.ceil((s0 + (bl.b + 1) * BIN) / 60000) * 60000, Math.ceil(e0 / 60000) * 60000);
+    out.push({ start, end, conf, why, boats: n });
+  }
+  return out;
+}
+// ---- race-suggest:end
+
+let sug = null, sugFor = '';     // the suggestions on show, and which tracks they were worked out from
+const sugSig = () => boats.map(b => b.id).join(',');
+const sugSkipKey = () => 'wakeback-nosug-' + (dock.session || sessionKey());
+const sugOverlaps = x => races.some(r => Math.min(r.end, x.end) - Math.max(r.start, x.start) > 0.5 * Math.min(r.end - r.start, x.end - x.start));
+function findSuggestions() {
+  let found = [];
+  try { found = suggestRaces(boats); } catch (e) { console.warn('race suggestions', e); }
+  const many = boats.length > 1;
+  // one track: every guess is a rough one, so offer them all; a fleet: untick the doubtful ones
+  return found.filter(x => !sugOverlaps(x)).map(x => ({ ...x, on: !many || x.conf !== 'low' }));
+}
+// Called whenever the race list is drawn: a session with no races yet gets its suggestions without asking.
+function autoSuggest() {
+  const sig = sugSig();
+  if (sig !== sugFor) { sug = null; sugFor = sig; }
+  if (boats.length && sug == null && !races.length) {
+    let skip = false; try { skip = !!localStorage.getItem(sugSkipKey()); } catch {}
+    sug = skip ? [] : findSuggestions();
+  }
+  renderSug();
+}
+function renderSug() {
+  const box = $('#raceSug'); if (!box) return;
+  const list = boats.length && sug ? sug : [];
+  if (!list.length) { box.innerHTML = ''; return; }
+  box.innerHTML = `<div class="sug"><div class="sughead">Likely race${list.length > 1 ? 's' : ''} found<small>Worked out from the tracks. Nothing is added until you say; you can change the times afterwards.</small></div>`
+    + list.map((x, i) => `<label class="srow${x.conf === 'low' ? ' low' : ''}"><input type="checkbox" data-sg="${i}"${x.on ? ' checked' : ''}><span class="sgtime">${hhmm(x.start)}–${hhmm(x.end)}</span><span class="sgwhy">${x.conf === 'low' ? 'Maybe: ' : x.conf === 'high' ? '<b>Likely:</b> ' : ''}${esc(x.why)}</span></label>`).join('')
+    + `<div class="actions"><button class="btn" id="sugAdd">Add selected</button><button class="btn" id="sugNo">Not now</button></div></div>`;
+}
+$('#raceSug').addEventListener('change', e => { const i = e.target.dataset.sg; if (i != null && sug && sug[+i]) sug[+i].on = e.target.checked; });
+$('#raceSug').addEventListener('click', e => {
+  if (e.target.id === 'sugNo') { try { localStorage.setItem(sugSkipKey(), '1'); } catch {} sug = []; renderSug(); return; }
+  if (e.target.id !== 'sugAdd') return;
+  const pick = (sug || []).filter(x => x.on && !sugOverlaps(x));
+  if (!pick.length) return toast('Tick the races you want first.');
   const carry = meta.marks.length ? meta.marks : (races[0] && races[0].marks) || [];
   const carryL = (meta.lines || []).length ? meta.lines : (races[0] && races[0].lines) || [];
-  races = good.map((r, i) => ({ name: 'Race ' + (i + 1), start: s0 + r.a * bin, end: s0 + (r.b + 1) * bin, marks: copyMarks(carry), lines: copyLines(carryL) }));
-  saveRaces(); selectRace(0);
-  toast(`Split into ${races.length} race${races.length > 1 ? 's' : ''}. Adjust the times if the gaps were short.`);
+  const added = pick.map(x => ({ name: 'Race ?', start: x.start, end: x.end, marks: copyMarks(carry), lines: copyLines(carryL) }));
+  races.push(...added);
+  races.sort((a, b) => a.start - b.start);
+  // races still on their automatic names are numbered in the order they were sailed
+  races.forEach((r, i) => { if (/^Race (\d+|\?)$/.test(r.name)) r.name = 'Race ' + (i + 1); });
+  sug = [];
+  saveRaces(); selectRace(races.indexOf(added[0]));
+  toast(`Added ${added.length} race${added.length > 1 ? 's' : ''}. Adjust the times if they're a little out.`);
+});
+$('#raceAuto').addEventListener('click', () => {
+  try { localStorage.removeItem(sugSkipKey()); } catch {}
+  sug = findSuggestions(); sugFor = sugSig();
+  renderSug();
+  if (!sug.length) toast(races.length ? 'No more races found in these tracks.' : 'Couldn\'t pick out any races from these tracks. Add them by hand.');
+  else $('#raceSug').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 });
 
 // ---------- course marks ----------
