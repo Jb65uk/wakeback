@@ -1,7 +1,7 @@
 name: wakeback
 description: WakeBack phone/tablet app — the dock in your pocket, running the real WakeBack viewer.
 publish_to: 'none'
-version: 0.11.4+18
+version: 0.12.0+19
 
 environment:
   sdk: '>=3.4.0 <4.0.0'

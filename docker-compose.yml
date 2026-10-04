@@ -11,6 +11,8 @@ services:
       - ./data:/app/data          # sessions, venues, pucks live here, next to this file
     environment:
       WAKEBACK_ADMIN: "you@example.com"   # your email: turns accounts on, and makes that account the admin (/admin)
+      # Locked out of the admin account? Add the line below with a new password, restart, log in, then remove it again:
+      # WAKEBACK_ADMIN_RESET: "a-new-password"
       WAKEBACK_WIFI: wakeback              # the dock WiFi name shown on the Dock page
       WAKEBACK_OWNER: ""                   # owner for pucks with none set (e.g. "Southport SC"); blank for personal use
     labels:

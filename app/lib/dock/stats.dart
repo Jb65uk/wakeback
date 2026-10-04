@@ -297,7 +297,32 @@ class StatRow {
   double get avgKn => (stats['avg_kn'] as num).toDouble();
   int get movingS => (stats['moving_s'] as num).toInt();
   int get startMs => (stats['start_ms'] as num).toInt();
+
+  /// The boat this track was sailed in ('' if none was set).
+  String get boat {
+    final o = owner;
+    return o is Map ? '${o['boat'] ?? ''}' : '';
+  }
   Map<String, dynamic> get ref => {'session': session, 'file': file, 'date': date, 'venue_name': venueName};
+}
+
+/// A track only counts towards stats, bests and the league if it's a real sail: at least 5 minutes moving
+/// and 0.2 nm (stats.py counts). A two-minute test isn't your "longest sail". It still replays.
+/// (Not const so a test can check the sums on a short fixture.)
+int minMovingS = 300;
+double minDistNm = 0.2;
+bool counts(Map<String, dynamic> st) => ((st['moving_s'] as num?) ?? 0) >= minMovingS && ((st['dist_nm'] as num?) ?? 0) >= minDistNm;
+
+/// 'Solo 5843' -> 'Solo': the boat's name without a trailing sail number (stats.py boat_class).
+String boatClass(String boat) => boat.trim().replaceFirst(RegExp(r'[\s#-]*\d+\s*$'), '').trim();
+
+/// Distinct non-empty names, case-insensitively, first spelling kept, sorted (app.py _names).
+List<String> distinctNames(Iterable<String> values) {
+  final seen = <String, String>{};
+  for (final v in values) {
+    if (v.isNotEmpty) seen.putIfAbsent(v.toLowerCase(), () => v);
+  }
+  return seen.values.toList()..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
 }
 
 const windBins = ['0-5', '5-10', '10-15', '15-20', '20+'];

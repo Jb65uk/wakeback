@@ -15,11 +15,13 @@ class WelcomeScreen extends StatefulWidget {
   State<WelcomeScreen> createState() => _WelcomeScreenState();
 }
 
-enum _Page { welcome, login, signup, pending }
+enum _Page { welcome, login, signup, pending, forgot }
 
 class _WelcomeScreenState extends State<WelcomeScreen> {
   _Page _page = _Page.welcome;
   final _email = TextEditingController(), _name = TextEditingController(), _pass = TextEditingController();
+  final _code = TextEditingController(), _newPass = TextEditingController();
+  bool _asked = false; // forgot password: the admin has been asked for a code
   late final _server = TextEditingController(text: app.serverUrl);
   bool _busy = false, _showServer = false, _hide = true;
   String? _err;
@@ -28,7 +30,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
   @override
   void dispose() {
     _poll?.cancel();
-    for (final c in [_email, _name, _pass, _server]) {
+    for (final c in [_email, _name, _pass, _server, _code, _newPass]) {
       c.dispose();
     }
     super.dispose();
@@ -85,6 +87,52 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
     if (mounted) setState(() => _busy = false);
   }
 
+  /// Forgot password, step 1: ask the admin for a code.
+  Future<void> _askReset() async {
+    app.serverUrl = _server.text;
+    setState(() {
+      _busy = true;
+      _err = null;
+    });
+    try {
+      await app.auth.forgotPassword(_email.text.trim());
+      if (mounted) setState(() => _asked = true);
+    } on AuthException catch (e) {
+      if (mounted) setState(() => _err = e.message);
+    } catch (e) {
+      if (mounted) setState(() => _err = '$e');
+    }
+    if (mounted) setState(() => _busy = false);
+  }
+
+  /// Step 2: the code from the admin and a new password, then straight in.
+  Future<void> _useReset() async {
+    final email = _email.text.trim(), pw = _newPass.text;
+    setState(() {
+      _busy = true;
+      _err = null;
+    });
+    try {
+      final api = app.auth;
+      await api.resetPassword(email, _code.text, pw);
+      final r = await api.login(email, pw);
+      if (r.pending) {
+        _pass.text = pw;
+        _go(_Page.pending);
+        _startPolling();
+      } else {
+        await app.signedInAs(r.token!, r.user);
+        if (mounted) toast(context, 'Password changed. Signed in as ${r.user.name}');
+        await _done();
+      }
+    } on AuthException catch (e) {
+      if (mounted) setState(() => _err = e.message);
+    } catch (e) {
+      if (mounted) setState(() => _err = '$e');
+    }
+    if (mounted) setState(() => _busy = false);
+  }
+
   void _startPolling() {
     _poll?.cancel();
     _poll = Timer.periodic(const Duration(seconds: 20), (_) => _checkApproved(quiet: true));
@@ -116,7 +164,11 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
     final t = Theme.of(context);
     return Scaffold(
       appBar: widget.fromSetup || _page != _Page.welcome
-          ? AppBar(leading: BackButton(onPressed: () => _page == _Page.welcome ? Navigator.of(context).pop() : _go(_Page.welcome)))
+          ? AppBar(
+              leading: BackButton(
+                  onPressed: () => _page == _Page.welcome
+                      ? Navigator.of(context).pop()
+                      : _go(_page == _Page.forgot ? _Page.login : _Page.welcome)))
           : null,
       body: SafeArea(
         child: Center(
@@ -128,6 +180,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                 _Page.welcome => _welcome(t),
                 _Page.login || _Page.signup => _form(t),
                 _Page.pending => _pending(t),
+                _Page.forgot => _forgot(t),
               },
             ),
           ),
@@ -163,7 +216,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
             textAlign: TextAlign.center, style: t.textTheme.bodySmall?.copyWith(color: t.colorScheme.onSurfaceVariant)),
         if (!widget.fromSetup) ...[
           const SizedBox(height: 24),
-          TextButton(onPressed: _done, child: Text('Use without an account (just this phone and your pucks)', style: t.textTheme.bodySmall)),
+          TextButton(onPressed: _done, child: Text('Use without an account (just this phone and your pucks)', style: t.textTheme.bodySmall, textAlign: TextAlign.center)),
         ],
       ]);
 
@@ -210,6 +263,16 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
         child: _busy ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)) : Text(signup ? 'Create account' : 'Log in'),
       ),
       const SizedBox(height: 8),
+      if (!signup)
+        TextButton(
+          onPressed: () {
+            _asked = false;
+            _code.clear();
+            _newPass.clear();
+            _go(_Page.forgot);
+          },
+          child: const Text('Forgot your password?'),
+        ),
       TextButton(onPressed: () => _go(signup ? _Page.login : _Page.signup), child: Text(signup ? 'Already have an account? Log in' : 'New here? Create an account')),
       const SizedBox(height: 8),
       TextButton(
@@ -225,6 +288,67 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
         ),
     ]);
   }
+
+  /// Forgot password. There's no email service, so the reset code comes from the admin: ask here, they
+  /// pass you a code, you type it in with a new password.
+  Widget _forgot(ThemeData t) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        _logo(t),
+        const SizedBox(height: 20),
+        Text('Reset your password', style: t.textTheme.headlineSmall, textAlign: TextAlign.center),
+        const SizedBox(height: 8),
+        Text(
+          _asked
+              ? 'Asked. Whoever runs your WakeBack server will send you a reset code. Type it in below with a new password.'
+              : 'Put in your email and we\'ll ask whoever runs your WakeBack server for a reset code.',
+          textAlign: TextAlign.center,
+          style: t.textTheme.bodyMedium?.copyWith(color: t.colorScheme.onSurfaceVariant),
+        ),
+        const SizedBox(height: 16),
+        TextField(
+          controller: _email,
+          keyboardType: TextInputType.emailAddress,
+          autocorrect: false,
+          decoration: const InputDecoration(labelText: 'Email', prefixIcon: Icon(Icons.alternate_email)),
+        ),
+        if (_asked) ...[
+          const SizedBox(height: 10),
+          TextField(
+            controller: _code,
+            autocorrect: false,
+            textCapitalization: TextCapitalization.characters,
+            decoration: const InputDecoration(labelText: 'Reset code', hintText: 'ABCD-EFGH', prefixIcon: Icon(Icons.pin_outlined)),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _newPass,
+            obscureText: _hide,
+            decoration: InputDecoration(
+              labelText: 'New password',
+              helperText: 'At least 8 characters',
+              prefixIcon: const Icon(Icons.key),
+              suffixIcon: IconButton(icon: Icon(_hide ? Icons.visibility_off : Icons.visibility), onPressed: () => setState(() => _hide = !_hide)),
+            ),
+            onSubmitted: (_) => _busy ? null : _useReset(),
+          ),
+        ],
+        if (_err != null) ...[
+          const SizedBox(height: 10),
+          Text(_err!, style: TextStyle(color: t.colorScheme.error, fontWeight: FontWeight.w600)),
+        ],
+        const SizedBox(height: 16),
+        FilledButton(
+          onPressed: _busy ? null : (_asked ? _useReset : _askReset),
+          style: FilledButton.styleFrom(padding: const EdgeInsets.all(16)),
+          child: _busy
+              ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+              : Text(_asked ? 'Set new password' : 'Ask for a reset code'),
+        ),
+        const SizedBox(height: 8),
+        TextButton(
+          onPressed: _busy ? null : () => setState(() { _asked = !_asked; _err = null; }),
+          child: Text(_asked ? 'Ask for a code again' : 'I already have a code'),
+        ),
+      ]);
 
   Widget _pending(ThemeData t) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         _logo(t),

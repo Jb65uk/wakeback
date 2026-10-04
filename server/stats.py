@@ -224,6 +224,22 @@ def period_start(period, now_ms=None):
     return 0
 
 
+# A track only counts towards stats, bests and the league if it's a real sail: at least 5 minutes moving
+# and 0.2 nm. A two-minute test in the garden isn't your "longest sail". (It still replays.)
+MIN_MOVING_S, MIN_DIST_NM = 300, 0.2
+
+
+def counts(st):
+    return st.get('moving_s', 0) >= MIN_MOVING_S and st.get('dist_nm', 0) >= MIN_DIST_NM
+
+
+def boat_class(boat):
+    """'Solo 5843' -> 'Solo': the boat's name without a trailing sail number, so friends in the same
+    class can be compared. '' if no boat."""
+    import re
+    return re.sub(r'[\s#-]*\d+\s*$', '', str(boat or '').strip()).strip()
+
+
 WIND_BINS = ['0-5', '5-10', '10-15', '15-20', '20+']
 
 

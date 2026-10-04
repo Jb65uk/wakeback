@@ -1,8 +1,11 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../app_state.dart';
 import '../auth/auth_api.dart';
@@ -31,7 +34,7 @@ class _SetupScreenState extends State<SetupScreen> {
   late final TextEditingController _pass = TextEditingController(text: app.hotspotPass);
   late final TextEditingController _name = TextEditingController(text: app.profileName);
   List<String> _ips = [];
-  bool _makingDemo = false;
+  bool _makingDemo = false, _exporting = false;
 
   @override
   void initState() {
@@ -304,7 +307,7 @@ class _SetupScreenState extends State<SetupScreen> {
           const SizedBox(height: 8),
           const Hint('Your sails sync to your account. Your email is never shown to other sailors.'),
           const SizedBox(height: 8),
-          Wrap(spacing: 8, children: [
+          Wrap(spacing: 8, runSpacing: 4, children: [
             OutlinedButton.icon(onPressed: _changePassword, icon: const Icon(Icons.key, size: 18), label: const Text('Change password')),
             OutlinedButton.icon(
               onPressed: () async {
@@ -312,6 +315,21 @@ class _SetupScreenState extends State<SetupScreen> {
               },
               icon: const Icon(Icons.logout, size: 18),
               label: const Text('Log out'),
+            ),
+          ]),
+          const Divider(height: 24),
+          Text('Your data', style: t.textTheme.titleSmall),
+          const SizedBox(height: 6),
+          Wrap(spacing: 8, runSpacing: 4, children: [
+            OutlinedButton.icon(
+              onPressed: _exporting ? null : _exportData,
+              icon: _exporting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.download_outlined, size: 18),
+              label: const Text('Export my data'),
+            ),
+            TextButton.icon(
+              onPressed: _deleteAccount,
+              icon: const Icon(Icons.delete_forever_outlined, size: 18, color: Color(0xFFFF6B6B)),
+              label: const Text('Delete my account', style: TextStyle(color: Color(0xFFFF6B6B))),
             ),
           ]),
         ]),
@@ -345,6 +363,60 @@ class _SetupScreenState extends State<SetupScreen> {
           ]),
         ),
       );
+  }
+
+  /// Everything the server holds about you, as a zip, handed to Android's share sheet (save it, email it…).
+  Future<void> _exportData() async {
+    setState(() => _exporting = true);
+    try {
+      final bytes = await app.auth.exportData();
+      final dir = await getTemporaryDirectory();
+      final f = File('${dir.path}/wakeback-my-data.zip');
+      await f.writeAsBytes(bytes, flush: true);
+      await Share.shareXFiles([XFile(f.path, mimeType: 'application/zip')], subject: 'My WakeBack data');
+    } on AuthException catch (e) {
+      if (mounted) toast(context, e.message, error: true);
+    } catch (e) {
+      if (mounted) toast(context, 'Couldn\'t export: $e', error: true);
+    }
+    if (mounted) setState(() => _exporting = false);
+  }
+
+  /// Delete the account and every track it owns on the server. Asks for the password; can't be undone.
+  Future<void> _deleteAccount() async {
+    final pw = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete your account?'),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('This removes your account, your friends list and every sail of yours from the server, so your friends lose them too. '
+              'It can\'t be undone. Sails already on this device stay here until you delete them.'),
+          const SizedBox(height: 8),
+          const Text('Want a copy first? Cancel and use Export my data.'),
+          const SizedBox(height: 12),
+          TextField(controller: pw, obscureText: true, decoration: const InputDecoration(labelText: 'Your password, to confirm')),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete account'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      final n = await app.auth.deleteAccount(pw.text);
+      await app.signOut(tellServer: false);
+      if (mounted) toast(context, 'Account deleted, with $n sail${n == 1 ? '' : 's'} removed from the server');
+    } on AuthException catch (e) {
+      if (mounted) toast(context, e.message, error: true);
+    } catch (e) {
+      if (mounted) toast(context, 'Couldn\'t delete the account: $e', error: true);
+    }
   }
 
   Future<void> _changePassword() async {

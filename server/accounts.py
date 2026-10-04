@@ -12,6 +12,10 @@ API (all JSON):
   POST /api/auth/signup   {email, name, password}       -> {status: active|pending, token?}
   POST /api/auth/login    {email, password, cookie?}    -> {token, user}   (cookie: also set for the browser)
   POST /api/auth/logout
+  POST /api/auth/forgot   {email}                       -> asks the admin for a reset code (always says ok)
+  POST /api/auth/reset    {email, code, new}            -> sets a new password with the code the admin gave you
+  GET  /api/admin/resets · POST /api/admin/resets/<id>/code -> {code} · DELETE /api/admin/resets/<id>
+  GET  /api/me/export (a zip) · DELETE /api/me {password}   (in app.py: they touch the tracks)
   GET  /api/auth/me                                     -> {accounts: true, user, friends, pending_in, pending_out}
   GET  /api/friends                                     -> {friends: [...], incoming: [...], outgoing: [...]}
   POST /api/friends/request {email}  · POST /api/friends/<id>/accept · /decline · DELETE /api/friends/<id>
@@ -55,10 +59,26 @@ def init(data_dir):
                 id INTEGER PRIMARY KEY, a INTEGER NOT NULL, b INTEGER NOT NULL, requested_by INTEGER NOT NULL,
                 status TEXT NOT NULL DEFAULT 'pending', created INTEGER NOT NULL, UNIQUE(a, b));
             CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
+            CREATE TABLE IF NOT EXISTS resets (
+                id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL UNIQUE, requested INTEGER NOT NULL,
+                code TEXT, expires INTEGER);
             CREATE TABLE IF NOT EXISTS audit (
                 id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, user_id INTEGER, who TEXT, action TEXT NOT NULL,
                 target TEXT, details TEXT);
         ''')
+
+
+def apply_admin_reset():
+    """The admin locked out with nobody to ask: set WAKEBACK_ADMIN_RESET=<new password> on the server and
+    restart it once. The admin account's password becomes that; then take the setting out again."""
+    pw = os.environ.get('WAKEBACK_ADMIN_RESET', '')
+    if not (ENABLED and pw): return
+    if len(pw) < 8:
+        print('WAKEBACK_ADMIN_RESET ignored: the password needs at least 8 characters'); return
+    with connect() as c:
+        n = c.execute('UPDATE users SET pw=?, status=\'active\' WHERE email=?', (generate_password_hash(pw), ADMIN_EMAIL)).rowcount
+    print(f'WAKEBACK_ADMIN_RESET: password set for {ADMIN_EMAIL}. Now remove WAKEBACK_ADMIN_RESET and restart.' if n
+          else f'WAKEBACK_ADMIN_RESET: no account for {ADMIN_EMAIL} yet; create it in the app.')
 
 
 @contextmanager
@@ -337,6 +357,122 @@ def change_password():
     return jsonify(ok=True)
 
 
+# ---------------------------------------------------------------- forgot password
+# No email service, so a reset goes through the admin: the sailor asks (their email only), the admin sees
+# the request on /admin and makes a one-time code, passes it on however they like (WhatsApp, in person),
+# and the sailor types it in with a new password. Codes last a day and work once.
+CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'      # no 0/O, 1/I/L
+RESET_HOURS = 24
+
+
+@bp.post('/api/auth/forgot')
+def forgot():
+    if not ENABLED: return jsonify(error='Accounts are not switched on'), 404
+    email = str((request.get_json(silent=True) or {}).get('email', '')).strip().lower()
+    if not EMAIL_RE.match(email): return jsonify(error='That doesn\'t look like an email address'), 400
+    keys = [('forgot:' + client_ip(), 5)]
+    over, _ = _too_many(keys)
+    if over: return jsonify(error='Too many tries from here. Try again later'), 429
+    _failed(keys)
+    with connect() as c:
+        u = c.execute('SELECT * FROM users WHERE email=?', (email,)).fetchone()
+        if u and u['status'] != 'disabled':
+            c.execute('INSERT INTO resets (user_id, requested) VALUES (?,?) ON CONFLICT(user_id) DO UPDATE SET requested=excluded.requested',
+                      (u['id'], int(time.time() * 1000)))
+    if u: audit('password_forgot', email, user=dict(u))
+    # the same answer whether or not there's an account, so this can't be used to find out who has one
+    return jsonify(ok=True, message='If there\'s an account for that email, the admin has been asked for a reset code.')
+
+
+@bp.post('/api/auth/reset')
+def reset_password():
+    if not ENABLED: return jsonify(error='Accounts are not switched on'), 404
+    b = request.get_json(silent=True) or {}
+    email, new = str(b.get('email', '')).strip().lower(), str(b.get('new', ''))
+    code = ''.join(ch for ch in str(b.get('code', '')).upper() if ch.isalnum())
+    keys = _rate_keys(email)
+    over, wait = _too_many(keys)
+    if over: return jsonify(error=f'Too many tries. Wait {max(1, wait // 60)} minutes and try again'), 429
+    if len(new) < 8: return jsonify(error='Password needs at least 8 characters'), 400
+    with connect() as c:
+        r = c.execute('SELECT r.*, u.email FROM resets r JOIN users u ON u.id=r.user_id WHERE u.email=?', (email,)).fetchone()
+        ok = bool(r and r['code'] and code and r['expires'] and r['expires'] > time.time() * 1000 and secrets.compare_digest(r['code'], _hash(code)))
+        if not ok:
+            _failed(keys); time.sleep(0.5)
+            return jsonify(error='That code isn\'t right, or it has run out. Ask the admin for a new one.'), 400
+        c.execute('UPDATE users SET pw=? WHERE id=?', (generate_password_hash(new), r['user_id']))
+        c.execute('DELETE FROM tokens WHERE user_id=?', (r['user_id'],))     # signed out everywhere: sign in again with the new one
+        c.execute('DELETE FROM resets WHERE id=?', (r['id'],))
+        user = dict(c.execute('SELECT * FROM users WHERE id=?', (r['user_id'],)).fetchone())
+    _cleared(email)
+    audit('password_reset', email, user=user)
+    return jsonify(ok=True)
+
+
+@bp.get('/api/admin/resets')
+@require_admin
+def admin_resets():
+    with connect() as c:
+        rows = c.execute('SELECT r.*, u.email, u.name FROM resets r JOIN users u ON u.id=r.user_id ORDER BY r.requested DESC').fetchall()
+    now = time.time() * 1000
+    return jsonify(resets=[{'id': r['id'], 'email': r['email'], 'name': r['name'], 'requested': r['requested'],
+                            'has_code': bool(r['code'] and r['expires'] and r['expires'] > now), 'expires': r['expires']} for r in rows])
+
+
+@bp.post('/api/admin/resets/<int:rid>/code')
+@require_admin
+def admin_reset_code(rid):
+    code = ''.join(secrets.choice(CODE_ALPHABET) for _ in range(8))
+    with connect() as c:
+        r = c.execute('SELECT r.*, u.email, u.name FROM resets r JOIN users u ON u.id=r.user_id WHERE r.id=?', (rid,)).fetchone()
+        if not r: abort(404)
+        c.execute('UPDATE resets SET code=?, expires=? WHERE id=?', (_hash(code), int((time.time() + RESET_HOURS * 3600) * 1000), rid))
+    audit('reset_code_made', r['email'])
+    # shown once, to pass on to them; only its hash is kept
+    return jsonify(code=f'{code[:4]}-{code[4:]}', email=r['email'], name=r['name'], hours=RESET_HOURS)
+
+
+@bp.delete('/api/admin/resets/<int:rid>')
+@require_admin
+def admin_reset_dismiss(rid):
+    with connect() as c:
+        n = c.execute('DELETE FROM resets WHERE id=?', (rid,)).rowcount
+    if not n: abort(404)
+    return jsonify(ok=True)
+
+
+# ---------------------------------------------------------------- your data (used by app.py's /api/me routes)
+
+def export_account(user):
+    """What's held about this person, apart from their tracks."""
+    with connect() as c:
+        u = c.execute('SELECT * FROM users WHERE id=?', (user['id'],)).fetchone()
+    fr = _friends_of(user['id'])
+    return {'name': u['name'], 'email': u['email'], 'role': u['role'], 'created_ms': u['created'], 'last_login_ms': u['last_login'],
+            'friends': [f['user']['name'] for f in fr['friends']],
+            'friend_requests_waiting': len(fr['incoming']) + len(fr['outgoing'])}
+
+
+def check_can_delete(user, password):
+    """None if this account may be deleted with this password, else the (json, status) reply."""
+    if user['role'] == 'admin':
+        return jsonify(error='The admin account can\'t be deleted from the app: it runs the server. Make someone else admin first.'), 400
+    with connect() as c:
+        r = c.execute('SELECT pw FROM users WHERE id=?', (user['id'],)).fetchone()
+    if not r or not check_password_hash(r['pw'], password):
+        time.sleep(0.5)
+        return jsonify(error='That password is wrong'), 400
+    return None
+
+
+def delete_account(user):
+    with connect() as c:
+        for q in ('DELETE FROM tokens WHERE user_id=?', 'DELETE FROM resets WHERE user_id=?'):
+            c.execute(q, (user['id'],))
+        c.execute('DELETE FROM friends WHERE a=? OR b=?', (user['id'], user['id']))
+        c.execute('DELETE FROM users WHERE id=?', (user['id'],))
+
+
 # ---------------------------------------------------------------- friends
 
 def _friend_row(r, me_id):
@@ -464,6 +600,7 @@ def admin_delete_user(uid):
         r = c.execute('SELECT email FROM users WHERE id=?', (uid,)).fetchone()
         if not r: abort(404)
         c.execute('DELETE FROM tokens WHERE user_id=?', (uid,))
+        c.execute('DELETE FROM resets WHERE user_id=?', (uid,))
         c.execute('DELETE FROM friends WHERE a=? OR b=?', (uid, uid))
         c.execute('DELETE FROM users WHERE id=?', (uid,))
     audit('admin_delete_user', r['email'])

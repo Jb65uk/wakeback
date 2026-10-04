@@ -1,6 +1,7 @@
 // Talking to your WakeBack server's accounts: sign up, log in, who am I, friends.
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
@@ -124,6 +125,40 @@ class AuthApi {
 
   Future<void> changePassword(String oldPw, String newPw) async {
     await _json(http.post(_u('/api/auth/password'), headers: _h, body: jsonEncode({'old': oldPw, 'new': newPw})));
+  }
+
+  /// Forgotten password, step 1: ask the admin for a reset code. The server gives the same answer whether
+  /// or not there's an account for that email.
+  Future<void> forgotPassword(String email) => _json(http.post(_u('/api/auth/forgot'), headers: _h, body: jsonEncode({'email': email})));
+
+  /// Step 2: the code the admin gave you, and a new password. You're signed out everywhere; log in again.
+  Future<void> resetPassword(String email, String code, String newPw) =>
+      _json(http.post(_u('/api/auth/reset'), headers: _h, body: jsonEncode({'email': email, 'code': code, 'new': newPw})));
+
+  /// Everything the server holds about you (account details, friends' names, your tracks) as a zip.
+  Future<Uint8List> exportData() async {
+    http.Response r;
+    try {
+      r = await http.get(_u('/api/me/export'), headers: _h).timeout(const Duration(minutes: 3));
+    } on TimeoutException {
+      throw const AuthException('The server didn\'t answer. Check your signal and try again.');
+    } catch (e) {
+      throw AuthException('Can\'t reach the server: $e');
+    }
+    if (r.statusCode != 200) {
+      String msg = 'HTTP ${r.statusCode}';
+      try {
+        msg = '${(jsonDecode(utf8.decode(r.bodyBytes)) as Map)['error'] ?? msg}';
+      } catch (_) {}
+      throw AuthException(msg, r.statusCode);
+    }
+    return r.bodyBytes;
+  }
+
+  /// Delete your account and every track you own on the server. Needs your password. Returns how many tracks went.
+  Future<int> deleteAccount(String password) async {
+    final j = await _json(http.delete(_u('/api/me'), headers: _h, body: jsonEncode({'password': password})));
+    return (j['tracks'] as num?)?.toInt() ?? 0;
   }
 
   Future<FriendLists> friends() async {

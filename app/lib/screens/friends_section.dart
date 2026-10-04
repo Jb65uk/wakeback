@@ -102,10 +102,14 @@ class _FriendsSectionState extends State<FriendsSection> {
                   contentPadding: EdgeInsets.zero,
                   leading: const CircleAvatar(child: Icon(Icons.person)),
                   title: Text(f.name),
-                  trailing: Wrap(spacing: 4, children: [
-                    TextButton(onPressed: () => _act(() => app.auth.declineFriend(f.id), 'Declined'), child: const Text('Decline')),
-                    FilledButton(onPressed: () => _act(() => app.auth.acceptFriend(f.id), 'You\'re now friends with ${f.name}'), child: const Text('Accept')),
-                  ]),
+                  // the buttons go under the name: beside it they squeezed a long name to nothing on a phone
+                  subtitle: Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Wrap(spacing: 8, children: [
+                      FilledButton(onPressed: () => _act(() => app.auth.acceptFriend(f.id), 'You\'re now friends with ${f.name}'), child: const Text('Accept')),
+                      TextButton(onPressed: () => _act(() => app.auth.declineFriend(f.id), 'Declined'), child: const Text('Decline')),
+                    ]),
+                  ),
                 ),
             ],
             const SizedBox(height: 6),

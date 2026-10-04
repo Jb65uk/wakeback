@@ -327,11 +327,18 @@ void main() {
     expect(s['stats']['Steve_phone.gpx']['moving_s'], 339);
     expect(await File('${d.dir.path}/sessions/2026-09-20_southport-sc/stats.json').exists(), isTrue); // cached
 
+    // the fixtures are a few minutes long, to keep the sums checkable by hand: count them for this test
+    minMovingS = 0;
+    minDistNm = 0;
+    addTearDown(() {
+      minMovingS = 300;
+      minDistNm = 0.2;
+    });
     const ref = {'session': '2026-09-20_southport-sc', 'date': '2026-09-20', 'venue_name': 'Southport SC (Marine Lake)'};
     final (st, mine) = await d.req('GET', '/api/stats?period=all');
     expect(st, 200);
     expect(mine, {
-      'period': 'all', 'sessions': 1, 'tracks': 1, 'dist_nm': 0.19, 'moving_h': 0.04,
+      'period': 'all', 'boats': [], 'boat': '', 'sessions': 1, 'tracks': 1, 'dist_nm': 0.19, 'moving_h': 0.04,
       'max_kn': 7.38, 'max_track': {...ref, 'file': 'puck1_103000.csv'},
       'avg_kn': 4.24, 'best_avg_kn': 4.24, 'best_avg_track': {...ref, 'file': 'puck1_103000.csv'},
       'longest_nm': 0.191, 'longest_track': {...ref, 'file': 'puck1_103000.csv'},
@@ -536,7 +543,8 @@ void main() {
       final s = (await tablet.store.sessions()).single;
       expect(s['files'], ['phone_103000.csv', 'puck2_103000.csv']);
       expect(s['mine'], ['phone_103000.csv']);
-      expect((await tablet.store.myStats('all'))['tracks'], 1);
+      // (a one-minute test track is mine, but too short to count as a sail in the stats)
+      expect((await tablet.store.myStats('all'))['tracks'], 0);
 
       // nothing new: nothing moves
       final again = await sync.syncNew();
@@ -576,6 +584,46 @@ void main() {
     } finally {
       await server.stop();
     }
+  });
+
+  test('stats: tiny tracks don\'t count, and can be split by boat and class', () async {
+    d.store.ownerName = 'James';
+    String csv(DateTime t0, int minutes, double kn) {
+      final b = StringBuffer('t_ms,lat,lon,sog_kn\n');
+      for (var s = 0; s <= minutes * 60; s++) {
+        b.writeln('${t0.millisecondsSinceEpoch + s * 1000},${(53.6503 + s * kn / 1.943844 / 111320).toStringAsFixed(7)},-3.0102,$kn');
+      }
+      return b.toString();
+    }
+    final t0 = DateTime.utc(2026, 9, 20, 10);
+    await d.upload('solo_am.csv', csv(t0, 30, 4), fields: {'boat': 'Solo 5843'});
+    await d.upload('test_2min.csv', csv(t0.add(const Duration(hours: 4)), 2, 3), fields: {'boat': 'Solo 5843'});
+    await d.upload('mirror_pm.csv', csv(t0.add(const Duration(hours: 6)), 20, 3), fields: {'boat': 'Mirror 70012'});
+    await d.upload('dave.csv', csv(t0.add(const Duration(minutes: 10)), 40, 4.5), fields: {'owner_name': 'Dave', 'boat': 'Solo 5501'});
+
+    expect(counts({'moving_s': 299, 'dist_nm': 5.0}), isFalse);
+    expect(counts({'moving_s': 300, 'dist_nm': 0.2}), isTrue);
+    expect(boatClass('Solo 5843'), 'Solo');
+    expect(boatClass('RS Aero 7 #2114'), 'RS Aero 7');
+    expect(boatClass('Laser'), 'Laser');
+    expect(boatClass(''), '');
+
+    // all four still replay; the two-minute one isn't a sail
+    expect(((await d.req('GET', '/api/sessions')).$2 as List).single['files'], hasLength(4));
+    final st = (await d.req('GET', '/api/stats')).$2 as Map;
+    expect(st['tracks'], 2);
+    expect(st['longest_track']['file'], 'solo_am.csv');
+    expect(st['boats'], ['Mirror 70012', 'Solo 5843']);
+    final solo = (await d.req('GET', '/api/stats?boat=solo%205843')).$2 as Map;
+    expect(solo['tracks'], 1);
+    expect(solo['dist_nm'], closeTo(2.0, 0.1));
+    expect(solo['boats'], st['boats']);
+
+    final lg = (await d.req('GET', '/api/league')).$2 as Map;
+    expect(lg['classes'], ['Mirror', 'Solo']);
+    final solos = (await d.req('GET', '/api/league?cls=Solo')).$2 as Map;
+    expect((solos['people'] as List).map((p) => p['name']), ['Dave', 'James']);
+    expect(((await d.req('GET', '/api/league?cls=mirror')).$2['people'] as List).map((p) => p['name']), ['James']);
   });
 
   test('session card times: one span per sail, a short break is the same sail', () {

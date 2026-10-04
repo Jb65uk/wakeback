@@ -33,6 +33,9 @@ class WakeBackApp extends StatelessWidget {
         cardTheme: CardThemeData(color: const Color(0xFF1A3850), elevation: 0, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
       ),
       theme: ThemeData(useMaterial3: true, colorScheme: ColorScheme.fromSeed(seedColor: yellow)),
+      // Android's font-size setting still applies, but only so far: beyond about 1.25x the rows and
+      // buttons stop fitting a phone and words break mid-word.
+      builder: (context, child) => MediaQuery.withClampedTextScaling(minScaleFactor: 0.9, maxScaleFactor: 1.25, child: child ?? const SizedBox.shrink()),
       routes: {'/home': (_) => const HomeScreen()},
       home: app.welcomed ? const HomeScreen() : const WelcomeScreen(),
     );

@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import '../app_state.dart';
 import '../record/recorder.dart';
+import '../dock/stats.dart' show minMovingS, minDistNm;
 import '../record/track_log.dart';
 import '../widgets/boats.dart';
 import '../widgets/common.dart';
@@ -69,10 +70,29 @@ class _RecordScreenState extends State<RecordScreen> {
       return;
     }
     if (!mounted) return;
-    final ok = await confirm(context, 'Finish this sail?',
-        '${l.distNm.toStringAsFixed(2)} nm in ${_hms(recorder.elapsedMs)}. It goes into Sessions, ready to replay and sync.',
-        ok: 'Finish');
-    if (!ok) return;
+    // too short to be a sail (a test, or started by mistake): say so, and make throwing it away the easy choice
+    if (recorder.elapsedMs < minMovingS * 1000 || l.distNm < minDistNm) {
+      final pick = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('That was a short one'),
+          content: Text('${l.distNm.toStringAsFixed(2)} nm in ${_hms(recorder.elapsedMs)}. '
+              'Sails under 5 minutes or 0.2 nm can be replayed but don\'t count in your stats, bests or the league.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, 'discard'), child: const Text('Discard')),
+            TextButton(onPressed: () => Navigator.pop(ctx, 'save'), child: const Text('Save anyway')),
+            FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Keep recording')),
+          ],
+        ),
+      );
+      if (pick == 'discard') await _run(recorder.discard);
+      if (pick != 'save') return;
+    } else {
+      final ok = await confirm(context, 'Finish this sail?',
+          '${l.distNm.toStringAsFixed(2)} nm in ${_hms(recorder.elapsedMs)}. It goes into your sails, ready to replay and sync.',
+          ok: 'Finish');
+      if (!ok) return;
+    }
     await _run(() async {
       final r = await recorder.finish();
       if (mounted && r != null) toast(context, 'Saved to ${r['venue_name'] ?? r['session']}');
@@ -330,7 +350,7 @@ class _SavedCard extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(16, 12, 12, 8),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(where, style: t.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
-          if (app.defaultBoat.isNotEmpty) Text(app.defaultBoat, style: TextStyle(color: t.colorScheme.onSurfaceVariant)),
+          if (app.recordBoat.isNotEmpty) Text(app.recordBoat, style: TextStyle(color: t.colorScheme.onSurfaceVariant)),
           const SizedBox(height: 4),
           Text('${log.distNm.toStringAsFixed(2)} nm · ${_hms(ms)} · top ${_f1(log.maxKn)} kn · avg ${_f1(avg)} kn',
               style: TextStyle(color: t.colorScheme.onSurfaceVariant, fontFeatures: _tab)),
