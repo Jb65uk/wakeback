@@ -327,11 +327,18 @@ void main() {
     expect(s['stats']['Steve_phone.gpx']['moving_s'], 339);
     expect(await File('${d.dir.path}/sessions/2026-09-20_southport-sc/stats.json').exists(), isTrue); // cached
 
+    // the fixtures are a few minutes long, to keep the sums checkable by hand: count them for this test
+    minMovingS = 0;
+    minDistNm = 0;
+    addTearDown(() {
+      minMovingS = 300;
+      minDistNm = 0.2;
+    });
     const ref = {'session': '2026-09-20_southport-sc', 'date': '2026-09-20', 'venue_name': 'Southport SC (Marine Lake)'};
     final (st, mine) = await d.req('GET', '/api/stats?period=all');
     expect(st, 200);
     expect(mine, {
-      'period': 'all', 'sessions': 1, 'tracks': 1, 'dist_nm': 0.19, 'moving_h': 0.04,
+      'period': 'all', 'boats': [], 'boat': '', 'sessions': 1, 'tracks': 1, 'dist_nm': 0.19, 'moving_h': 0.04,
       'max_kn': 7.38, 'max_track': {...ref, 'file': 'puck1_103000.csv'},
       'avg_kn': 4.24, 'best_avg_kn': 4.24, 'best_avg_track': {...ref, 'file': 'puck1_103000.csv'},
       'longest_nm': 0.191, 'longest_track': {...ref, 'file': 'puck1_103000.csv'},

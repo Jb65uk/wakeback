@@ -308,8 +308,9 @@ class StatRow {
 
 /// A track only counts towards stats, bests and the league if it's a real sail: at least 5 minutes moving
 /// and 0.2 nm (stats.py counts). A two-minute test isn't your "longest sail". It still replays.
-const int minMovingS = 300;
-const double minDistNm = 0.2;
+/// (Not const so a test can check the sums on a short fixture.)
+int minMovingS = 300;
+double minDistNm = 0.2;
 bool counts(Map<String, dynamic> st) => ((st['moving_s'] as num?) ?? 0) >= minMovingS && ((st['dist_nm'] as num?) ?? 0) >= minDistNm;
 
 /// 'Solo 5843' -> 'Solo': the boat's name without a trailing sail number (stats.py boat_class).
