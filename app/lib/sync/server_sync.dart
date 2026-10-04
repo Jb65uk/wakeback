@@ -137,15 +137,13 @@ class ServerSync {
   Future<Object?> _putJson(String p, Object value) async =>
       jsonDecode(utf8.decode((await _go(http.put(_u(p), headers: _authJson, body: jsonEncode(value)))).bodyBytes));
 
-  /// Your totals on the server (?period=month|year|all).
-  Future<Map<String, dynamic>> myStats(String period) async =>
-      ((await _getJson('/api/stats?period=$period')) as Map).cast<String, dynamic>();
+  /// Your totals on the server (?period=month|year|all, and optionally just one boat).
+  Future<Map<String, dynamic>> myStats(String period, {String boat = ''}) async =>
+      ((await _getJson('/api/stats?period=$period${boat.isEmpty ? '' : '&boat=${Uri.encodeQueryComponent(boat)}'}')) as Map).cast<String, dynamic>();
 
-  /// The friends' league from the server: people ranked, 'me' flagged.
-  Future<List<Map<String, dynamic>>> league(String period) async {
-    final j = ((await _getJson('/api/league?period=$period')) as Map).cast<String, dynamic>();
-    return ((j['people'] as List?) ?? const []).whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
-  }
+  /// The friends' league from the server: {people: ranked, 'me' flagged; classes: the boat classes on the board}.
+  Future<Map<String, dynamic>> leagueTable(String period, {String cls = ''}) async =>
+      ((await _getJson('/api/league?period=$period${cls.isEmpty ? '' : '&cls=${Uri.encodeQueryComponent(cls)}'}')) as Map).cast<String, dynamic>();
 
   /// Change how one of your tracks on the server is shared ('friends' / 'private').
   Future<void> setSharing(String day, String file, String visibility) => setTrack(day, file, {'visibility': visibility});

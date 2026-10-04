@@ -390,18 +390,28 @@ class DockStore {
     return rows;
   }
 
-  /// Your own tracks (app.py's rule for "mine"), newest first.
-  Future<List<StatRow>> myRows(String period) async => [for (final r in await rowsFor(period)) if (_isMine(r.owner)) r];
+  /// Your own tracks that count as a sail (app.py's rule for "mine"; tiny test tracks left out), newest first.
+  Future<List<StatRow>> myRows(String period) async => [for (final r in await rowsFor(period)) if (_isMine(r.owner) && counts(r.stats)) r];
 
-  // ---- GET /api/stats?period=  (your tracks only)
-  Future<Map<String, dynamic>> myStats(String period) async => {'period': period, ...summarise(await myRows(period))};
+  // ---- GET /api/stats?period=&boat=  (your tracks only; `boats` lists every boat you've sailed)
+  Future<Map<String, dynamic>> myStats(String period, {String boat = ''}) async {
+    var rows = await myRows(period);
+    final boats = distinctNames(rows.map((r) => r.boat));
+    if (boat.isNotEmpty) rows = [for (final r in rows) if (r.boat.toLowerCase() == boat.toLowerCase()) r];
+    return {'period': period, 'boats': boats, 'boat': boat, ...summarise(rows)};
+  }
 
   /// A track's text, for drawing it (share card).
   Future<String> trackText(String day, String name) async => (await trackFile(day, name)).readAsString(encoding: latin1);
 
   // ---- GET /api/league?period=  (everyone on this phone: you, friends' shared tracks, unowned = Club)
-  Future<Map<String, dynamic>> leagueTable(String period) async =>
-      {'period': period, 'people': league(await rowsFor(period), myEmail: ownerEmail, myName: ownerName)};
+  /// `cls` keeps only sails in that class of boat ('Solo'); `classes` lists the ones on the board.
+  Future<Map<String, dynamic>> leagueTable(String period, {String cls = ''}) async {
+    var rows = [for (final r in await rowsFor(period)) if (counts(r.stats)) r];
+    final classes = distinctNames(rows.map((r) => boatClass(r.boat)));
+    if (cls.isNotEmpty) rows = [for (final r in rows) if (boatClass(r.boat).toLowerCase() == cls.toLowerCase()) r];
+    return {'period': period, 'people': league(rows, myEmail: ownerEmail, myName: ownerName), 'classes': classes, 'cls': cls};
+  }
 
   Future<File> trackFile(String day, String name) async {
     if (!safeName.hasMatch(day) || !safeName.hasMatch(name)) throw const DockError(400, 'bad name');

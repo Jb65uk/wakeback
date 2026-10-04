@@ -30,6 +30,7 @@ BOOT = time.time()
 
 app = Flask(__name__, static_folder=None)
 accounts.init(os.path.join(ROOT, 'data'))
+accounts.apply_admin_reset()
 app.register_blueprint(accounts.bp)
 
 from werkzeug.exceptions import HTTPException
@@ -497,10 +498,19 @@ def _rows_for(user, period, league=False):
         vid = m.group(2) or UNKNOWN_VENUE
         for f in files:
             if f not in st or st[f]['start_ms'] < since: continue
+            if not trackstats.counts(st[f]): continue         # too short to be a sail: not in stats or the league
             o = owners.get(f, {})
             rows.append({'session': day, 'date': m.group(1), 'venue': vid, 'venue_name': venue_name(vid, vs), 'file': f, 'stats': st[f],
-                         'owner_email': (o.get('email') or '').lower(), 'owner_name': o.get('name') or ''})
+                         'owner_email': (o.get('email') or '').lower(), 'owner_name': o.get('name') or '', 'boat': o.get('boat') or ''})
     return rows
+
+
+def _names(values):
+    """Distinct non-empty names, case-insensitively, first spelling kept, sorted."""
+    seen = {}
+    for v in values:
+        if v and v.lower() not in seen: seen[v.lower()] = v
+    return sorted(seen.values(), key=str.lower)
 
 @app.get('/api/stats')
 @require_user
@@ -510,7 +520,11 @@ def my_stats():
     rows = _rows_for(user, period)
     if accounts.ENABLED and user:
         rows = [r for r in rows if r['owner_email'] == user['email'] or (not r['owner_email'] and r['owner_name'] == user['name'])]
-    return jsonify(period=period, **trackstats.summarise(rows))
+    # ?boat=Solo 5843: just the sails in that boat. `boats` lists every boat you've sailed, for the picker.
+    boats = _names(r['boat'] for r in rows)
+    boat = request.args.get('boat', '').strip()
+    if boat: rows = [r for r in rows if r['boat'].lower() == boat.lower()]
+    return jsonify(period=period, boats=boats, boat=boat, **trackstats.summarise(rows))
 
 @app.get('/api/league')
 @require_user
@@ -518,7 +532,12 @@ def league():
     """You and your friends (and the club's unowned tracks), ranked: ?period=month|year|all"""
     user = current_user(); period = request.args.get('period', 'all')
     by = {}
-    for r in _rows_for(user, period, league=True):
+    rows = _rows_for(user, period, league=True)
+    # ?cls=Solo: only sails in that class of boat (the boat's name without its sail number)
+    classes = _names(trackstats.boat_class(r['boat']) for r in rows)
+    cls = request.args.get('cls', '').strip()
+    if cls: rows = [r for r in rows if trackstats.boat_class(r['boat']).lower() == cls.lower()]
+    for r in rows:
         key = r['owner_email'] or (r['owner_name'] or 'Club')
         by.setdefault(key, {'name': r['owner_name'] or 'Club', 'rows': []})['rows'].append(r)
     people = []
@@ -528,7 +547,72 @@ def league():
                        'sessions': sm['sessions'], 'dist_nm': sm['dist_nm'], 'moving_h': sm['moving_h'], 'max_kn': sm['max_kn'],
                        'avg_kn': sm['avg_kn'], 'best_avg_kn': sm['best_avg_kn'], 'longest_nm': sm.get('longest_nm', 0)})
     people.sort(key=lambda p: -p['dist_nm'])
-    return jsonify(period=period, people=people)
+    return jsonify(period=period, people=people, classes=classes, cls=cls)
+
+# ---------- your data: take it with you, or take it away ----------
+def _my_tracks(user):
+    """(day, file, owner record) for every track this account owns."""
+    out = []
+    for day in sorted(os.listdir(SESSIONS)):
+        d = os.path.join(SESSIONS, day)
+        if not os.path.isdir(d) or not SAFE.match(day): continue
+        owners = read_json(os.path.join(d, 'owners.json'), {})
+        for f in sorted(os.listdir(d)):
+            o = owners.get(f) if isinstance(owners, dict) else None
+            if f.lower().endswith(('.csv', '.gpx')) and isinstance(o, dict) and (o.get('email') or '').lower() == user['email']:
+                out.append((day, f, o))
+    return out
+
+
+@app.get('/api/me/export')
+@require_user
+def export_me():
+    """Everything held about you, as a zip: your account details, your friends' names, and your tracks."""
+    if not accounts.ENABLED: abort(404)
+    import io, zipfile
+    user = current_user(); vs = load_venues()
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
+        listing = []
+        for day, f, o in _my_tracks(user):
+            m = SESSION_RE.match(day); vid = (m.group(2) if m else None) or UNKNOWN_VENUE
+            z.write(os.path.join(SESSIONS, day, f), f'tracks/{day}/{f}')
+            listing.append({'session': day, 'date': m.group(1) if m else day[:10], 'venue': venue_name(vid, vs), 'file': f,
+                            'boat': o.get('boat') or '', 'sharing': o.get('visibility') or 'friends'})
+        z.writestr('account.json', json.dumps({**accounts.export_account(user), 'tracks': listing}, indent=1))
+        z.writestr('README.txt', 'Your WakeBack data.\n\naccount.json: your account details, friends and a list of your tracks.\n'
+                                 'tracks/: every track you own, as recorded (CSV or GPX), by sailing day and venue.\n')
+    accounts.audit('export', user['email'], {'tracks': len(listing)})
+    buf.seek(0)
+    from flask import send_file
+    return send_file(buf, mimetype='application/zip', as_attachment=True, download_name='wakeback-my-data.zip')
+
+
+@app.delete('/api/me')
+@require_user
+def delete_me():
+    """Delete your account and every track you own. Needs your password. Can't be undone."""
+    if not accounts.ENABLED: abort(404)
+    user = current_user()
+    bad = accounts.check_can_delete(user, str((request.get_json(silent=True) or {}).get('password', '')))
+    if bad: return bad
+    n = 0
+    with lock:
+        for day, f, _ in _my_tracks(user):
+            d = os.path.join(SESSIONS, day)
+            try: os.remove(os.path.join(d, f))
+            except OSError: continue
+            n += 1
+            op = os.path.join(d, 'owners.json'); owners = read_json(op, {})
+            if f in owners: owners.pop(f); write_json(op, owners)
+            # nobody else's track left in the session: the course, names and stats go with it
+            if not any(x.lower().endswith(('.csv', '.gpx')) for x in os.listdir(d)): shutil.rmtree(d, ignore_errors=True)
+    accounts.delete_account(user)
+    accounts.audit('account_deleted', user['email'], {'tracks': n}, user={'id': None, 'email': user['email']})
+    resp = jsonify(ok=True, tracks=n)
+    resp.delete_cookie(accounts.COOKIE)
+    return resp
+
 
 @app.get('/api/sailors')
 @require_user

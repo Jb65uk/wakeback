@@ -97,6 +97,11 @@ td.num{font-variant-numeric:tabular-nums;color:var(--muted);white-space:nowrap}
       </div>
       <div class="hint">Off: new sign-ups wait here until you approve them. On: anyone with the app who signs up is in straight away.</div>
     </div>
+    <div class="box" id="resetsBox" hidden>
+      <h2>Password reset requests</h2>
+      <div class="hint">Someone has forgotten their password. Make a code, pass it to them yourself (a message, or in person), and they type it into the app with a new password. A code works once and lasts a day.</div>
+      <div id="resets" style="display:flex;flex-direction:column;gap:8px;margin-top:10px"></div>
+    </div>
     <div class="box">
       <div class="row"><h2>Users</h2><span class="spacer"></span>
         <select id="ufilter"><option value="">All</option><option value="pending">Waiting for approval</option><option value="active">Active</option><option value="disabled">Disabled</option></select>
@@ -172,9 +177,34 @@ async function loadUsers() {
   $('#autoApprove').checked = !!j.auto_approve;
   $('#autoHint').textContent = j.auto_approve ? 'New sign-ups are active straight away.' : 'New sign-ups wait for you.';
   const pend = users.filter(u => u.status === 'pending').length;
-  $('#pendN').hidden = !pend; $('#pendN').textContent = pend;
+  let resets = [];
+  try { resets = (await api('/api/admin/resets')).resets || []; } catch {}
+  const n = pend + resets.length;
+  $('#pendN').hidden = !n; $('#pendN').textContent = n;
+  renderResets(resets);
   renderUsers();
 }
+// ---------- forgotten passwords: the admin makes a one-time code and passes it on ----------
+const shownCodes = {};      // id -> code, for as long as this page is open (the server only keeps its hash)
+function renderResets(list) {
+  $('#resetsBox').hidden = !list.length;
+  $('#resets').innerHTML = list.map(r => `
+    <div class="row" data-rid="${r.id}" style="flex-wrap:wrap;gap:8px">
+      <span><b>${esc(r.name)}</b> <span class="hint">${esc(r.email)} · asked ${new Date(r.requested).toLocaleString()}</span></span>
+      <span class="spacer"></span>
+      ${shownCodes[r.id] ? `<code style="font-size:18px;letter-spacing:.08em;user-select:all">${esc(shownCodes[r.id])}</code>`
+        : r.has_code ? '<span class="hint">code made, waiting for them</span>' : ''}
+      <button class="btn sm" data-rcode="${r.id}">${r.has_code || shownCodes[r.id] ? 'New code' : 'Make a code'}</button>
+      <button class="btn sm" data-rdel="${r.id}">Dismiss</button>
+    </div>`).join('');
+}
+$('#resets').addEventListener('click', async e => {
+  const mk = e.target.closest('[data-rcode]'), del = e.target.closest('[data-rdel]');
+  try {
+    if (mk) { const j = await api(`/api/admin/resets/${mk.dataset.rcode}/code`, { method: 'POST' }); shownCodes[mk.dataset.rcode] = j.code; toast(`Code for ${j.name}: ${j.code} (good for ${j.hours} hours)`, 8000); await loadUsers(); }
+    if (del) { await api(`/api/admin/resets/${del.dataset.rdel}`, { method: 'DELETE' }); delete shownCodes[del.dataset.rdel]; await loadUsers(); }
+  } catch (err) { toast(err.message || String(err)); }
+});
 function renderUsers() {
   const f = $('#ufilter').value;
   const rows = users.filter(u => !f || u.status === f);

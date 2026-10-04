@@ -138,7 +138,8 @@ function when(ms) {
   return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }) + ' ' + t;
 }
 const mb = kb => (kb / 1024).toFixed(1) + ' MB';
-const sessionLbl = id => new Date(id + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+// a session is "2026-09-20_southport-sc": the date is the first ten characters
+const sessionLbl = id => { const d = new Date(String(id).slice(0, 10) + 'T12:00:00'); return isNaN(d) ? String(id) : d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }); };
 
 function puckCard(p, newestFw) {
   const pct = p.battery_pct, low = pct != null && pct < 30;

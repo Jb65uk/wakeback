@@ -5,7 +5,7 @@ name: Server image
 on:
   push:
     branches: [main]
-    paths: ['server/**', 'viewer/**', 'Dockerfile', '.github/workflows/server-image.yml']
+    paths: ['server/**', 'viewer/**', 'tools/test_server.py', 'Dockerfile', '.github/workflows/server-image.yml']
   workflow_dispatch:
 
 permissions:
@@ -17,6 +17,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - name: Server checks (accounts, stats, forgot password, export, delete) before anything is published
+        run: |
+          pip install -r server/requirements.txt
+          python tools/test_server.py
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3

@@ -156,8 +156,8 @@ class PocketDock {
 
     // sessions
     if (m == 'GET' && path == 'sessions') return _json(req, await store.sessions());
-    if (m == 'GET' && path == 'stats') return _json(req, await store.myStats(req.uri.queryParameters['period'] ?? 'all'));
-    if (m == 'GET' && path == 'league') return _json(req, await store.leagueTable(req.uri.queryParameters['period'] ?? 'all'));
+    if (m == 'GET' && path == 'stats') return _json(req, await store.myStats(req.uri.queryParameters['period'] ?? 'all', boat: (req.uri.queryParameters['boat'] ?? '').trim()));
+    if (m == 'GET' && path == 'league') return _json(req, await store.leagueTable(req.uri.queryParameters['period'] ?? 'all', cls: (req.uri.queryParameters['cls'] ?? '').trim()));
     if (api.length == 3 && api[0] == 'sessions') {
       final day = api[1], what = api[2];
       if (what == 'meta' || what == 'races' || what == 'crew') {

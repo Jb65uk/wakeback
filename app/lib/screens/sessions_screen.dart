@@ -154,20 +154,42 @@ class _SyncCloud extends StatelessWidget {
   }
 }
 
+/// "All boats · Solo 5843 · Mirror 70012": pick one name or all, as chips that wrap.
+class _NameChips extends StatelessWidget {
+  final String all, selected;
+  final List<String> names;
+  final ValueChanged<String> onSelected;
+  const _NameChips({required this.all, required this.names, required this.selected, required this.onSelected});
+  @override
+  Widget build(BuildContext context) {
+    // the one picked stays on show even if it has dropped out of the list for this period
+    final shown = [...names, if (selected.isNotEmpty && !names.any((n) => n.toLowerCase() == selected.toLowerCase())) selected];
+    return Wrap(alignment: WrapAlignment.center, spacing: 8, runSpacing: 4, children: [
+      ChoiceChip(label: Text(all), showCheckmark: false, selected: selected.isEmpty, onSelected: (_) => onSelected('')),
+      for (final n in shown)
+        ChoiceChip(label: Text(n), showCheckmark: false, selected: n.toLowerCase() == selected.toLowerCase(), onSelected: (_) => onSelected(n)),
+    ]);
+  }
+}
+
 class _PeriodPicker extends StatelessWidget {
   final String value;
   final ValueChanged<String> onChanged;
   const _PeriodPicker(this.value, this.onChanged);
   @override
-  Widget build(BuildContext context) => SegmentedButton<String>(
-        showSelectedIcon: false,
-        segments: const [
-          ButtonSegment(value: 'month', label: Text('This month')),
-          ButtonSegment(value: 'year', label: Text('This year')),
-          ButtonSegment(value: 'all', label: Text('All time')),
-        ],
-        selected: {value},
-        onSelectionChanged: (s) => onChanged(s.first),
+  Widget build(BuildContext context) => FittedBox(
+        // shrinks as one piece on a narrow screen or with large text, rather than breaking a word
+        fit: BoxFit.scaleDown,
+        child: SegmentedButton<String>(
+          showSelectedIcon: false,
+          segments: const [
+            ButtonSegment(value: 'month', label: Text('This month', softWrap: false)),
+            ButtonSegment(value: 'year', label: Text('This year', softWrap: false)),
+            ButtonSegment(value: 'all', label: Text('All time', softWrap: false)),
+          ],
+          selected: {value},
+          onSelectionChanged: (s) => onChanged(s.first),
+        ),
       );
 }
 
@@ -588,7 +610,7 @@ class _RecordCard extends StatelessWidget {
                   Expanded(child: Text('${r['title']}${r['scope'] == 'ever' ? '' : ' (this year)'}', style: TextStyle(color: t.colorScheme.onPrimaryContainer))),
                   Text('${r['value']}', style: t.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800, color: t.colorScheme.onPrimaryContainer)),
                   const SizedBox(width: 10),
-                  Text(niceDate('${r['date']}'), style: t.textTheme.bodySmall?.copyWith(color: t.colorScheme.onPrimaryContainer.withValues(alpha: 0.7))),
+                  Flexible(child: Text(niceDate('${r['date']}'), maxLines: 1, overflow: TextOverflow.ellipsis, style: t.textTheme.bodySmall?.copyWith(color: t.colorScheme.onPrimaryContainer.withValues(alpha: 0.7)))),
                   const SizedBox(width: 8),
                 ]),
               ),
@@ -609,7 +631,8 @@ class _StatsTab extends StatefulWidget {
 }
 
 class _StatsTabState extends State<_StatsTab> {
-  String _period = 'all';
+  String _period = 'all', _boat = '';
+  List<String> _boats = const [];
   Map<String, dynamic>? _st;
   List<SailBadge> _badges = const [];
   String? _err, _source;
@@ -630,13 +653,13 @@ class _StatsTabState extends State<_StatsTab> {
 
   Future<void> _load() async {
     final n = ++_req;
-    final period = _period;
+    final period = _period, boat = _boat;
     Map<String, dynamic>? st;
     String? src, err;
     final sync = serverOrNull();
     if (sync != null) {
       try {
-        st = await sync.myStats(period);
+        st = await sync.myStats(period, boat: boat);
         src = 'everything you\'ve synced to the server';
       } on SyncException catch (e) {
         err = e.message;
@@ -644,7 +667,7 @@ class _StatsTabState extends State<_StatsTab> {
     }
     if (st == null) {
       try {
-        st = await app.store.myStats(period);
+        st = await app.store.myStats(period, boat: boat);
         src = sync == null ? null : 'this phone only (${err ?? 'server not reached'})';
         err = null;
       } catch (e) {
@@ -656,14 +679,24 @@ class _StatsTabState extends State<_StatsTab> {
       final rows = await app.store.myRows('all');
       bd = badges(rows, summarise(rows));
     } catch (_) {}
-    if (mounted && n == _req && period == _period) {
+    if (mounted && n == _req && period == _period && boat == _boat) {
       setState(() {
         _st = st;
         _err = err;
         _source = src;
         if (bd != null) _badges = bd;
+        final bs = ((st?['boats'] as List?) ?? const []).map((e) => '$e').toList();
+        if (bs.isNotEmpty || boat.isEmpty) _boats = bs; // an older server sends none: keep what we had
       });
     }
+  }
+
+  void _setBoat(String b) {
+    setState(() {
+      _boat = b;
+      _st = null;
+    });
+    _load();
   }
 
   void _setPeriod(String p) {
@@ -682,16 +715,21 @@ class _StatsTabState extends State<_StatsTab> {
       onRefresh: _load,
       child: ListView(padding: const EdgeInsets.fromLTRB(12, 12, 12, 24), children: [
         Center(child: _PeriodPicker(_period, _setPeriod)),
+        // more than one boat sailed: see them together or one at a time
+        if (_boats.length > 1 || _boat.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          _NameChips(all: 'All boats', names: _boats, selected: _boat, onSelected: _setBoat),
+        ],
         const SizedBox(height: 12),
         if (st == null && _err != null) _Empty(Icons.error_outline, 'Couldn\'t work out your stats', _err!),
         if (st == null && _err == null) const Padding(padding: EdgeInsets.all(40), child: Center(child: CircularProgressIndicator())),
         if (st != null && (st['tracks'] as num? ?? 0) == 0)
           _Empty(Icons.insights_outlined, _period == 'all' ? 'Nothing to count yet' : 'Nothing ${_period == 'month' ? 'this month' : 'this year'}',
-              _period == 'all' ? 'Your own tracks add up here: miles, hours, top speeds.' : 'Time to go sailing.'),
+              _period == 'all' ? 'Your sails add up here: miles, hours, top speeds. A sail counts once it\'s 5 minutes and 0.2 nm.' : 'Time to go sailing.'),
         if (st != null && (st['tracks'] as num? ?? 0) > 0) ..._body(t, st),
         if (_source != null) ...[
           const SizedBox(height: 16),
-          Center(child: Hint('Counting $_source.')),
+          Center(child: Hint('Counting $_source. Sails under 5 minutes or 0.2 nm aren\'t counted.')),
         ],
       ]),
     );
@@ -810,7 +848,7 @@ class _Big extends StatelessWidget {
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Icon(icon, size: 18, color: t.colorScheme.primary),
             const SizedBox(height: 6),
-            Text(value, style: t.textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w800, height: 1.0)),
+            FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: Text(value, maxLines: 1, style: t.textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w800, height: 1.0))),
             const SizedBox(height: 2),
             Text(label, style: t.textTheme.bodySmall?.copyWith(color: t.colorScheme.onSurfaceVariant)),
           ]),
@@ -998,7 +1036,8 @@ enum _Cat {
 }
 
 class _LeagueTabState extends State<_LeagueTab> {
-  String _period = 'all';
+  String _period = 'all', _cls = '';
+  List<String> _classes = const [];
   _Cat _cat = _Cat.miles;
   List<Map<String, dynamic>>? _people;
   String? _err, _source;
@@ -1019,13 +1058,18 @@ class _LeagueTabState extends State<_LeagueTab> {
 
   Future<void> _load() async {
     final n = ++_req;
-    final period = _period;
+    final period = _period, cls = _cls;
     List<Map<String, dynamic>>? people;
+    List<String> classes = const [];
     String? err, src;
+    List<Map<String, dynamic>> peopleOf(Map<String, dynamic> j) => ((j['people'] as List?) ?? const []).whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
+    List<String> classesOf(Map<String, dynamic> j) => ((j['classes'] as List?) ?? const []).map((e) => '$e').toList();
     final sync = serverOrNull();
     if (sync != null) {
       try {
-        people = await sync.league(period);
+        final j = await sync.leagueTable(period, cls: cls);
+        people = peopleOf(j);
+        classes = classesOf(j);
         src = 'you and your friends, from the server';
       } on SyncException catch (e) {
         err = e.message;
@@ -1033,18 +1077,21 @@ class _LeagueTabState extends State<_LeagueTab> {
     }
     if (people == null) {
       try {
-        people = (((await app.store.leagueTable(period))['people']) as List).cast<Map<String, dynamic>>();
+        final j = await app.store.leagueTable(period, cls: cls);
+        people = peopleOf(j);
+        classes = classesOf(j);
         src = sync == null ? 'the tracks on this phone' : 'the tracks on this phone (${err ?? 'server not reached'})';
         err = null;
       } catch (e) {
         err = '$e';
       }
     }
-    if (mounted && n == _req && period == _period) {
+    if (mounted && n == _req && period == _period && cls == _cls) {
       setState(() {
         _people = people;
         _err = err;
         _source = src;
+        if (classes.isNotEmpty || cls.isEmpty) _classes = classes;
       });
     }
   }
@@ -1087,6 +1134,22 @@ class _LeagueTabState extends State<_LeagueTab> {
               ),
           ],
         ),
+        // boats of more than one class on the board: rank like against like (Solos with Solos)
+        if (_classes.length > 1 || _cls.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          _NameChips(
+            all: 'All classes',
+            names: _classes,
+            selected: _cls,
+            onSelected: (c) {
+              setState(() {
+                _cls = c;
+                _people = null;
+              });
+              _load();
+            },
+          ),
+        ],
         const SizedBox(height: 12),
         if (ranked == null && _err != null) _Empty(Icons.error_outline, 'Couldn\'t load the league', _err!),
         if (ranked == null && _err == null) const Padding(padding: EdgeInsets.all(40), child: Center(child: CircularProgressIndicator())),
@@ -1097,7 +1160,7 @@ class _LeagueTabState extends State<_LeagueTab> {
           for (var i = 0; i < ranked.length; i++) _row(t, i, ranked[i]),
         if (_source != null) ...[
           const SizedBox(height: 16),
-          Center(child: Hint('Counting $_source. Private sessions stay off the board.')),
+          Center(child: Hint('Counting $_source. Private sails, and ones under 5 minutes or 0.2 nm, stay off the board.')),
         ],
       ]),
     );
