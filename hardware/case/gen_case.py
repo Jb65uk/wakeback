@@ -3,7 +3,8 @@
 
 Parts (all in out/):
   wakeback-base.stl    the cup: battery, carrier board and TP4056 inside; bayonet lugs round the bottom
-  wakeback-lid.stl     screw-on lid, O-ring face seal (70 x 2 mm nitrile O-ring)
+  wakeback-lid.stl     screw-on lid, O-ring face seal (70 x 2 mm nitrile O-ring, or the printed TPU gasket)
+  wakeback-gasket-tpu.stl   printed TPU gasket for the same groove, instead of the O-ring
   wakeback-bridge.stl  GPS shelf, held by the same two screws that hold the board down
   wakeback-cradle.stl  deck mount: drop the puck in, twist clockwise, it locks with the arrow to the bow
   wakeback-lid-mount.stl    second lid with bayonet lugs round its rim, for hanging the puck under a thwart
@@ -235,6 +236,16 @@ inside = {
     'IMU': box(IMU['l'], IMU['w'], IMU['h'], IMU['cx'], IMU['cy'], Z_PCB_TOP),
     'GPS': box(GPS['s'], GPS['s'], GPS['h'], GPS['cx'], GPS['cy'], Z_GPS),
 }
+# ================================================================== TPU GASKET (instead of the 70 x 2 O-ring)
+# Flat ring that fills the groove, with a raised bead on top that the lid crushes. Printed in TPU, as modelled.
+GK_CLR = 0.2             # gap each side in the groove, room for the squashed bead to go
+GK_BEAD_H = 0.4          # bead stands this far above the rim face (two 0.2 mm layers)
+GK_BEAD_W0, GK_BEAD_W1 = 1.6, 0.8
+_g0, _g1 = ORING_R - ORING_W / 2 + GK_CLR, ORING_R + ORING_W / 2 - GK_CLR
+gasket = M.revolve(CS([[(_g0, 0), (_g1, 0), (_g1, ORING_D), (ORING_R + GK_BEAD_W0 / 2, ORING_D),
+                        (ORING_R + GK_BEAD_W1 / 2, ORING_D + GK_BEAD_H), (ORING_R - GK_BEAD_W1 / 2, ORING_D + GK_BEAD_H),
+                        (ORING_R - GK_BEAD_W0 / 2, ORING_D)]]), SEG).translate([0, 0, Z_TOP - ORING_D])
+
 parts = {'base': base, 'lid': lid, 'bridge': bridge, 'cradle': cr, 'lid_mount': lid_mount, 'cradle_lid': cr_lid}
 
 
@@ -290,6 +301,9 @@ def check():
     print(f'  GPS top to lid: {gap:.2f} mm (use a 1 mm foam pad)')
     print(f'  board underside to battery top: {Z_PCB - (FLOOR + COIL["t"] + BATT["t"]):.2f} mm (TP4056 is {TP["h"]} mm)')
     print(f'  O-ring squeeze: {2.0 - ORING_D:.2f} mm of 2.0 ({(2.0 - ORING_D) / 2 * 100:.0f} %)')
+    clash(gasket, base, 'TPU gasket / base')
+    print(f'  TPU gasket: {_g1 - _g0:.1f} wide x {ORING_D + GK_BEAD_H:.1f} high, bead crushed {GK_BEAD_H:.1f} mm by the lid '
+          f'({(gasket ^ lid).volume():.0f} mm3 squeezed, {(ring(_g0 - GK_CLR, _g1 + GK_CLR, ORING_D, Z_TOP - ORING_D) - gasket).volume():.0f} mm3 free in the groove)')
     return ok
 
 
@@ -320,6 +334,7 @@ if __name__ == '__main__':
         'lid_mount': export(lid_mount, 'wakeback-lid-mount.stl', flip=True),
         'cradle_lid': export(cr_lid, 'wakeback-cradle-lid.stl'),
     }
+    export(gasket, 'wakeback-gasket-tpu.stl')
     for n, p in parts.items():
         bb = p.bounding_box()
         print(f'  {n:7s} {bb[3]-bb[0]:.1f} x {bb[4]-bb[1]:.1f} x {bb[5]-bb[2]:.1f} mm, {p.volume()/1000:.1f} cm3 (~{p.volume()/1000*1.27:.0f} g PETG)')
