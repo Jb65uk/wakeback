@@ -9,6 +9,8 @@ Parts (all in out/):
   wakeback-cradle.stl  deck mount: drop the puck in, twist clockwise, it locks with the arrow to the bow
   wakeback-lid-mount.stl    second lid with bayonet lugs round its rim, for hanging the puck under a thwart
   wakeback-cradle-lid.stl   the cradle for that lid: screws to the underside of the thwart, puck twists in upside down
+  The base has a 12 mm hole on a flat boss in the stern-starboard wall for a waterproof anti-vandal push button
+  (momentary, with or without a ring LED): see SW below.
 
 Frame: same as the carrier board. Origin = board centre, +Y = bow (the IMU arrow), Z up, base underside at z = 0.
 Run: python gen_case.py   (needs: pip install manifold3d trimesh numpy matplotlib)
@@ -33,6 +35,13 @@ TP = dict(cx=12.0, cy=3.0, l=26.0, w=16.0, h=5.5)      # TP4056 hanging under th
 XIAO = dict(cx=-13.81, cy=3.0, l=22.48, w=17.8, h=13.0)  # on 8.5 mm female headers
 IMU = dict(cx=13.5, cy=3.0, l=17.8, w=25.4, h=5.7)     # BNO085 on foam tape, STEMMA sockets on top
 GPS = dict(cx=12.5, cy=2.0, s=28.0, h=11.0)            # Beitian BE-880, 28 x 28 x 11
+# Waterproof push button through the side wall: a 12 mm anti-vandal momentary (Daier GQ12H2-10E/EM or similar).
+# Typical sizes; check yours against the datasheet before printing. hole = panel cut-out, head = the bezel outside,
+# body = everything behind the panel (threaded part plus the solder pins), nut = the ring nut inside.
+SW = dict(hole=12.2, head_d=14.0, head_h=3.0, body_d=12.0, body_len=20.0, nut_d=15.5, nut_t=2.0,
+          flat_w=17.0,          # width of the flat the bezel O-ring seals on (and the nut tightens against)
+          ang=-81.0,            # where on the wall: -90 = dead astern; a little to starboard keeps it off the BAT pads
+          z=23.0)               # centre height: body just clears the board, head just clears the lid skirt
 
 # ------------------------------------------------------------------ case dimensions
 FLOOR = 1.4              # thin, so the Qi coil is close to the pad
@@ -41,10 +50,10 @@ WALL = 2.6
 R_BODY = R_IN + WALL     # 39.6
 Z_PCB = FLOOR + 12.5     # underside of the board
 Z_PCB_TOP = Z_PCB + PCB_T
-Z_BRIDGE = 22.5          # underside of the GPS shelf
+Z_BRIDGE = 26.5          # underside of the GPS shelf (raised 4 mm with Z_TOP, for the switch)
 BRIDGE_T = 1.6
 Z_GPS = Z_BRIDGE + BRIDGE_T
-Z_TOP = 35.6             # top of the base rim (O-ring face)
+Z_TOP = 39.6             # top of the base rim (O-ring face); 4 mm taller than before to fit the push button
 R_NECK_IN = 33.5         # inside radius at the rim, leaves room for the O-ring groove
 NECK_H = 8.0             # thread length
 PITCH, THREAD_E = 3.0, 0.45       # sinusoidal thread, 0.9 mm deep
@@ -133,6 +142,28 @@ for a, w in LUGS:
 # bow arrow engraved on the outside above the key lug
 arrow = CS([[(-3, 0), (3, 0), (0, 5)]]).extrude(3).rotate([90, 0, 0]).rotate([0, 0, 180]).translate([0, R_BODY + 1.4, 11])
 base -= arrow
+
+# push button: a flat on the outside of the wall for the bezel O-ring, a flat boss inside for the nut, and the hole.
+# Built with the switch pointing along -Y, then turned to SW['ang'].
+SW_R_OUT = R_BODY - SW['flat_w'] ** 2 / (8 * R_BODY) - 0.1     # outer flat: the chord sags this much into the wall
+SW_R_IN = R_IN - SW['flat_w'] ** 2 / (8 * R_IN) - 0.1          # inner flat, bulged in off the round wall
+SW_Z0, SW_Z1 = SW['z'] - SW['head_d'] / 2 - 1.5, SW['z'] + SW['head_d'] / 2 + 1.5
+
+
+def sw_frame(m):
+    return m.rotate([0, 0, SW['ang'] + 90])
+
+
+# outside: cut the wall back to the flat, with a 45 deg chamfer along the top edge so it prints without support
+sw_recess = CS([[(-SW_R_OUT, SW_Z0), (-SW_R_OUT, SW_Z1), (-SW_R_OUT - 3, SW_Z1 + 3), (-R_BODY - 5, SW_Z1 + 3),
+                 (-R_BODY - 5, SW_Z0)]]).extrude(SW['flat_w']).rotate([90, 0, 90]).translate([-SW['flat_w'] / 2, 0, 0])
+base -= sw_frame(sw_recess)
+# inside: the boss, chamfered 45 deg top and bottom
+sw_boss = CS([[(-R_IN - 1.0, SW_Z0 - 1.5), (-SW_R_IN, SW_Z0), (-SW_R_IN, SW_Z1), (-R_IN - 1.0, SW_Z1 + 1.5)]]
+             ).extrude(SW['flat_w']).rotate([90, 0, 90]).translate([-SW['flat_w'] / 2, 0, 0])
+base += sw_frame(sw_boss ^ cyl(R_BODY - 0.5, 60, 0))
+# the hole
+base -= sw_frame(M.cylinder(30, SW['hole'] / 2, SW['hole'] / 2, 96).rotate([90, 0, 0]).translate([0, -R_BODY + 10, SW['z']]))
 # name on the underside (mirrored so it reads from below)
 base -= text_cs('WAKEBACK', 6.5, 0, -8).mirror([1, 0]).extrude(0.5).translate([0, 0, -0.01])
 base -= text_cs('bow ^', 4.0, 0, 8).mirror([1, 0]).extrude(0.5).translate([0, 0, -0.01])
@@ -235,6 +266,11 @@ inside = {
     'XIAO': box(XIAO['l'], XIAO['w'], XIAO['h'], XIAO['cx'], XIAO['cy'], Z_PCB_TOP),
     'IMU': box(IMU['l'], IMU['w'], IMU['h'], IMU['cx'], IMU['cy'], Z_PCB_TOP),
     'GPS': box(GPS['s'], GPS['s'], GPS['h'], GPS['cx'], GPS['cy'], Z_GPS),
+    # the push button: head outside the flat, body through the wall and into the case, nut against the inner flat
+    'switch': sw_frame(
+        M.cylinder(SW['head_h'], SW['head_d'] / 2, SW['head_d'] / 2, 96).rotate([90, 0, 0]).translate([0, -SW_R_OUT, SW['z']])
+        + M.cylinder(SW['body_len'], SW['body_d'] / 2 - 0.1, SW['body_d'] / 2 - 0.1, 96).rotate([-90, 0, 0]).translate([0, -SW_R_OUT, SW['z']])
+        + M.cylinder(SW['nut_t'], SW['nut_d'] / 2, SW['nut_d'] / 2, 96).rotate([-90, 0, 0]).translate([0, -SW_R_IN, SW['z']])),
 }
 # ================================================================== TPU GASKET (instead of the 70 x 2 O-ring)
 # Flat ring that fills the groove, with a raised bead on top that the lid crushes. Printed in TPU, as modelled.
@@ -297,6 +333,12 @@ def check():
     # the plain lid must not lock into the lid cradle's lug windows by accident (it just sits there), and the
     # lid-mount must still clear the deck cradle when the puck is used the normal way up
     clash(lid_mount.translate([0, 0, CR_FLOOR]), cr, 'lid-mount / deck cradle (puck locked, right way up)')
+    # the push button: nothing touches it, the lid skirt clears its head, and it stays above the cradle
+    clash(inside['switch'], cr.translate([0, 0, -CR_FLOOR]), 'switch / deck cradle')
+    clash(hung(inside['switch']), cr_lid, 'switch / lid cradle')
+    head_top = SW['z'] + SW['head_d'] / 2
+    print(f'  push button: head top at z = {head_top:.1f}, lid skirt starts at {Z_LID_BOT:.1f} ({Z_LID_BOT - head_top:.1f} mm clear); '
+          f'body bottom {SW["z"] - SW["body_d"] / 2 - Z_PCB_TOP:.1f} mm above the board; panel {SW_R_OUT - SW_R_IN:.1f} mm thick at the flat')
     gap = Z_TOP - (Z_GPS + GPS['h'])
     print(f'  GPS top to lid: {gap:.2f} mm (use a 1 mm foam pad)')
     print(f'  board underside to battery top: {Z_PCB - (FLOOR + COIL["t"] + BATT["t"]):.2f} mm (TP4056 is {TP["h"]} mm)')
@@ -340,4 +382,4 @@ if __name__ == '__main__':
         print(f'  {n:7s} {bb[3]-bb[0]:.1f} x {bb[4]-bb[1]:.1f} x {bb[5]-bb[2]:.1f} mm, {p.volume()/1000:.1f} cm3 (~{p.volume()/1000*1.27:.0f} g PETG)')
     tot = (M.hull(base) + M.hull(lid)).volume()
     print(f'  closed puck displaces ~{tot/1000:.0f} cm3, so it floats with up to ~{tot/1000:.0f} g inside')
-    import sys; sys.path.insert(0, HERE); import render; render.all(parts, inside, OUT, dict(Z_PCB=Z_PCB, Z_TOP=Z_TOP, TWIST=TWIST, CR_FLOOR=CR_FLOOR, Z_LID_TOP=Z_LID_TOP))
+    import sys; sys.path.insert(0, HERE); import render; render.all(parts, inside, OUT, dict(Z_PCB=Z_PCB, Z_TOP=Z_TOP, SW_Z=SW['z'], SW_ANG=SW['ang'], TWIST=TWIST, CR_FLOOR=CR_FLOOR, Z_LID_TOP=Z_LID_TOP))
