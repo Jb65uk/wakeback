@@ -41,7 +41,7 @@ GPS = dict(cx=12.5, cy=2.0, s=28.0, h=11.0)            # Beitian BE-880, 28 x 28
 SW = dict(hole=12.2, head_d=14.0, head_h=3.0, body_d=12.0, body_len=20.0, nut_d=15.5, nut_t=2.0,
           flat_w=17.0,          # width of the flat the bezel O-ring seals on (and the nut tightens against)
           ang=-81.0,            # where on the wall: -90 = dead astern; a little to starboard keeps it off the BAT pads
-          z=23.0)               # centre height: body just clears the board, head just clears the lid skirt
+          z=22.5)               # centre height: body just clears the board, head just clears the lid skirt
 
 # ------------------------------------------------------------------ case dimensions
 FLOOR = 1.4              # thin, so the Qi coil is close to the pad
@@ -50,12 +50,12 @@ WALL = 2.6
 R_BODY = R_IN + WALL     # 39.6
 Z_PCB = FLOOR + 12.5     # underside of the board
 Z_PCB_TOP = Z_PCB + PCB_T
-Z_BRIDGE = 26.5          # underside of the GPS shelf (raised 4 mm with Z_TOP, for the switch)
+Z_TOP = 37.0             # top of the base rim (O-ring face); was 35.6 before the push button
+Z_BRIDGE = Z_TOP - 0.5 - GPS['h'] - 1.6   # (1.6 = BRIDGE_T) underside of the GPS shelf: GPS top 0.5 mm under the lid (1 mm foam pad)
 BRIDGE_T = 1.6
 Z_GPS = Z_BRIDGE + BRIDGE_T
-Z_TOP = 39.6             # top of the base rim (O-ring face); 4 mm taller than before to fit the push button
 R_NECK_IN = 33.5         # inside radius at the rim, leaves room for the O-ring groove
-NECK_H = 8.0             # thread length
+NECK_H = 6.0             # thread length: two turns, plenty for a hand-tight lid on an O-ring
 PITCH, THREAD_E = 3.0, 0.45       # sinusoidal thread, 0.9 mm deep
 THREAD_CLR = 0.35
 ORING_R, ORING_W, ORING_D = 36.0, 2.6, 1.5   # groove for a 70 x 2 mm O-ring (compressed 25 %)
@@ -147,7 +147,7 @@ base -= arrow
 # Built with the switch pointing along -Y, then turned to SW['ang'].
 SW_R_OUT = R_BODY - SW['flat_w'] ** 2 / (8 * R_BODY) - 0.1     # outer flat: the chord sags this much into the wall
 SW_R_IN = R_IN - SW['flat_w'] ** 2 / (8 * R_IN) - 0.1          # inner flat, bulged in off the round wall
-SW_Z0, SW_Z1 = SW['z'] - SW['head_d'] / 2 - 1.5, SW['z'] + SW['head_d'] / 2 + 1.5
+SW_Z0, SW_Z1 = SW['z'] - SW['head_d'] / 2 - 1.0, SW['z'] + SW['head_d'] / 2 + 0.5
 
 
 def sw_frame(m):

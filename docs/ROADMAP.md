@@ -47,7 +47,7 @@ club pucks ─► dock Pi at the club ──────────────
 4. **Puck setup from the app** (with the firmware) — TO DO, first once a puck is on the bench
    **Push button on mk1** ✅ (21 Oct): the first case has a 12 mm waterproof momentary button (ring LED) in the
    side wall instead of the magnet idea: tap = record on/off, hold 2 s = sleep, press = wake, 30 min still = sleeps
-   itself. `hardware/case` (4 mm taller base, flat boss, hole) and `firmware/bench_test` (D2 button, D9 ring LED).
+   itself. `hardware/case` (flat boss, hole, shorter lid thread, 2 mm taller overall) and `firmware/bench_test` (D2 button, D9 ring LED).
    On first power-up (or holding the button) the puck puts up its own WiFi `wakeback-puck-N` for a couple of
    minutes; the app joins it and sends hotspot name + password, the owner, and a **puck key** (random,
    issued by the server, tied to the owner's account — club pucks to the club account). The puck sends the
