@@ -28,7 +28,7 @@ button.dim{background:#334155;color:var(--ink)}button.bad{background:var(--bad);
 <div class="card"><h2>Now</h2>
 <div class="grid">
 <div><span>Speed</span><div class="big"><span id="sog">–</span><small style="font-size:14px"> kn</small></div></div>
-<div><span>Heading</span><div class="big" id="cog">–</div></div>
+<div><span id="hdglbl">Heading</span><div class="big" id="cog">–</div></div>
 <div><span>GPS</span><b id="gps">–</b></div>
 <div><span>Battery</span><b id="batt">–</b></div>
 <div><span>Heel</span><b id="heel">–</b></div>
@@ -102,7 +102,7 @@ function saveSettings(){editing=false;post('/api/settings',{puck:v('puck'),ssid:
 function fill(s){st=s;
  $('pn').textContent='puck '+s.puck;$('fw').textContent='v'+s.fw;$('fw2').textContent='v'+s.fw;
  const g=s.gps,fx=['no fix','dead reckoning','2D fix','3D fix','3D fix','time only'][g.fix]||'?';
- $('sog').textContent=g.fix>=2?fmt(g.sog,1):'–';$('cog').textContent=g.fix>=2?String(Math.round(g.cog)).padStart(3,'0')+'°':'–';
+ $('sog').textContent=g.fix>=2?fmt(g.sog,1):'–';const useCog=g.fix>=2&&g.sog>1,ch=s.imu.heading;$('cog').textContent=useCog?String(Math.round(g.cog)).padStart(3,'0')+'°':(ch>=0?String(Math.round(ch)%360).padStart(3,'0')+'°':'–');$('hdglbl').textContent=useCog?'Course (GPS)':'Heading (compass)';
  $('gps').innerHTML=g.ok?('<span class="'+(g.fix>=3?'ok':'warn')+'">'+fx+'</span>, '+g.sats+' sats'+(g.fix>=2?', ±'+fmt(g.hacc,1)+' m':'')):'<span class="bad">not found</span>';
  const b=s.batt;$('batt').innerHTML=(b.mv>2500?fmt(b.mv/1000,2)+' V '+b.pct+'%':'none')+(b.on_pad?' <span class="ok">'+(b.charging=='full'?'full':'charging')+'</span>':'');
  const i=s.imu;$('heel').textContent=i.ok?fmt(i.heel,1)+'°'+(i.heel>0.5?' stbd':i.heel<-0.5?' port':''):'no IMU';$('pitch').textContent=i.ok?fmt(i.pitch,1)+'°'+(i.pitch>0.5?' bow up':i.pitch<-0.5?' bow down':''):'';
