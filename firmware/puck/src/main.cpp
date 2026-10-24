@@ -146,7 +146,8 @@ bool flashFull = false;
 enum WifiMode { W_OFF, W_JOINING, W_DOCK, W_SETUP };
 WifiMode wmode = W_OFF;
 uint32_t wSince = 0, lastCheckin = 0, lastHello = 0, lastFwCheck = 0, lastOffPadTry = 0, setupLastSeen = 0;
-bool dockOk = false, wantLiftCheckin = false, uploading = false;
+bool dockOk = false, wantLiftCheckin = false, uploading = false, webOn = false;
+static void webStart(); static void webStop();
 bool appPendingVerify = false;
 
 // the clock: epoch ms = millis() + clockOffset. GPS beats the dock.
@@ -474,11 +475,12 @@ static void enterSetup() {
   char ap[32]; snprintf(ap, sizeof ap, "wakeback-puck-%d", S.puck);
   WiFi.softAP(ap);
   dns.start(53, "*", WiFi.softAPIP());
+  webStart();
   wmode = W_SETUP; wSince = millis(); setupLastSeen = millis(); dockOk = false;
   Serial.printf("Setup WiFi \"%s\" is on: join it and open http://%s/\n", ap, WiFi.softAPIP().toString().c_str());
 }
 static void leaveSetup() {
-  dns.stop(); WiFi.softAPdisconnect(true); WiFi.mode(WIFI_OFF);
+  dns.stop(); webStop(); WiFi.softAPdisconnect(true); WiFi.mode(WIFI_OFF);
   wmode = W_OFF; lastOffPadTry = millis();
   Serial.println("Setup mode off.");
 }
@@ -490,7 +492,7 @@ static void joinDock() {
 }
 static void wifiOff() {
   if (wmode == W_SETUP) { leaveSetup(); return; }
-  WiFi.disconnect(true); WiFi.mode(WIFI_OFF);
+  webStop(); WiFi.disconnect(true); WiFi.mode(WIFI_OFF);
   wmode = W_OFF; dockOk = false;
 }
 static String dockUrl(const char *path) { return "http://" + WiFi.gatewayIP().toString() + ":" + String(DOCK_PORT) + path; }
@@ -583,7 +585,7 @@ static void uploadPending() {
     Serial.printf("Uploading %s… ", name.c_str());
     if (uploadFile(name)) { LittleFS.remove(String(TRK_DIR) + "/" + name); Serial.println("done, deleted from the puck."); sent++; flashFull = false; }
     else { Serial.println("the dock didn't take it, will try later."); break; }
-    web.handleClient();
+    if (webOn) web.handleClient();
   }
   uploading = false; countTracks();
   if (sent) lastCheckin = 0;        // tell the dock the new numbers straight away
@@ -629,7 +631,7 @@ static void wifiTick() {
                         (pendingCount() > 0 && m - lastOffPadTry > OFFPAD_RETRY_MS));        // off it with tracks waiting: every 5 minutes
   if (wmode == W_OFF) { if (wantDock) { joinDock(); lastOffPadTry = m; } return; }
   if (wmode == W_JOINING) {
-    if (WiFi.status() == WL_CONNECTED) { wmode = W_DOCK; wSince = m; Serial.printf("Joined %s, dock should be at %s\n", S.ssid.c_str(), dockUrl("").c_str()); }
+    if (WiFi.status() == WL_CONNECTED) { wmode = W_DOCK; wSince = m; webStart(); Serial.printf("Joined %s, dock should be at %s\n", S.ssid.c_str(), dockUrl("").c_str()); }
     else if (m - wSince > 15000) { wifiOff(); if (!onPad) wantLiftCheckin = false; }
     return;
   }
@@ -767,8 +769,9 @@ static void startWeb() {
     }
     web.send(404, "text/plain", "not found");
   });
-  web.begin();
 }
+static void webStart() { if (!webOn) { web.begin(); webOn = true; } }
+static void webStop() { if (webOn) { web.stop(); webOn = false; } }
 
 // ---------- button ----------
 static void pollButton() {
@@ -885,7 +888,7 @@ void setup() {
   if (run && esp_ota_get_state_partition(run, &st) == ESP_OK && st == ESP_OTA_IMG_PENDING_VERIFY) appPendingVerify = true;
 
   WiFi.persistent(false);
-  startWeb();
+  startWeb();                                   // routes only; the server itself starts with the WiFi
   leds(false);
   lastActive = millis();
   battMv = readMilliVolts(PIN_BATT); onPad = readMilliVolts(PIN_PAD) > 4000;
@@ -904,7 +907,7 @@ void loop() {
   if (gps.fresh) { gps.fresh = false; onFix(); }
   pollImu();
   pollButton();
-  web.handleClient();
+  if (webOn) web.handleClient();
   wifiTick();
   led();
   const uint32_t m = millis();
