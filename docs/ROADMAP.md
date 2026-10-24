@@ -44,7 +44,12 @@ club pucks ─► dock Pi at the club ──────────────
 3. **Events and "who else was there?"**
    Create an event, share a link/code, everyone adds their track; the server spots other WakeBack sailors at
    the same venue and time and offers to ask them; a feed of your and your friends' sailing.
-4. **Puck setup from the app** (with the firmware) — TO DO, first once a puck is on the bench
+4. **Puck setup from the app** (with the firmware) — firmware side ✅ (24 Oct, `firmware/puck`); app + server TO DO
+   The puck puts up its own WiFi `wakeback-puck-N` (first power-up, or hold the button 6 s) with a setup page:
+   live numbers, calibration, the dock/hotspot WiFi name + password, puck number, auto-record, tracks, firmware
+   update. It records by itself on movement-from-rest (no speed threshold), uploads to the dock or the app over
+   WiFi and deletes once accepted, sleeps after 30 min still (button or the pad wakes it). Already sends
+   `X-Puck-Key` if one is set; the server doesn't issue or check keys yet.
    **Push button on mk1** ✅ (21 Oct): the first case has a 12 mm waterproof momentary button (ring LED) in the
    side wall instead of the magnet idea: tap = record on/off, hold 2 s = sleep, press = wake, 30 min still = sleeps
    itself. `hardware/case` (flat boss, hole, shorter lid thread, 2 mm taller overall) and `firmware/bench_test` (D2 button, D9 ring LED).
@@ -53,7 +58,9 @@ club pucks ─► dock Pi at the club ──────────────
    issued by the server, tied to the owner's account — club pucks to the club account). The puck sends the
    key with every upload; nobody types or remembers it. Lost/sold puck → revoke the key in /admin and set it
    up again. Lost hotspot password → change it on the phone and re-tell the puck the same way.
-4b. **Firmware: calibrate itself, don't make the sailor do it** — TO DO (with the firmware)
+4b. **Firmware: calibrate itself, don't make the sailor do it** — ✅ in `firmware/puck` (which way up from gravity at
+   rest; twist from the BNO085 compass vs GPS course while sailing straight; level = one tap on the page; mag
+   status, orientation and twist reported in the check-in). Still to do: show it on the app's Dock page.
    - Which way up: gravity at rest → deck cradle or hanging under the thwart; flip heel/pitch signs to suit.
    - Mounting twist: compass heading (BNO085) minus GPS course while sailing straight, averaged → the angle the
      puck is turned from the bow; re-learnt each time it's locked in, so the lid can stop at any angle.
@@ -63,7 +70,11 @@ club pucks ─► dock Pi at the club ──────────────
    - GPS: nothing to calibrate, but do warm-start (save last fix + almanac) so it's ready when the boat hits the water.
    - Report all of it (orientation, twist, level, mag status) in the check-in so the app can show "puck 3 is
      under the thwart, calibrated" or warn when it isn't.
-5. **Firmware from the dashboard → app → puck** — TO DO
+5. **Firmware from the dashboard → app → puck** — puck side ✅; server + app TO DO
+   CI (`build-firmware.yml`) publishes `puck.bin` + `firmware.json` on every release `puck-N`. The puck asks the dock
+   for `GET /api/firmware/latest` → `{"version","url"}` once an hour and updates itself, with rollback (a new image
+   is only kept after it checks in with a dock). To do: the server serves that from an /admin upload, the app's
+   pocket dock relays it.
    /admin: upload a `.bin` + version + notes; server serves `/api/firmware/latest`. The app shows
    "Puck 3 is on 1.2, 1.4 available — Update" on the Dock page and pushes it while the puck is on the pad /
    the hotspot (ESP32 OTA). Rule: keep the previous image and roll back if the new one doesn't check in
