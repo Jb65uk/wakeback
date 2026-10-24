@@ -212,7 +212,10 @@ static String jsonStr(const String &s) {     // escape for a JSON string
   for (char c : s) { if (c == '"' || c == '\\') o += '\\'; if ((uint8_t)c < 32) continue; o += c; }
   return o;
 }
-static size_t freeBytes() { return fsOk ? LittleFS.totalBytes() - LittleFS.usedBytes() : 0; }
+// LittleFS has to walk the whole partition to count what's used (slow), so the figure is refreshed every 10 s, not on every ask
+static size_t fsFree = 0, fsTotal = 0;
+static void measureFs() { if (fsOk) { fsTotal = LittleFS.totalBytes(); fsFree = fsTotal - LittleFS.usedBytes(); } }
+static size_t freeBytes() { return fsFree; }
 static String baseName(File &f) { String n = f.name(); if (n.startsWith("/")) n = n.substring(n.lastIndexOf('/') + 1); return n; }
 static int nTracks = 0;                      // counted once a second and after changes, not every loop
 static int countTracks() {
@@ -407,7 +410,7 @@ static void onFix() {
       if (rec.write((const uint8_t *)line, n) != (size_t)n) { Serial.println("!! Flash full, recording stopped."); flashFull = true; stopRecording("flash full"); }
       else {
         recLines++;
-        if (m - lastFlush > 5000) { rec.flush(); lastFlush = m; if (freeBytes() < FLASH_RESERVE) { flashFull = true; stopRecording("flash full"); } }
+        if (m - lastFlush > 5000) { rec.flush(); lastFlush = m; measureFs(); if (freeBytes() < FLASH_RESERVE) { flashFull = true; stopRecording("flash full"); } }
       }
     } else preAdd(line, n);
   }
@@ -474,6 +477,7 @@ static void enterSetup() {
   WiFi.disconnect(true); WiFi.mode(WIFI_AP);
   char ap[32]; snprintf(ap, sizeof ap, "wakeback-puck-%d", S.puck);
   WiFi.softAP(ap);
+  WiFi.setSleep(false);
   dns.start(53, "*", WiFi.softAPIP());
   webStart();
   wmode = W_SETUP; wSince = millis(); setupLastSeen = millis(); dockOk = false;
@@ -522,7 +526,7 @@ static bool checkin() {
            "{\"puck\":%d,\"battery_mv\":%d,\"charging\":\"%s\",\"on_pad\":%s,\"free_kb\":%u,\"total_kb\":%u,\"fw\":\"%s\","
            "\"pending\":%d,\"rssi\":%d,\"recording\":%s,\"orientation\":\"%s\",\"twist\":%.0f,\"mag\":%d,\"gps_fix\":%d,\"ip\":\"%s\"}",
            S.puck, (int)battMv, !onPad ? "not" : battFull ? "full" : "charging", onPad ? "true" : "false",
-           (unsigned)(freeBytes() / 1024), (unsigned)(LittleFS.totalBytes() / 1024), FW, pendingCount(), WiFi.RSSI(),
+           (unsigned)(freeBytes() / 1024), (unsigned)(fsTotal / 1024), FW, pendingCount(), WiFi.RSSI(),
            recording ? "true" : "false", S.orientation == 1 ? "deck" : S.orientation == 2 ? "thwart" : "unknown",
            S.twist, imu.magStatus, gps.fix, WiFi.localIP().toString().c_str());
   const int code = h.POST((uint8_t *)body, strlen(body));
@@ -587,7 +591,7 @@ static void uploadPending() {
     else { Serial.println("the dock didn't take it, will try later."); break; }
     if (webOn) web.handleClient();
   }
-  uploading = false; countTracks();
+  uploading = false; countTracks(); measureFs();
   if (sent) lastCheckin = 0;        // tell the dock the new numbers straight away
 }
 
@@ -677,7 +681,7 @@ static String statusJson() {
            recording ? "true" : "false", (unsigned long)(recording ? (millis() - recStarted) / 1000 : 0), (unsigned long)recLines, recording ? recName.c_str() : "");
   j += b;
   snprintf(b, sizeof b, "\"store\":{\"free_kb\":%u,\"total_kb\":%u,\"files\":%d,\"full\":%s},",
-           (unsigned)(freeBytes() / 1024), (unsigned)(LittleFS.totalBytes() / 1024), trackCount(), flashFull ? "true" : "false");
+           (unsigned)(freeBytes() / 1024), (unsigned)(fsTotal / 1024), trackCount(), flashFull ? "true" : "false");
   j += b;
   const char *mode = wmode == W_SETUP ? "setup" : wmode == W_DOCK ? "dock" : wmode == W_JOINING ? "joining" : "off";
   j += "\"wifi\":{\"mode\":\"" + String(mode) + "\",\"ssid\":\"" + jsonStr(S.ssid) + "\",\"ip\":\"" +
@@ -731,7 +735,7 @@ static void startWeb() {
   web.on("/api/tracks/delete", HTTP_POST, [] {
     String n = web.arg("name"); if (n.indexOf('/') >= 0 || n.indexOf("..") >= 0 || !n.length()) { web.send(400, "text/plain", "bad name"); return; }
     if (recording && n == recName) stopRecording("deleted from the page");
-    LittleFS.remove(String(TRK_DIR) + "/" + n); countTracks(); flashFull = freeBytes() < FLASH_RESERVE; okMsg("Deleted.");
+    LittleFS.remove(String(TRK_DIR) + "/" + n); countTracks(); measureFs(); flashFull = freeBytes() < FLASH_RESERVE; okMsg("Deleted.");
   });
   web.on("/api/setup/done", HTTP_POST, [] { okMsg("Leaving setup mode."); delay(300); if (wmode == W_SETUP) leaveSetup(); });
   web.on("/api/reboot", HTTP_POST, [] { okMsg("Restarting."); delay(300); if (recording) stopRecording("restart"); ESP.restart(); });
@@ -804,7 +808,7 @@ static void everySecond() {
   }
   battFull = onPad && battMv >= 4150;
   learnMounting();
-  countTracks();
+  static int tick = 0; if (++tick % 10 == 0) { measureFs(); countTracks(); }
   if (flashFull && freeBytes() > FLASH_RESERVE * 2) flashFull = false;
   if (S.autoOff && !onPad && !recording && wmode != W_SETUP && millis() - lastActive > AUTO_OFF_MS) goToSleep("still for 30 minutes");
   // new firmware that has run a couple of minutes with the sensors alive counts as good even with no dock about
@@ -879,7 +883,7 @@ void setup() {
   if (fsOk && !LittleFS.exists(TRK_DIR)) LittleFS.mkdir(TRK_DIR);
   gpsOk = startGps();
   imuOk = startImu();
-  countTracks();
+  measureFs(); countTracks();
   flashFull = fsOk && freeBytes() < FLASH_RESERVE;
 
   // after an over-the-air update the new image runs once on probation; it's confirmed after a good check-in (or 2 min alive)
