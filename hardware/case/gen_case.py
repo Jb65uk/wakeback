@@ -56,9 +56,19 @@ R_LID = R_BODY + THREAD_E + THREAD_CLR + LID_WALL + 0.35
 LUGS = [(90.0, 16.0), (210.0, 10.0), (330.0, 10.0)]   # (angle, width deg). The wide one marks the bow
 LUG_OUT, LUG_Z0, LUG_Z1 = 2.0, 2.2, 5.2
 TWIST = 20.0             # cradle: drop in 20 deg anticlockwise of locked, twist clockwise
-CR_FLOOR, CR_CLR = 3.0, 0.4
-CR_WALL = 2.8
+CR_FLOOR, CR_CLR = 3.0, 0.3
+CR_WALL = 3.0
 CR_H = CR_FLOOR + 9.0
+# the snap: how the cradle grips the puck once it's twisted home
+CR_END_GAP = 0.3         # deg the lug can still turn past home before it meets the end wall (was 1.5)
+CR_PRELOAD = 0.15        # mm the lock-zone ceiling sits *below* the lug top, so the lug wedges the puck down on the floor
+CR_RAMP = 8.0            # deg over which the ceiling comes down from free (+0.5) to the preload, so it tightens progressively
+CR_TONGUE_T = 2.0        # the spring tongue: a strip of the outer wall, this thick, free top and bottom
+CR_TONGUE_GAP = 0.5      # air between the tongue and the lug channel, so it can flex out
+CR_TONGUE_EXT = 9.0      # deg a 10-deg lug's tongue carries on past the end wall (longer tongue = softer spring)
+CR_NIB = 0.5             # mm the nib on the tongue stands into the lug's path: the click
+CR_NIB_IN, CR_NIB_OUT = 40.0, 60.0   # ramp angles (deg from the tongue face): going in / coming back out
+CR_SLIT = 1.0            # mm gap over the tongue's top, and the width of the slit at its free end
 SCREW_PILOT, SCREW_CLEAR = 2.2, 2.8   # M2.5 self-tapping into plastic / clearance
 
 
@@ -181,22 +191,70 @@ lid_mount -= CS([[(-2.5, 0), (0, -4), (2.5, 0)]]).extrude(0.8).translate([0, -(R
 
 
 # ================================================================== CRADLE (a ring the puck drops into, lugs lock under windows)
-def make_cradle(r_body, arrow=True, eye=True):
+def make_cradle(r_body, arrow=True, eye=True, preload=CR_PRELOAD, nib=True):
     """The puck's floor (or, upside down, the lid-mount's top face) rests on the floor ring; the three lugs go down
-    the entry slots, TWIST deg anticlockwise of locked, and are twisted clockwise under the lock zone."""
-    r_in = r_body + CR_CLR
-    r_out = r_body + LUG_OUT + CR_CLR + CR_WALL
+    the entry slots, TWIST deg anticlockwise of locked, and are twisted clockwise along a channel inside the wall.
+
+    What makes it snap in rather than sit loose:
+    - the channel ceiling ramps down over the last CR_RAMP deg to `preload` mm below the lug top, so the lug
+      wedges the puck down onto the floor as it goes home (no up-and-down rattle);
+    - the lug is stopped by the end wall only CR_END_GAP deg past home;
+    - the outer wall along each channel is a spring tongue: a strip standing on the print bed, free at its top and
+      along both faces, hanging off the solid wall past the end wall, with a ramped nib on its inside. The lug's
+      corner pushes the tongue out as it goes home, the nib drops in behind it with a click, and the steeper back
+      ramp holds it there, pressed against the end wall. The slit at the tongue's free end doubles as a drain.
+    Everything prints as it comes: the tongue grows from the bed, the wall over it bridges between solid ends.
+    Returns (cradle, nibs): the nibs separately so the twist sweep can measure how much they push."""
+    r_in = r_body + CR_CLR                     # the puck body turns in here
+    r_lug = r_body + LUG_OUT                   # outside of the lug
+    r_ch = r_lug + CR_CLR                      # outside of the lug channel
+    r_out = r_ch + CR_WALL                     # outside of the cradle
+    r_face = r_ch + CR_TONGUE_GAP              # inside face of the spring tongue
+    r_tip = r_lug - CR_NIB                     # the nib reaches this far into the lug
     cr = ring(20.0, r_out, CR_FLOOR) + ring(r_in, r_out, CR_H - CR_FLOOR, CR_FLOOR)
+    nibs = M()
     lug_zlo = CR_FLOOR + LUG_Z0 - LUG_OUT - 0.4
     lug_zhi = CR_FLOOR + LUG_Z1 + 0.5
+    z_lug_top = CR_FLOOR + LUG_Z1
+    slit = math.degrees(CR_SLIT / (r_face + CR_TONGUE_T / 2))     # the end slit, as an angle
     for a, w in LUGS:
-        wa = w + 3.0
-        # vertical entry slot, TWIST deg anticlockwise of the locked position
-        cr -= sector(r_in - 1, r_out + 1, lug_zlo, CR_H + 1, a + TWIST - wa / 2, a + TWIST + wa / 2)
-        # horizontal window the lug slides along
-        cr -= sector(r_in - 1, r_out + 1, lug_zlo, lug_zhi, a - wa / 2, a + TWIST + wa / 2)
-        # lock zone: window ceiling drops to 0.15 mm above the lug so it clamps the puck down when twisted home
-        cr += sector(r_in, r_out, CR_FLOOR + LUG_Z1 + 0.15, lug_zhi + 0.01, a - w / 2 - 1.5, a + w / 2 + 1.5)
+        wa = w + 2.0                                                # entry slot: 1 deg clear each side of the lug
+        a_end = a - w / 2 - CR_END_GAP                              # end wall: twisted home, the lug stops here
+        a_in0, a_in1 = a + TWIST - wa / 2, a + TWIST + wa / 2       # entry slot
+        a_lock1 = a + w / 2 + 0.2                                   # lock zone runs from the end wall to here
+        ramp = min(CR_RAMP, a_in0 - a_lock1 - 0.3)                  # the wide key lug leaves less room for the ramp
+        a_root = a_end - (CR_TONGUE_EXT + 10 - w)                   # tongue root: same lever on every lug, wide or narrow
+        # vertical entry slot through the inner wall (the lug never reaches the outer wall, which stays whole)
+        cr -= sector(r_in - 1, r_ch, lug_zlo, CR_H + 1, a_in0, a_in1)
+        # the channel the lug slides along, closed on the outside
+        cr -= sector(r_in - 1, r_ch, lug_zlo, lug_zhi, a_end, a_in1)
+        # lock zone ceiling, then the ramp up to the free channel in steps smaller than a print layer
+        cr += sector(r_in, r_ch, z_lug_top - preload, lug_zhi + 0.01, a_end - 0.01, a_lock1)
+        n = 6
+        for i in range(n):
+            zc = z_lug_top - preload + (i + 1) * (0.5 + preload) / (n + 1)
+            cr += sector(r_in, r_ch, zc, lug_zhi + 0.01, a_lock1 + i * ramp / n - 0.01, a_lock1 + (i + 1) * ramp / n)
+        # spring tongue: clear the outer wall from the bed up to CR_SLIT above the channel, from the root to just
+        # past the entry edge (the end slit), then stand the tongue back up in the middle of that space
+        cr -= sector(r_ch - 0.01, r_out + 1, -1, lug_zhi + CR_SLIT, a_root, a_in0 + slit)
+        cr += sector(r_face, r_face + CR_TONGUE_T, 0, lug_zhi, a_root - 0.01, a_in0)
+        if nib:
+            # the nib, drawn with the tongue face along x = r_face and y along the channel (+y = towards the entry).
+            # Its back ramp crosses the lug's outer radius at y = 0, which is placed on the lug's trailing corner at
+            # home, so the ramp leans on that corner and holds the lug against the end wall.
+            t_in, t_out = math.tan(math.radians(CR_NIB_IN)), math.tan(math.radians(CR_NIB_OUT))
+            yb0 = -(r_face - r_lug) / t_out
+            yb1 = yb0 + (r_face - r_tip) / t_out
+            yf1 = yb1 + 0.4
+            yf0 = yf1 + (r_face - r_tip) / t_in
+            root = 0.6   # how far the nib's base runs into the tongue
+            poly = CS([[(r_face + root, yf0 + root / t_in), (r_tip, yf1), (r_tip, yb1), (r_face + root, yb0 - root / t_out)]])
+            z0, z1 = CR_FLOOR + LUG_Z0 - 0.4, z_lug_top - preload - 0.3   # clear of the lug's chamfer below, the ceiling above
+            # 45 deg underneath so it prints: the full nib from z0 up, hulled with its base strip from (z0 - height) up
+            base_strip = CS([[(r_face + root, yf0 + root / t_in), (r_face - 0.01, yf0), (r_face - 0.01, yb0), (r_face + root, yb0 - root / t_out)]])
+            n3 = M.hull(poly.extrude(z1 - z0).translate([0, 0, z0]) + base_strip.extrude(z1 - z0 + (r_face - r_tip)).translate([0, 0, z0 - (r_face - r_tip)]))
+            nibs += n3.rotate([0, 0, a + w / 2 - CR_END_GAP])
+    cr += nibs
     # countersunk screw holes (No.6 / M3.5) and a strap slot either side
     rs = r_in - 9.0
     for a in (30, 150, 270):
@@ -212,11 +270,14 @@ def make_cradle(r_body, arrow=True, eye=True):
     if arrow:
         # bow arrow on the cradle rim
         cr -= CS([[(-3, 0), (3, 0), (0, 5)]]).extrude(1.0).translate([0, r_in + (r_out - r_in) / 2 - 2.5, CR_H - 0.6])
-    return cr
+    return cr, nibs
 
 
-cr = make_cradle(R_BODY)
-cr_lid = make_cradle(R_LID)
+cr, cr_nibs = make_cradle(R_BODY)
+cr_lid, cr_lid_nibs = make_cradle(R_LID)
+# the same cradles with no preload and no nibs: the twist sweep checks the lug runs freely along the channel
+cr_free, _ = make_cradle(R_BODY, preload=0.0, nib=False)
+cr_lid_free, _ = make_cradle(R_LID, preload=0.0, nib=False)
 CR_R_IN, CR_R_OUT = R_BODY + CR_CLR, R_BODY + LUG_OUT + CR_CLR + CR_WALL   # (kept for the renders)
 
 
@@ -249,6 +310,18 @@ gasket = M.revolve(CS([[(_g0, 0), (_g1, 0), (_g1, ORING_D), (ORING_R + GK_BEAD_W
 parts = {'base': base, 'lid': lid, 'bridge': bridge, 'cradle': cr, 'lid_mount': lid_mount, 'cradle_lid': cr_lid}
 
 
+def snap_report(name, puck_at, cradle, cradle_free, nibs, r_body):
+    """How the cradle grips: ceiling preload on the lugs at home, and how far the nibs push as the lug twists past."""
+    lug_top_area = sum(math.radians(w) * (r_body + LUG_OUT / 2 - 0.15) * (LUG_OUT + 0.3) for _, w in LUGS)
+    home = (puck_at(0) ^ (cradle - nibs)).volume()
+    print(f'  {name}: lugs wedged ~{home / lug_top_area:.2f} mm into the ceiling at home (preload {CR_PRELOAD} mm)')
+    push = {t: (puck_at(t) ^ nibs).volume() for t in (TWIST, 6, 4, 3, 2, 1, 0.5, 0, -CR_END_GAP)}
+    t_max = max(push, key=push.get)
+    print(f'  {name}: nibs clear at entry ({push[TWIST]:.2f} mm3) and home against the end wall ({push[-CR_END_GAP]:.2f} mm3); '
+          f'they overlap the lugs most at {t_max:g} deg before home ({push[t_max]:.1f} mm3, each tongue flexes ~{CR_NIB:.1f} mm)')
+    return push[TWIST] < 0.05 and push[-CR_END_GAP] < 0.05 and push[t_max] > 1.0
+
+
 def check():
     ok = True
     def clash(a, b, name, tol=0.05):
@@ -270,15 +343,14 @@ def check():
     clash(base, lid, 'base / lid')
     clash(base, bridge, 'base / bridge')
     clash(lid, bridge, 'lid / bridge')
-    # puck locked in the cradle, and dropping in at the entry angle
-    clash(base.translate([0, 0, CR_FLOOR]), cr, 'base / cradle (locked)')
+    # puck in the cradle: drops in at the entry angle, twists freely along the channel, and the lock zone
+    # (ceiling preload + nib) only bites in the last few degrees
     clash(base.rotate([0, 0, TWIST]).translate([0, 0, CR_FLOOR]), cr, 'base / cradle (entry)')
-    # sweep: the lug must pass down the entry slot and along the window
     for dz in (8, 4, 1):
         clash(base.rotate([0, 0, TWIST]).translate([0, 0, CR_FLOOR + dz]), cr, f'cradle drop-in at +{dz} mm')
-    for t in (15, 10, 5):
-        clash(base.rotate([0, 0, t]).translate([0, 0, CR_FLOOR]), cr,
-              f'cradle twist at {t} deg')
+    for t in (15, 10, 5, 0):
+        clash(base.rotate([0, 0, t]).translate([0, 0, CR_FLOOR]), cr_free, f'cradle twist at {t} deg (free channel)')
+    ok &= snap_report('deck cradle', lambda t: base.rotate([0, 0, t]).translate([0, 0, CR_FLOOR]), cr, cr_free, cr_nibs, R_BODY)
     # the lid must unscrew along its thread (anticlockwise = open) without hitting the base
     for th in (60, 180, 360, 720):
         clash(lid.rotate([0, 0, th]).translate([0, 0, th / 360 * PITCH]), base, f'lid unscrewed {th} deg')
@@ -287,13 +359,13 @@ def check():
         clash(p, lid_mount, f'{n} / lid-mount')
     clash(base, lid_mount, 'base / lid-mount')
     # under the thwart: the closed puck hangs from the lid-mount in its own cradle
-    clash(hung(lid_mount), cr_lid, 'lid-mount / lid cradle (locked)')
     clash(hung(base), cr_lid, 'base / lid cradle (locked)')
     clash(hung(lid_mount.rotate([0, 0, -TWIST])), cr_lid, 'lid-mount / lid cradle (entry)')
     for dz in (8, 4, 1):
         clash(hung(lid_mount.rotate([0, 0, -TWIST])).translate([0, 0, dz]), cr_lid, f'lid cradle drop-in at +{dz} mm')
-    for t in (15, 10, 5):
-        clash(hung(lid_mount.rotate([0, 0, -t])), cr_lid, f'lid cradle twist at {t} deg')
+    for t in (15, 10, 5, 0):
+        clash(hung(lid_mount.rotate([0, 0, -t])), cr_lid_free, f'lid cradle twist at {t} deg (free channel)')
+    ok &= snap_report('lid cradle', lambda t: hung(lid_mount.rotate([0, 0, -t])), cr_lid, cr_lid_free, cr_lid_nibs, R_LID)
     # the plain lid must not lock into the lid cradle's lug windows by accident (it just sits there), and the
     # lid-mount must still clear the deck cradle when the puck is used the normal way up
     clash(lid_mount.translate([0, 0, CR_FLOOR]), cr, 'lid-mount / deck cradle (puck locked, right way up)')
@@ -302,6 +374,7 @@ def check():
     print(f'  board underside to battery top: {Z_PCB - (FLOOR + COIL["t"] + BATT["t"]):.2f} mm (TP4056 is {TP["h"]} mm)')
     print(f'  O-ring squeeze: {2.0 - ORING_D:.2f} mm of 2.0 ({(2.0 - ORING_D) / 2 * 100:.0f} %)')
     clash(gasket, base, 'TPU gasket / base')
+    ok = bool(ok)
     print(f'  TPU gasket: {_g1 - _g0:.1f} wide x {ORING_D + GK_BEAD_H:.1f} high, bead crushed {GK_BEAD_H:.1f} mm by the lid '
           f'({(gasket ^ lid).volume():.0f} mm3 squeezed, {(ring(_g0 - GK_CLR, _g1 + GK_CLR, ORING_D, Z_TOP - ORING_D) - gasket).volume():.0f} mm3 free in the groove)')
     return ok

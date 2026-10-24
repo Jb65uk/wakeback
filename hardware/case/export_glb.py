@@ -17,6 +17,8 @@ scene = trimesh.Scene()
 items = dict(g.parts); items['cradle'] = g.cr.translate([0, 0, -g.CR_FLOOR])
 items.update(g.inside)
 for name, m in items.items():
+    if name not in COL:   # the thwart-mount parts aren't in the viewer
+        continue
     t = tm(m, 0.02 if name in ('base', 'lid') else None)
     c = [int(COL[name][i:i + 2], 16) for i in (1, 3, 5)] + [255]
     t.visual = trimesh.visual.TextureVisuals(material=trimesh.visual.material.PBRMaterial(

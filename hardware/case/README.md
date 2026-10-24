@@ -7,14 +7,14 @@ A round puck, 86 mm across and 37 mm tall, made to fit the carrier board and the
 | `out/wakeback-base.stl` | The cup. The battery, Qi coil, carrier board and TP4056 go inside. Bayonet lugs round the bottom | As it comes, floor down |
 | `out/wakeback-lid.stl` | Screw-on lid with a thread and an O-ring seal | Top face down (the file is already that way up) |
 | `out/wakeback-bridge.stl` | GPS shelf. Sits over the heel sensor on two legs | Flat side down (already that way up) |
-| `out/wakeback-cradle.stl` | Deck mount. Drop the puck in and twist it clockwise to lock it | As it comes |
+| `out/wakeback-cradle.stl` | Deck mount. Drop the puck in and twist it clockwise until it clicks | As it comes, no supports (the three spring tongues stand on the bed) |
 
 Plus two optional parts for hanging the puck **under a thwart** instead of on the deck:
 
 | File | What it is | Print it |
 |---|---|---|
 | `out/wakeback-lid-mount.stl` | The same lid, with three bayonet lugs round its rim | Top face down (already that way up) |
-| `out/wakeback-cradle-lid.stl` | A wider cradle that fits that lid. Screws to the underside of the thwart; the puck twists in upside down | As it comes |
+| `out/wakeback-cradle-lid.stl` | A wider cradle that fits that lid, same click. Screws to the underside of the thwart; the puck twists in upside down | As it comes, no supports |
 
 ![under the thwart](out/case-thwart.png)
 
@@ -57,7 +57,9 @@ It floats. It displaces about 196 cm³ and weighs about 130 g with everything in
 ## The cradle
 
 - Screw or strap it to the boat with its **arrow pointing at the bow**.
-- Hold the puck with its side arrow about 20° anticlockwise of the cradle arrow. Push it down, then twist it clockwise until the arrows line up. It clamps down as it goes home.
+- Hold the puck with its side arrow about 20° anticlockwise of the cradle arrow. Push it down, then twist it clockwise until the arrows line up. It tightens over the last few degrees and clicks as it goes home; to take it out, twist it anticlockwise past the click.
+- The click comes from three spring tongues in the cradle's outer wall (the strips with a slit above and beside them). Each has a small nib inside that the puck's lug pushes past and then sits behind, so the puck can't twist back on its own, and the channel ceiling is 0.15 mm lower than the lug at the end, which wedges the puck down onto the floor. Nothing to fit or adjust. If a cradle ever comes out stiff, run `gen_case.py` with `CR_PRELOAD` 0.1 or `CR_NIB` 0.4; if it comes out loose, 0.2 / 0.6.
+- The slit at the end of each tongue is also the drain. Rinse the cradle through after a sandy day.
 - Tie a thin lanyard through the eye on the cradle to the puck, in case of a big capsize.
 - To charge it, twist it out and lay it on the Qi pad, flat side down.
 
@@ -66,7 +68,7 @@ It floats. It displaces about 196 cm³ and weighs about 130 g with everything in
 - Print the lid-mount and the lid cradle; the base, shelf and O-ring are the same. Swap lids as you like: both screw onto the same base.
 - Screw (3 × No.6) or strap the lid cradle to the underside of the thwart, **arrow to the bow**. Screws go up into the wood; the heads sit inside the cradle.
 - Screw the lid-mount onto the puck so the small arrow on its top face lines up with the base's bow arrow as near as you can (it doesn't need to be exact, see below).
-- Offer the puck up lid-first, arrow about 20° anticlockwise of the cradle's arrow (as you look up at it), push, twist clockwise until the arrows meet. It hangs lid-up, charging coil down.
+- Offer the puck up lid-first, arrow about 20° anticlockwise of the cradle's arrow (as you look up at it), push, twist clockwise until the arrows meet and it clicks. It hangs lid-up, charging coil down.
 - Tie the lanyard through the cradle's eye. Upside down, the lugs are what's holding it; the lanyard is the belt to those braces.
 - GPS: the antenna now faces up into the thwart. A wooden or GRP thwart is fine (plywood, a foam-cored GRP thwart, a Solo's mahogany one); a **carbon** thwart or a metal plate will block it — go on deck instead. Expect a slightly slower first fix and the odd extra metre of scatter.
 - Heel and pitch: the puck is upside down and turned to whatever angle the lid tightened at. The firmware detects "upside down" from gravity at rest and learns the twist from the difference between its compass heading and the GPS course when you're sailing straight — nothing to set. Until that's in, the phone app's puck setup will have a "mounted: deck / under thwart" choice.
@@ -76,4 +78,4 @@ It floats. It displaces about 196 cm³ and weighs about 130 g with everything in
 
 - The status LED is inside. If you want to see it, print the lid in clear or natural PETG.
 - **GPS power:** Beitian lists the BE-880 at 3.6–5.5 V, and the board feeds it 3.3 V. Most of these modules run happily on 3.3 V, and Stage 2 of the bench test will show you. If it won't get a fix or keeps dropping out, move the GPS red wire from the 3V3 pad to OUT+ on the TP4056 (battery voltage).
-- Everything is generated by `gen_case.py`: sizes at the top, then the parts. Run it again after any change. It checks that nothing inside hits the case, that the lid unscrews cleanly, and that the puck drops into the cradle and twists to lock. Then it rewrites the STLs and pictures. It needs `pip install manifold3d trimesh numpy matplotlib`.
+- Everything is generated by `gen_case.py`: sizes at the top, then the parts. Run it again after any change. It checks that nothing inside hits the case, that the lid unscrews cleanly, that the puck drops into the cradle and twists freely along the channel, and reports how hard the cradle grips at home (ceiling preload, nib overlap). Then it rewrites the STLs and pictures. It needs `pip install manifold3d trimesh numpy matplotlib`.
