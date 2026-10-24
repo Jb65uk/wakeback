@@ -56,7 +56,7 @@ R_LID = R_BODY + THREAD_E + THREAD_CLR + LID_WALL + 0.35
 LUGS = [(90.0, 16.0), (210.0, 10.0), (330.0, 10.0)]   # (angle, width deg). The wide one marks the bow
 LUG_OUT, LUG_Z0, LUG_Z1 = 2.0, 2.2, 5.2
 TWIST = 20.0             # cradle: drop in 20 deg anticlockwise of locked, twist clockwise
-CR_FLOOR, CR_CLR = 3.0, 0.3
+CR_FLOOR, CR_CLR = 3.0, 0.2
 CR_WALL = 3.0
 CR_H = CR_FLOOR + 9.0
 # the snap: how the cradle grips the puck once it's twisted home
