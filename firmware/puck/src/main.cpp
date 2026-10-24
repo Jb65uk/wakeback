@@ -271,8 +271,12 @@ static bool enableImuReports() {
 static bool startImu() {
   Wire.begin(PIN_SDA, PIN_SCL);
   Wire.setClock(100000);
-  if (!bno.begin_I2C(BNO08x_I2CADDR_DEFAULT, &Wire)) return false;
-  return enableImuReports();
+  // the BNO085 is slow to wake after power-up and sometimes misses the first hello: ask a few times
+  for (int i = 0; i < 5; i++) {
+    if (bno.begin_I2C(BNO08x_I2CADDR_DEFAULT, &Wire)) return enableImuReports();
+    delay(300);
+  }
+  return false;
 }
 
 // heel and pitch in the boat's frame from "up" seen in the puck's frame, the mounting twist and which way up it is
