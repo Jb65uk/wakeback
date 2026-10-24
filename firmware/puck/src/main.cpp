@@ -103,7 +103,7 @@ struct Settings {
   int puck = 1;
   String ssid = "wakeback", pass = "", key = "";
   float zeroHeel = 0, zeroPitch = 0, twist = 0;
-  bool autoTwist = true, twistLearned = false, flipHeel = false;
+  bool autoTwist = true, twistLearned = false, flipHeel = false, flipPitch = false;
   int orientation = 0;               // 0 unknown, 1 deck (IMU up), 2 under the thwart (IMU down)
   bool autoRec = true, autoOff = true;
   int rate = 10;                     // points a second while moving
@@ -118,7 +118,7 @@ static void loadSettings() {
   S.zeroHeel = prefs.getFloat("zh", 0); S.zeroPitch = prefs.getFloat("zp", 0);
   S.twist = prefs.getFloat("twist", 0);
   S.autoTwist = prefs.getBool("atw", true); S.twistLearned = prefs.getBool("twl", false);
-  S.flipHeel = prefs.getBool("flip", false);
+  S.flipHeel = prefs.getBool("flip", false); S.flipPitch = prefs.getBool("flipp", false);
   S.orientation = prefs.getInt("orient", 0);
   S.autoRec = prefs.getBool("arec", true); S.autoOff = prefs.getBool("auto", true);
   S.rate = prefs.getInt("rate", 10);
@@ -131,7 +131,7 @@ static void saveSettings() {
   prefs.putFloat("zh", S.zeroHeel); prefs.putFloat("zp", S.zeroPitch);
   prefs.putFloat("twist", S.twist);
   prefs.putBool("atw", S.autoTwist); prefs.putBool("twl", S.twistLearned);
-  prefs.putBool("flip", S.flipHeel);
+  prefs.putBool("flip", S.flipHeel); prefs.putBool("flipp", S.flipPitch);
   prefs.putInt("orient", S.orientation);
   prefs.putBool("arec", S.autoRec); prefs.putBool("auto", S.autoOff);
   prefs.putInt("rate", S.rate);
@@ -292,6 +292,7 @@ static void boatAngles() {
   float heel = atan2f(-upStb, upZ) * RAD_TO_DEG;        // + = heeled to starboard
   float pitch = atan2f(-upBow, upZ) * RAD_TO_DEG;       // + = bow up
   if (S.flipHeel) heel = -heel;
+  if (S.flipPitch) pitch = -pitch;
   imu.heel = wrap180(heel - S.zeroHeel);
   imu.pitch = wrap180(pitch - S.zeroPitch);
 }
@@ -676,9 +677,9 @@ static String statusJson() {
   snprintf(b, sizeof b, "\"gps\":{\"ok\":%s,\"fix\":%d,\"sats\":%d,\"lat\":%.7f,\"lon\":%.7f,\"sog\":%.2f,\"cog\":%.1f,\"hacc\":%.1f,\"hz\":%.0f},",
            gpsOk ? "true" : "false", gps.fix, gps.sats, gps.lat / 1e7, gps.lon / 1e7, gps.sogKn, gps.cogDeg, gps.hAccM, gps.rateHz);
   j += b;
-  snprintf(b, sizeof b, "\"imu\":{\"ok\":%s,\"heel\":%.1f,\"pitch\":%.1f,\"twist\":%.1f,\"twist_learned\":%s,\"orientation\":\"%s\",\"mag\":%d,\"zero_heel\":%.1f,\"zero_pitch\":%.1f,\"flip\":%s},",
+  snprintf(b, sizeof b, "\"imu\":{\"ok\":%s,\"heel\":%.1f,\"pitch\":%.1f,\"twist\":%.1f,\"twist_learned\":%s,\"orientation\":\"%s\",\"mag\":%d,\"zero_heel\":%.1f,\"zero_pitch\":%.1f,\"flip\":%s,\"flip_pitch\":%s},",
            imuOk ? "true" : "false", imu.heel, imu.pitch, S.twist, S.twistLearned ? "true" : "false",
-           S.orientation == 1 ? "deck" : S.orientation == 2 ? "thwart" : "unknown", imu.magStatus, S.zeroHeel, S.zeroPitch, S.flipHeel ? "true" : "false");
+           S.orientation == 1 ? "deck" : S.orientation == 2 ? "thwart" : "unknown", imu.magStatus, S.zeroHeel, S.zeroPitch, S.flipHeel ? "true" : "false", S.flipPitch ? "true" : "false");
   j += b;
   snprintf(b, sizeof b, "\"batt\":{\"mv\":%d,\"pct\":%d,\"on_pad\":%s,\"charging\":\"%s\"},\"rec\":{\"on\":%s,\"secs\":%lu,\"lines\":%lu,\"file\":\"%s\"},",
            (int)battMv, batteryPct(battMv), onPad ? "true" : "false", !onPad ? "not" : battFull ? "full" : "charging",
@@ -730,8 +731,9 @@ static void startWeb() {
     S.zeroHeel = wrap180(S.zeroHeel + imu.heel); S.zeroPitch = wrap180(S.zeroPitch + imu.pitch); saveSettings(); okMsg("Level set: heel and pitch read 0 here.");
   });
   web.on("/api/cal/flip", HTTP_POST, [] { S.flipHeel = !S.flipHeel; S.zeroHeel = -S.zeroHeel; saveSettings(); okMsg(S.flipHeel ? "Heel sign flipped." : "Heel sign back to normal."); });
+  web.on("/api/cal/flippitch", HTTP_POST, [] { S.flipPitch = !S.flipPitch; S.zeroPitch = -S.zeroPitch; saveSettings(); okMsg(S.flipPitch ? "Pitch sign flipped." : "Pitch sign back to normal."); });
   web.on("/api/cal/twist", HTTP_POST, [] { S.twist = wrap180(web.arg("deg").toFloat()); S.twistLearned = true; saveSettings(); okMsg("Twist set."); });
-  web.on("/api/cal/reset", HTTP_POST, [] { S.zeroHeel = S.zeroPitch = S.twist = 0; S.twistLearned = false; S.flipHeel = false; S.orientation = 0; saveSettings(); okMsg("Calibration cleared."); });
+  web.on("/api/cal/reset", HTTP_POST, [] { S.zeroHeel = S.zeroPitch = S.twist = 0; S.twistLearned = false; S.flipHeel = false; S.flipPitch = false; S.orientation = 0; saveSettings(); okMsg("Calibration cleared."); });
   web.on("/api/rec", HTTP_POST, [] {
     if (web.arg("op") == "start") { startRecording(true); okMsg(recording ? "Recording." : flashFull ? "Flash is full." : "Couldn't start."); }
     else { stopRecording("page"); okMsg("Stopped."); }

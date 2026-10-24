@@ -53,6 +53,7 @@ button.dim{background:#334155;color:var(--ink)}button.bad{background:var(--bad);
 3. Twist is learnt by itself from the compass against the GPS course while you sail straight, or type it in.</p>
 <button onclick="post('/api/cal/level')">Level now</button>
 <button class="dim" onclick="post('/api/cal/flip')">Heel sign is backwards</button>
+<button class="dim" onclick="post('/api/cal/flippitch')">Pitch sign is backwards</button>
 <button class="dim" onclick="if(confirm('Forget level, twist and mounting?'))post('/api/cal/reset')">Reset</button>
 <label>Twist (degrees clockwise the puck's arrow is from the bow)</label>
 <div style="display:flex;gap:8px"><input type="number" id="twistin" step="1" min="-180" max="180"><button onclick="post('/api/cal/twist',{deg:v('twistin')})">Set</button></div>
@@ -112,7 +113,7 @@ function fill(s){st=s;
  $('orient').textContent=i.orientation=='thwart'?'under the thwart':i.orientation=='deck'?'on deck':'not sure yet (keep it still)';
  $('twist').textContent=fmt(i.twist,0)+'°'+(s.autotwist?(i.twist_learned?' (learnt)':' (learning)'):'');
  $('mag').innerHTML=['<span class="bad">uncalibrated</span>','<span class="warn">rough</span>','<span class="warn">fair</span>','<span class="ok">good</span>'][i.mag]||'–';
- $('zero').textContent='heel '+fmt(i.zero_heel,1)+'°, pitch '+fmt(i.zero_pitch,1)+'°'+(i.flip?', sign flipped':'');
+ $('zero').textContent='heel '+fmt(i.zero_heel,1)+'°, pitch '+fmt(i.zero_pitch,1)+'°'+(i.flip?', heel flipped':'')+(i.flip_pitch?', pitch flipped':'');
  if(!editing){$('puck').value=s.puck;$('ssid').value=s.wifi.ssid||'';$('autorec').value=s.autorec?1:0;$('rate').value=s.rate;$('autooff').checked=!!s.autooff;$('twistin').value=Math.round(i.twist);$('autotwist').checked=!!s.autotwist}
  const t=s.tracks||[];$('tracks').innerHTML=t.length?t.map(x=>'<div class="row"><span>'+x.name+(x.open?' <span class="ok">(recording)</span>':'')+' <span style="color:#64748b">'+fmt(x.kb/1024,1)+' MB</span></span><span>'+(x.open?'':'<a href="/tracks/'+x.name+'" download>download</a> &nbsp; <a href="#" onclick="if(confirm(\'Delete '+x.name+' from the puck?\'))post(\'/api/tracks/delete\',{name:\''+x.name+'\'});return false">delete</a>')+'</span></div>').join(''):'none';
 }
