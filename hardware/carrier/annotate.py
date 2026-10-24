@@ -38,5 +38,7 @@ fig('step-xiao.png', 'F', [(-25.6, -6.6, -0.4, 12.6)], 'Step 2: XIAO (top)')
 fig('step-gps.png', 'F', [(-9.6, 17.4, 1.9, 22.8)], 'Step 4: GPS pads (top)')
 fig('step-imu.png', 'F', [(1.4, -15.2, 26.0, 16.2)], 'Step 5: IMU (top)')
 fig('step-power.png', 'F', [(-21.8, -27.2, -0.4, -15.9)], 'Steps 6-7: power pads (top)')
+# push button: D2 (bottom row, 3rd from the USB end) and D9 (top row, 5th), GND at the IMU pads
+fig('step-button.png', 'F', [(-17.0, -6.1, -14.1, -3.1), (-11.9, 9.1, -9.0, 12.1), (5.0, -14.5, 8.0, -11.5)], 'Step 8: push button pads (top)')
 fig('step-bottom.png', 'B', [(-1.5, -5.4, 25.5, 11.4), (-21.8, -27.2, -0.4, -15.9)], 'Underneath: TP4056 spot and power pads')
 print('annotated images written')

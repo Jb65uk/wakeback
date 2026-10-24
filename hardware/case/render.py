@@ -9,7 +9,7 @@ from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 CASE_COL = {'base': '#3d7ea6', 'lid': '#e0a800', 'bridge': '#d9534f', 'cradle': '#6c757d', 'lid_mount': '#c99700', 'cradle_lid': '#6c757d'}
 IN_COL = {'battery': '#5b8c3a', 'Qi coil': '#b87333', 'Qi board': '#8e44ad', 'board': '#1f5c3a',
-          'TP4056': '#2c3e50', 'XIAO': '#34495e', 'IMU': '#7f8c8d', 'GPS': '#c0392b'}
+          'TP4056': '#2c3e50', 'XIAO': '#34495e', 'IMU': '#7f8c8d', 'GPS': '#c0392b', 'switch': '#a0a0a0'}
 
 
 def _mesh(m, max_tris=60000):
@@ -38,7 +38,7 @@ def exploded(parts, inside, out, K):
     ax = fig.add_subplot(111, projection='3d')
     _draw3d(ax, parts['cradle'], CASE_COL['cradle'], -30)
     _draw3d(ax, parts['base'], CASE_COL['base'], 0)
-    for n in ('board', 'XIAO', 'IMU', 'battery'):
+    for n in ('board', 'XIAO', 'IMU', 'battery', 'switch'):
         _draw3d(ax, inside[n], IN_COL[n], 0)
     _draw3d(ax, parts['bridge'], CASE_COL['bridge'], 22)
     _draw3d(ax, inside['GPS'], IN_COL['GPS'], 22)
@@ -78,11 +78,36 @@ def section(parts, inside, out, K, y=3.0):
                       'GPS': (12.5, 30), 'TP4056': (12, 11), 'Qi coil': (26, 1.9)}.items():
         ax.annotate(n, (x, z), color='white' if n not in ('Qi coil',) else 'black', fontsize=8, ha='center', va='center', zorder=5)
     ax.annotate('O-ring', (36, K['Z_TOP']), xytext=(48, 40), fontsize=8, arrowprops=dict(arrowstyle='-', lw=0.6))
-    ax.set_aspect('equal'); ax.set_xlim(-50, 50); ax.set_ylim(-3, 42)
+    ax.set_aspect('equal'); ax.set_xlim(-50, 50); ax.set_ylim(-3, 46)
     ax.set_xlabel('mm (port <-> starboard, looking forward)'); ax.set_ylabel('mm')
     ax.grid(alpha=0.25)
     ax.set_title(f'Cut through the closed puck at y = {y:g} mm: base (blue), lid (yellow), GPS shelf (red)', fontsize=10)
     fig.savefig(os.path.join(out, 'case-section.png'), bbox_inches='tight', facecolor='white'); plt.close(fig)
+
+
+def switch(parts, inside, out, K):
+    """Cut through the push button's axis (stern to the left, bow to the right), and the base seen from outside."""
+    fig, axs = plt.subplots(1, 2, figsize=(12, 5.4), dpi=120)
+    ax = axs[0]
+    def cut(m):   # turn the switch axis onto +x... then slice the plane y = 0 -> coords (x, z)
+        return m.rotate([0, 0, -(K['SW_ANG'] + 90) - 90]).rotate([-90, 0, 0]).slice(0.0)
+    for n, m in inside.items():
+        _polys(ax, cut(m), IN_COL[n], 0.9, 2)
+    for n in ('base', 'lid', 'bridge'):
+        _polys(ax, cut(parts[n]), CASE_COL[n], 1.0, 3)
+    ax.annotate('push button', (-41, K['SW_Z'] - 5), xytext=(-46, 4), fontsize=8, arrowprops=dict(arrowstyle='-', lw=0.6))
+    ax.annotate('nut, on the flat inside', (-35, K['SW_Z'] + 7), xytext=(-30, 45), fontsize=8, arrowprops=dict(arrowstyle='-', lw=0.6))
+    ax.annotate('board', (0, K['Z_PCB'] + 0.3), color='white', fontsize=8, ha='center', va='center', zorder=5)
+    ax.set_aspect('equal'); ax.set_xlim(-50, 50); ax.set_ylim(-3, 48); ax.grid(alpha=0.25)
+    ax.set_xlabel('mm (stern <-> bow, along the button)'); ax.set_ylabel('mm')
+    ax.set_title('Cut through the push button', fontsize=10)
+    ax = fig.add_subplot(122, projection='3d'); axs[1].remove()
+    _draw3d(ax, parts['base'], CASE_COL['base'])
+    _draw3d(ax, inside['switch'], IN_COL['switch'])
+    ax.set_xlim(-42, 42); ax.set_ylim(-42, 42); ax.set_zlim(-5, 60); ax.set_box_aspect((1, 1, 0.8))
+    ax.view_init(18, K['SW_ANG'] - 10); ax.set_axis_off()
+    ax.set_title('Base from the stern-starboard side: the flat and the button', fontsize=10)
+    fig.savefig(os.path.join(out, 'case-switch.png'), bbox_inches='tight', facecolor='white'); plt.close(fig)
 
 
 def plans(parts, inside, out, K):
@@ -130,5 +155,6 @@ def all(parts, inside, out, K):
     section(parts, inside, out, K)
     plans(parts, inside, out, K)
     cradle(parts, out, K)
+    switch(parts, inside, out, K)
     thwart(parts, out, K)
     print('  previews written')

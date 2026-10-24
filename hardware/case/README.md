@@ -1,10 +1,10 @@
 # WakeBack puck case
 
-A round puck, 86 mm across and 37 mm tall, made to fit the carrier board and the parts on the shopping list. It has four printed parts (plus two optional ones for hanging it under a thwart, below):
+A round puck, 86 mm across and 39 mm tall, made to fit the carrier board and the parts on the shopping list. It has four printed parts (plus two optional ones for hanging it under a thwart, below):
 
 | File | What it is | Print it |
 |---|---|---|
-| `out/wakeback-base.stl` | The cup. The battery, Qi coil, carrier board and TP4056 go inside. Bayonet lugs round the bottom | As it comes, floor down |
+| `out/wakeback-base.stl` | The cup. The battery, Qi coil, carrier board and TP4056 go inside. Bayonet lugs round the bottom, a 12 mm hole on a flat in the stern-starboard wall for the push button | As it comes, floor down |
 | `out/wakeback-lid.stl` | Screw-on lid with a thread and an O-ring seal | Top face down (the file is already that way up) |
 | `out/wakeback-bridge.stl` | GPS shelf. Sits over the heel sensor on two legs | Flat side down (already that way up) |
 | `out/wakeback-cradle.stl` | Deck mount. Drop the puck in and twist it clockwise until it clicks | As it comes, no supports (the three spring tongues stand on the bed) |
@@ -20,6 +20,7 @@ Plus two optional parts for hanging the puck **under a thwart** instead of on th
 
 ![exploded](out/case-exploded.png)
 ![section](out/case-section.png)
+![push button](out/case-switch.png)
 
 ## Print settings
 
@@ -31,6 +32,7 @@ Plus two optional parts for hanging the puck **under a thwart** instead of on th
 ## Also buy
 
 - O-ring **70 × 2 mm**, nitrile. A pack of 10 is a couple of pounds.
+- The **12 mm waterproof push button** from the shopping list in `BUILD.md` (momentary, anti-vandal, IP67, flat head; ring LED optional). It comes with its own nut and a rubber O-ring under the head.
 - M2.5 stainless screws: **2 × 20 mm** (board and GPS shelf) and **1 × 8 mm** (third board hole). Self-tapping, or plain machine screws; either cuts its own thread in the plastic.
 - A 1 mm self-adhesive foam pad for the top of the GPS, and double-sided foam tape.
 - A little silicone grease for the O-ring.
@@ -42,9 +44,10 @@ Plus two optional parts for hanging the puck **under a thwart** instead of on th
 2. **Qi coil:** stick it to the middle of the floor, coil side down (touching the floor), shield sticker side up. The thinner the gap to the pad, the better it charges.
 3. **Qi receiver board:** stick it down in the gap beside the battery, on the starboard-aft side (see `case-plans.png`).
 4. **Battery:** it drops in between the four corner stops, sitting on the coil. It goes in at an angle so it misses the three board posts. Tilt it to get it past the rim.
-5. **Carrier board:** onto the three posts, heel-sensor arrow toward the arrow on the outside of the base. One **M2.5 × 8** screw goes in the hole by the XIAO.
-6. **GPS:** stick it on the shelf with foam tape, ceramic antenna facing up. Put the shelf over the heel sensor and fix it with the two **M2.5 × 20** screws, through the shelf legs and the board into the posts. Add the 1 mm foam pad on top of the GPS.
-7. **Lid:** screw it on hand-tight. It's a normal thread: clockwise closes, anticlockwise opens.
+5. **Push button:** before the board goes in. Push it through the 12 mm hole from the outside (its O-ring under the head, against the flat on the outside of the wall), spin the nut on from the inside against the flat boss and nip it up with pliers: firm, not brutal, it's plastic. The flat is on the stern side, a little to starboard, so the button body sits above the board and clear of the battery pads. Solder the four short wires on first (see `hardware/carrier/README.md`) and leave them long enough to reach the XIAO.
+6. **Carrier board:** onto the three posts, heel-sensor arrow toward the arrow on the outside of the base. One **M2.5 × 8** screw goes in the hole by the XIAO.
+7. **GPS:** stick it on the shelf with foam tape, ceramic antenna facing up. Put the shelf over the heel sensor and fix it with the two **M2.5 × 20** screws, through the shelf legs and the board into the posts. Add the 1 mm foam pad on top of the GPS.
+8. **Lid:** screw it on hand-tight. It's a normal thread: clockwise closes, anticlockwise opens.
 
 The inside heights are tight. The battery top sits 6.3 mm under the board, and the TP4056 needs 5.5 mm, so keep the wires under the board flat.
 
@@ -52,13 +55,15 @@ The inside heights are tight. The battery top sits 6.3 mm under the board, and t
 
 Before any electronics go in: put a dry tissue inside, screw the lid on, and hold it under water in a sink for 30 minutes (weigh it down). The tissue should come out dry. If it's damp, look for the leak: usually a thin wall or a gap between layers. Print again with 6 perimeters, or brush the outside with a thin coat of epoxy (XTC-3D or similar).
 
-It floats. It displaces about 196 cm³ and weighs about 130 g with everything in.
+Then with the button in and the lid on, do it again: the button's own O-ring is the seal there, so the nut has to be tight enough to squash it.
+
+It floats. It displaces about 202 cm³ and weighs about 135 g with everything in.
 
 ## The cradle
 
 - Screw or strap it to the boat with its **arrow pointing at the bow**.
 - Hold the puck with its side arrow about 20° anticlockwise of the cradle arrow. Push it down, then twist it clockwise until the arrows line up. It tightens over the last few degrees and clicks as it goes home; to take it out, twist it anticlockwise past the click.
-- The click comes from three spring tongues in the cradle's outer wall (the strips with a slit above and beside them). Each has a small nib inside that the puck's lug pushes past and then sits behind, so the puck can't twist back on its own, and the channel ceiling is 0.15 mm lower than the lug at the end, which wedges the puck down onto the floor. Nothing to fit or adjust. If a cradle ever comes out stiff, run `gen_case.py` with `CR_PRELOAD` 0.1 or `CR_NIB` 0.4; if it comes out loose, 0.2 / 0.6.
+- The click comes from three spring tongues in the cradle's outer wall (the strips with a slit above and beside them). Each has a small nib inside that the puck's lug pushes past and then sits behind, so the puck can't twist back on its own, and the channel ceiling is 0.1 mm lower than the lug at the end, which wedges the puck down onto the floor. Nothing to fit or adjust. If a cradle ever comes out stiff, run `gen_case.py` with `CR_CLR` 0.1 bigger; if it comes out loose, `CR_PRELOAD` 0.15 and `CR_NIB` 0.5.
 - The slit at the end of each tongue is also the drain. Rinse the cradle through after a sandy day.
 - Tie a thin lanyard through the eye on the cradle to the puck, in case of a big capsize.
 - To charge it, twist it out and lay it on the Qi pad, flat side down.
@@ -76,6 +81,7 @@ It floats. It displaces about 196 cm³ and weighs about 130 g with everything in
 
 ## Things to know
 
-- The status LED is inside. If you want to see it, print the lid in clear or natural PETG.
+- The status LED is inside. The button's ring LED copies it, so you can see it from outside; if your button has no LED, print the lid in clear or natural PETG.
+- **The push button**: `SW` at the top of `gen_case.py` has the sizes it was drawn for (12.2 mm hole, 14 mm head, 20 mm behind the panel, 15.5 mm nut). Check them against your button's datasheet before printing and change them if yours is different; the fit check tells you if it then hits the board, the lid or the shelf. The head top sits 1.8 mm below the lid's skirt, so a sheet or a knee is unlikely to catch it, and the firmware needs a 2 s hold to switch off anyway. To fit the button above the board the base grew 1.4 mm and the lid thread went from 8 mm to 6 mm (two turns, which is plenty for a hand-tight lid on an O-ring), so the closed puck is 39 mm tall instead of 37.
 - **GPS power:** Beitian lists the BE-880 at 3.6–5.5 V, and the board feeds it 3.3 V. Most of these modules run happily on 3.3 V, and Stage 2 of the bench test will show you. If it won't get a fix or keeps dropping out, move the GPS red wire from the 3V3 pad to OUT+ on the TP4056 (battery voltage).
 - Everything is generated by `gen_case.py`: sizes at the top, then the parts. Run it again after any change. It checks that nothing inside hits the case, that the lid unscrews cleanly, that the puck drops into the cradle and twists freely along the channel, and reports how hard the cradle grips at home (ceiling preload, nib overlap). Then it rewrites the STLs and pictures. It needs `pip install manifold3d trimesh numpy matplotlib`.
