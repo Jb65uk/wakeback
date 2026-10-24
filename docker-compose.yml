@@ -30,6 +30,7 @@ services:
       WATCHTOWER_LABEL_ENABLE: "true"
       WATCHTOWER_CLEANUP: "true"           # delete the old image after an update
       WATCHTOWER_POLL_INTERVAL: "1800"
+      DOCKER_API_VERSION: "1.44"           # newer Docker on the NAS refuses the old default ("client version 1.25 is too old")
       TZ: Europe/London
 
   # Nightly backup of everything (tracks, venues, accounts) into ./backups next to this file, one
