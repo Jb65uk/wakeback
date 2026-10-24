@@ -67,7 +67,7 @@ button.dim{background:#334155;color:var(--ink)}button.bad{background:var(--bad);
 <label>Record on its own</label>
 <select id="autorec"><option value="1">Yes: start when the boat moves off, stop after 10 minutes still</option><option value="0">No: only the button starts and stops it</option></select>
 <label>Points a second while moving</label>
-<select id="rate"><option value="10">10 (best, about 5 h of sailing fits)</option><option value="5">5 (about 9 h)</option><option value="2">2 (days)</option></select>
+<select id="rate"><option value="5">5 (the sweet spot, about 9 h of sailing fits)</option><option value="10">10 (finest detail, about 5 h)</option><option value="2">2 (days)</option></select>
 <label class="chk"><input type="checkbox" id="autooff"> Switch itself off after 30 minutes still, off the pad</label>
 <div><button onclick="saveSettings()">Save</button></div>
 <div class="msg" id="smsg"></div>

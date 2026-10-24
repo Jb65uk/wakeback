@@ -1,5 +1,5 @@
 # 8 MB XIAO ESP32S3 with two app slots so a firmware update can roll back:
-# 1.7 MB x 2 for the app, 4.5 MB for recorded tracks (about 5 hours of sailing at 10 Hz moving / 1 Hz still).
+# 1.7 MB x 2 for the app, 4.5 MB for recorded tracks (about 9 hours of sailing at 5 Hz moving / 1 Hz still).
 # Name,   Type, SubType,  Offset,   Size
 nvs,      data, nvs,      0x9000,   0x5000
 otadata,  data, ota,      0xe000,   0x2000

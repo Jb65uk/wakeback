@@ -106,7 +106,7 @@ struct Settings {
   bool autoTwist = true, twistLearned = false, flipHeel = false, flipPitch = false;
   int orientation = 0;               // 0 unknown, 1 deck (IMU up), 2 under the thwart (IMU down)
   bool autoRec = true, autoOff = true;
-  int rate = 10;                     // points a second while moving
+  int rate = 5;                      // points a second while moving: 5 is plenty for a dinghy and gives ~9 h of storage
 } S;
 
 static void loadSettings() {
@@ -121,8 +121,8 @@ static void loadSettings() {
   S.flipHeel = prefs.getBool("flip", false); S.flipPitch = prefs.getBool("flipp", false);
   S.orientation = prefs.getInt("orient", 0);
   S.autoRec = prefs.getBool("arec", true); S.autoOff = prefs.getBool("auto", true);
-  S.rate = prefs.getInt("rate", 10);
-  if (S.rate != 10 && S.rate != 5 && S.rate != 2) S.rate = 10;
+  S.rate = prefs.getInt("rate", 5);
+  if (S.rate != 10 && S.rate != 5 && S.rate != 2) S.rate = 5;
 }
 
 static void saveSettings() {
