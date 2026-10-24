@@ -147,6 +147,7 @@ enum WifiMode { W_OFF, W_JOINING, W_DOCK, W_SETUP };
 WifiMode wmode = W_OFF;
 uint32_t wSince = 0, lastCheckin = 0, lastHello = 0, lastFwCheck = 0, lastOffPadTry = 0, setupLastSeen = 0;
 bool dockOk = false, wantLiftCheckin = false, uploading = false, webOn = false;
+bool usbPlugged = false, usbSetupDone = false;   // on a USB lead the setup WiFi comes up by itself
 static void webStart(); static void webStop();
 bool appPendingVerify = false;
 
@@ -634,7 +635,7 @@ static void wifiTick() {
   const uint32_t m = millis();
   if (wmode == W_SETUP) {
     dns.processNextRequest();
-    if (m - setupLastSeen > SETUP_IDLE_MS) leaveSetup();
+    if (m - setupLastSeen > SETUP_IDLE_MS && !usbPlugged) leaveSetup();     // on USB it stays up: that's the bench
     return;
   }
   // a reason to talk to the dock?
@@ -746,7 +747,7 @@ static void startWeb() {
     if (recording && n == recName) stopRecording("deleted from the page");
     LittleFS.remove(String(TRK_DIR) + "/" + n); countTracks(); measureFs(); flashFull = freeBytes() < FLASH_RESERVE; okMsg("Deleted.");
   });
-  web.on("/api/setup/done", HTTP_POST, [] { okMsg("Leaving setup mode."); delay(300); if (wmode == W_SETUP) leaveSetup(); });
+  web.on("/api/setup/done", HTTP_POST, [] { okMsg("Leaving setup mode."); delay(300); usbSetupDone = true; if (wmode == W_SETUP) leaveSetup(); });
   web.on("/api/reboot", HTTP_POST, [] { okMsg("Restarting."); delay(300); if (recording) stopRecording("restart"); ESP.restart(); });
   web.on("/api/sleep", HTTP_POST, [] { okMsg("Sleeping."); delay(300); goToSleep("page"); });
   web.on("/update", HTTP_POST,
@@ -816,6 +817,18 @@ static void everySecond() {
     else { wantLiftCheckin = wmode == W_DOCK && dockOk; haveRest = false; stillSince = 0; }
   }
   battFull = onPad && battMv >= 4150;
+
+  // on a USB lead (the bench): put the setup WiFi up without being asked, once per plug-in
+  const bool plugged = Serial.isPlugged();
+  if (plugged && !usbPlugged) usbSetupDone = false;
+  usbPlugged = plugged;
+  if (usbPlugged && !usbSetupDone && wmode == W_OFF && !recording) { usbSetupDone = true; enterSetup(); }
+
+  // battery nearly flat: close the track properly and sleep before the protection board cuts the power mid-write
+  static int lowFor = 0;
+  lowFor = (!onPad && battMv > 2500 && battMv < 3400) ? lowFor + 1 : 0;
+  if (lowFor >= 10) goToSleep("battery flat");
+
   learnMounting();
   static int tick = 0; if (++tick % 10 == 0) { measureFs(); countTracks(); }
   if (flashFull && freeBytes() > FLASH_RESERVE * 2) flashFull = false;
