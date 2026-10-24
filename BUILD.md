@@ -144,7 +144,10 @@ It saves `puck1_HHMMSS.csv`. Drop it on the viewer (or add `--upload` with the d
 
 About 3 hours fits on the 8 MB XIAO (about 1.9 MB an hour as text). The real firmware stores it more compactly.
 
+## Stage 8: the real firmware
+
+Once the carrier board is in its case, flash `firmware/puck` instead of the bench test. It records by itself when the boat moves off, uploads to the dock or your phone over WiFi, and has a setup page on its own WiFi for calibration, the dock WiFi password and firmware updates. See `firmware/puck/README.md`.
+
 ## What's not on the breadboard (yet)
 
 - The AO3401 GPS power switch (only matters for sleeping for weeks; the button sleep above is "a few mA").
-- Wake-on-movement, auto start/stop, dock check-ins and uploads. That's the real firmware, next.
