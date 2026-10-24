@@ -333,8 +333,11 @@ static void learnMounting() {
     }
   } else { imu.restUpZ = 0; imu.restN = 0; }
 
-  static float lastCog = 0; static uint32_t lastSave = 0;
-  if (S.autoTwist && !isnan(imu.headingX) && imu.magStatus >= 2 && gps.fix >= 3 && gps.sogKn > 2.0f && gps.hAccM < 5) {
+  static float lastCog = 0; static uint32_t lastSave = 0; static int goingFor = 0;
+  // only a boat really under way counts: 2 kn or more for 15 s running, with a clean fix (GPS jitter on the bench can spike to 4 kn)
+  const bool underWay = gps.fix >= 3 && gps.sogKn > 2.0f && gps.hAccM < 3;
+  goingFor = underWay ? goingFor + 1 : 0;
+  if (S.autoTwist && !isnan(imu.headingX) && imu.magStatus >= 2 && goingFor >= 15) {
     const float turn = fabsf(wrap180(gps.cogDeg - lastCog));
     if (turn < 3) {                                           // sailing straight: the puck's X is twist degrees clockwise of the course
       const float err = wrap180((imu.headingX - gps.cogDeg) - S.twist);
