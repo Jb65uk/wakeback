@@ -32,7 +32,7 @@ jobs:
           key: pio-${{ runner.os }}-${{ hashFiles('firmware/puck/platformio.ini') }}
 
       - name: Install PlatformIO
-        run: pip install platformio
+        run: pip install platformio esptool
 
       - name: Version from the tag of this build
         run: |
@@ -42,7 +42,15 @@ jobs:
           grep WB_FW_VERSION platformio.ini
 
       - name: Build
-        run: pio run
+        shell: bash
+        run: pio run 2>&1 | tee build.log
+
+      - name: Build errors as annotations (readable without the log)
+        if: failure()
+        run: grep -nE "error|Error|undefined reference|not declared|failed" build.log | head -40 | sed 's/^/::error::/'; true
+
+      - name: Size
+        run: grep -E "^(RAM|Flash):" build.log | sed 's/^/::notice::/'
 
       - name: Package
         env:
@@ -50,9 +58,11 @@ jobs:
         run: |
           B=.pio/build/xiao_esp32s3
           cp $B/firmware.bin puck.bin
-          python -m esptool --chip esp32s3 merge_bin -o puck-full.bin --flash_mode dio --flash_freq 80m --flash_size 8MB \
-            0x0 $B/bootloader.bin 0x8000 $B/partitions.bin 0xe000 ~/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin 0x10000 $B/firmware.bin
-          ls -l puck.bin puck-full.bin
+          BOOT0=$(find ~/.platformio/packages -name boot_app0.bin | head -1)
+          ls -l $B/bootloader.bin $B/partitions.bin "$BOOT0" $B/firmware.bin
+          esptool.py --chip esp32s3 merge_bin -o puck-full.bin --flash_mode dio --flash_freq 80m --flash_size 8MB \
+            0x0 $B/bootloader.bin 0x8000 $B/partitions.bin 0xe000 "$BOOT0" 0x10000 $B/firmware.bin
+          ls -l puck.bin puck-full.bin | sed 's/^/::notice::/'
           echo "{\"version\":\"$FW_VERSION\",\"file\":\"puck.bin\",\"notes\":$(jq -Rs . <<< "$MSG")}" > firmware.json
           cat firmware.json
 
