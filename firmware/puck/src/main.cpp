@@ -145,7 +145,7 @@ bool flashFull = false;
 
 enum WifiMode { W_OFF, W_JOINING, W_DOCK, W_SETUP };
 WifiMode wmode = W_OFF;
-uint32_t wSince = 0, lastCheckin = 0, lastHello = 0, lastFwCheck = 0, lastOffPadTry = 0, setupLastSeen = 0;
+uint32_t wSince = 0, lastCheckin = 0, lastHello = 0, lastFwCheck = 0, lastOffPadTry = 0, setupLastSeen = 0, sailEnded = 0;
 bool dockOk = false, wantLiftCheckin = false, uploading = false, webOn = false;
 bool usbPlugged = false, usbSetupDone = false;   // on a USB lead the setup WiFi comes up by itself
 static void webStart(); static void webStop();
@@ -402,6 +402,7 @@ static void stopRecording(const char *why) {
   if (recLines < 10) { LittleFS.remove(String(TRK_DIR) + "/" + recName); Serial.println("Too short, binned."); }
   countTracks();
   haveRest = false; stillSince = 0;
+  sailEnded = millis(); lastOffPadTry = 0;      // go looking for the phone straight away, and keenly for a while
 }
 
 // one GPS fix: log it (at the full rate while moving, once a second while still), and watch for moving off / stopping
@@ -641,7 +642,7 @@ static void wifiTick() {
   // a reason to talk to the dock?
   const bool wantDock = S.ssid.length() && !recording && (wantLiftCheckin ||
                         (onPad && m - lastOffPadTry > 30000) ||                              // on the pad: keep trying, half a minute apart
-                        (pendingCount() > 0 && m - lastOffPadTry > OFFPAD_RETRY_MS));        // off it with tracks waiting: every 5 minutes
+                        (pendingCount() > 0 && m - lastOffPadTry > (sailEnded && m - sailEnded < 15UL * 60 * 1000 ? 60000UL : OFFPAD_RETRY_MS)));   // tracks waiting: every minute for 15 min after a sail, then every 5
   if (wmode == W_OFF) { if (wantDock) { joinDock(); lastOffPadTry = m; } return; }
   if (wmode == W_JOINING) {
     if (WiFi.status() == WL_CONNECTED) { wmode = W_DOCK; wSince = m; webStart(); Serial.printf("Joined %s, dock should be at %s\n", S.ssid.c_str(), dockUrl("").c_str()); }
