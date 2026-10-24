@@ -148,6 +148,7 @@ WifiMode wmode = W_OFF;
 uint32_t wSince = 0, lastCheckin = 0, lastHello = 0, lastFwCheck = 0, lastOffPadTry = 0, setupLastSeen = 0, sailEnded = 0;
 bool dockOk = false, wantLiftCheckin = false, uploading = false, webOn = false;
 bool usbPlugged = false, usbSetupDone = false;   // on a USB lead the setup WiFi comes up by itself
+bool padSetup = false;                           // on the pad with no dock about: setup WiFi up, with a look for the dock every couple of minutes
 static void webStart(); static void webStop();
 bool appPendingVerify = false;
 
@@ -636,6 +637,11 @@ static void wifiTick() {
   const uint32_t m = millis();
   if (wmode == W_SETUP) {
     dns.processNextRequest();
+    if (padSetup) {
+      if (!onPad) { padSetup = false; leaveSetup(); }                                      // lifted off: back to normal
+      else if (m - wSince > 120000 && m - setupLastSeen > 15000) { padSetup = false; leaveSetup(); lastOffPadTry = 0; }   // nobody on the page: look for the dock again
+      return;
+    }
     if (m - setupLastSeen > SETUP_IDLE_MS && !usbPlugged) leaveSetup();     // on USB it stays up: that's the bench
     return;
   }
@@ -646,14 +652,14 @@ static void wifiTick() {
   if (wmode == W_OFF) { if (wantDock) { joinDock(); lastOffPadTry = m; } return; }
   if (wmode == W_JOINING) {
     if (WiFi.status() == WL_CONNECTED) { wmode = W_DOCK; wSince = m; webStart(); Serial.printf("Joined %s, dock should be at %s\n", S.ssid.c_str(), dockUrl("").c_str()); }
-    else if (m - wSince > 15000) { wifiOff(); if (!onPad) wantLiftCheckin = false; }
+    else if (m - wSince > 15000) { wifiOff(); if (!onPad) wantLiftCheckin = false; else { padSetup = true; enterSetup(); } }
     return;
   }
   // W_DOCK
   if (WiFi.status() != WL_CONNECTED) { wifiOff(); return; }
   if (!dockOk) {
     if (m - lastHello > 5000) { lastHello = m; dockOk = hello(); if (dockOk) { lastCheckin = 0; Serial.println("Dock found."); } }
-    if (!dockOk && m - wSince > (onPad ? 60000UL : OFFPAD_TRY_FOR_MS)) { wifiOff(); wantLiftCheckin = false; }
+    if (!dockOk && m - wSince > (onPad ? 30000UL : OFFPAD_TRY_FOR_MS)) { wifiOff(); wantLiftCheckin = false; if (onPad) { padSetup = true; enterSetup(); } }
     return;
   }
   if (m - lastCheckin > CHECKIN_MS || lastCheckin == 0) {
