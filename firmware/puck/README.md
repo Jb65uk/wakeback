@@ -54,7 +54,7 @@ Setup mode switches itself off after 10 minutes with nobody looking at the page,
 
 ## Partitions
 
-Two 1.5 MB app slots (so an update can roll back) and about 4.9 MB for tracks on the 8 MB XIAO. The 16 MB XIAO Plus for the v2 board gets a bigger table later.
+Two 1.7 MB app slots (so an update can roll back) and 4.5 MB for tracks on the 8 MB XIAO. The 16 MB XIAO Plus for the v2 board gets a bigger table later.
 
 ## Not done yet
 

@@ -624,8 +624,9 @@ static void wifiTick() {
     return;
   }
   // a reason to talk to the dock?
-  const bool wantDock = S.ssid.length() && !recording && (onPad || wantLiftCheckin ||
-                        (pendingCount() > 0 && m - lastOffPadTry > OFFPAD_RETRY_MS));
+  const bool wantDock = S.ssid.length() && !recording && (wantLiftCheckin ||
+                        (onPad && m - lastOffPadTry > 30000) ||                              // on the pad: keep trying, half a minute apart
+                        (pendingCount() > 0 && m - lastOffPadTry > OFFPAD_RETRY_MS));        // off it with tracks waiting: every 5 minutes
   if (wmode == W_OFF) { if (wantDock) { joinDock(); lastOffPadTry = m; } return; }
   if (wmode == W_JOINING) {
     if (WiFi.status() == WL_CONNECTED) { wmode = W_DOCK; wSince = m; Serial.printf("Joined %s, dock should be at %s\n", S.ssid.c_str(), dockUrl("").c_str()); }
