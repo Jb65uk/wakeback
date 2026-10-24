@@ -36,7 +36,8 @@ button.dim{background:#334155;color:var(--ink)}button.bad{background:var(--bad);
 <div><span>Recording</span><b id="rec">–</b></div>
 <div><span>Storage</span><b id="store">–</b></div>
 </div>
-<div style="margin-top:10px"><button id="recbtn" onclick="post('/api/rec',{op:recOn?'stop':'start'})">Start recording</button></div>
+<div style="margin-top:10px"><button id="recbtn" onclick="post('/api/rec',{op:recOn?'stop':'start'})">Start recording</button>
+<button class="dim" onclick="post('/api/cal/level').then(()=>{$('mode').textContent='Calibrated: heel and pitch read 0 here.'})">Boat is level: calibrate</button></div>
 <div class="msg" id="mode"></div>
 </div>
 
