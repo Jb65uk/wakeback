@@ -5,6 +5,7 @@ import '../app_state.dart';
 import '../auth/auth_api.dart';
 import '../widgets/common.dart';
 import '../widgets/format.dart';
+import 'puck_screen.dart';
 import 'puck_setup_screen.dart';
 import 'web_page.dart';
 
@@ -30,6 +31,7 @@ class PucksCard extends StatelessWidget {
             dense: true,
             leading: CircleAvatar(radius: 16, backgroundColor: t.colorScheme.primary, child: Text('${p.puck}', style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w700))),
             title: Text('Puck ${p.puck}'),
+            onTap: () => Navigator.push(context, MaterialPageRoute<void>(builder: (_) => PuckScreen(puck: p))),
             subtitle: Text([
               if (p.fw.isNotEmpty) 'firmware ${p.fw}',
               p.keyId > 0 ? 'uploads as you' : 'no account key',
@@ -38,8 +40,13 @@ class PucksCard extends StatelessWidget {
               if (p.hotspot.isNotEmpty && p.hotspot != app.hotspotName) 'set up for "${p.hotspot}" — Set up again',
             ].join(' · ')),
             trailing: PopupMenuButton<String>(
-              onSelected: (v) => v == 'again' ? _setUp(context, p.puck) : _forget(context, p),
+              onSelected: (v) => v == 'open'
+                  ? Navigator.push(context, MaterialPageRoute<void>(builder: (_) => PuckScreen(puck: p)))
+                  : v == 'again'
+                      ? _setUp(context, p.puck)
+                      : _forget(context, p),
               itemBuilder: (_) => const [
+                PopupMenuItem(value: 'open', child: Text('Settings and firmware')),
                 PopupMenuItem(value: 'again', child: Text('Set up again')),
                 PopupMenuItem(value: 'forget', child: Text('Forget this puck')),
               ],

@@ -13,6 +13,7 @@ import 'demo/demo_pucks.dart';
 import 'dock/pocket_dock.dart';
 import 'dock/store.dart';
 import 'dock/tiles.dart';
+import 'puck/puck_wifi.dart';
 import 'sync/server_sync.dart';
 import 'updates.dart';
 import 'widgets/common.dart' show friendly;
@@ -56,6 +57,7 @@ class AppState extends ChangeNotifier {
       await dock.start(port: 0, address: InternetAddress.loopbackIPv4);
     }
     demo = DemoPucks(dock.localUrl);
+    PuckReach.dockPort = dock.port; // so "open the puck's page" can ask the dock where a puck is
   }
 
   /// Real data lives in wakeback/; the demo in its own folder so leaving the demo can wipe it cleanly.
