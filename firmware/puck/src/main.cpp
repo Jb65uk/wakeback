@@ -529,7 +529,7 @@ static void wifiOff() {
 static String dockUrl(const char *path) { return "http://" + WiFi.gatewayIP().toString() + ":" + String(DOCK_PORT) + path; }
 
 static bool hello() {
-  HTTPClient h; WiFiClient c; h.setTimeout(3000);
+  WiFiClient c; HTTPClient h; h.setTimeout(3000);
   if (!h.begin(c, dockUrl("/api/hello"))) return false;
   const int code = h.GET();
   bool ok = false;
@@ -544,7 +544,7 @@ static bool hello() {
 }
 
 static bool checkin() {
-  HTTPClient h; WiFiClient c; h.setTimeout(4000);
+  WiFiClient c; HTTPClient h; h.setTimeout(4000);
   if (!h.begin(c, dockUrl("/api/pucks/checkin"))) return false;
   h.addHeader("Content-Type", "application/json");
   if (S.key.length()) h.addHeader("X-Puck-Key", S.key);
@@ -624,7 +624,7 @@ static void uploadPending() {
 
 // firmware the dock is offering (roadmap stage 5): GET /api/firmware/latest -> {"version":"1.1.0","url":"/api/firmware/puck.bin"}
 static void checkDockFirmware() {
-  HTTPClient h; WiFiClient c; h.setTimeout(4000);
+  WiFiClient c; HTTPClient h; h.setTimeout(4000);
   if (!h.begin(c, dockUrl("/api/firmware/latest"))) return;
   if (h.GET() != 200) { h.end(); return; }
   const String b = h.getString(); h.end();
@@ -636,7 +636,7 @@ static void checkDockFirmware() {
   if (!url.startsWith("http")) url = dockUrl(url.c_str());
   Serial.printf("Dock has firmware %s (this is %s): updating from %s\n", ver.c_str(), FW, url.c_str());
   if (recording) stopRecording("firmware update");
-  HTTPClient g; WiFiClient gc; g.setTimeout(30000);
+  WiFiClient gc; HTTPClient g; g.setTimeout(30000);
   if (!g.begin(gc, url) || g.GET() != 200) { g.end(); return; }
   const int size = g.getSize();
   uploading = true; led();
