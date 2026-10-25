@@ -37,8 +37,6 @@ h2{font-family:var(--num);font-weight:600;font-size:22px;margin:0 0 10px}
 .pb{display:inline-flex;align-items:center;justify-content:center;min-width:48px;height:32px;padding:0 8px;border-radius:6px;background:var(--c);color:#13293A;font-family:var(--num);font-weight:700;font-size:22px}
 .st{font-weight:600}
 .st small{display:block;font-weight:400;color:var(--muted);font-size:13px}
-.pill{margin-left:auto;font-size:12px;font-weight:700;border-radius:999px;padding:3px 10px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
-.pill.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
 .bat{display:grid;grid-template-columns:1fr auto;gap:4px 10px;align-items:center}
 .bar{height:10px;border-radius:5px;background:rgba(234,242,245,.12);overflow:hidden}
 .bar i{display:block;height:100%;background:var(--ink);border-radius:5px}
@@ -100,7 +98,6 @@ code{background:rgba(0,0,0,.25);padding:1px 5px;border-radius:4px;font-size:13px
           <div class="row" style="display:flex;justify-content:space-between;align-items:center"><b>Networks the dock can see</b><button class="btn" id="rescan">Scan again</button></div>
           <div class="nets" id="nets"><div class="hint">Scanning…</div></div>
           <input type="password" id="wpass" placeholder="WiFi password" autocomplete="off" aria-label="WiFi password">
-          <input type="password" id="wpin" placeholder="Dock PIN" inputmode="numeric" autocomplete="off" aria-label="Dock PIN" hidden>
           <button class="btn primary" id="wconnect" disabled>Connect</button>
           <div class="msg" id="wmsg" role="status"></div>
         </div>
@@ -182,7 +179,7 @@ async function refresh() {
     serverOffset = d.time_ms - Date.now();
     const list = pj.pucks, fw = newestVersion(list);
     $('#pucks').innerHTML = list.length ? list.map(p => puckCard(p, fw)).join('')
-      : '<div class="empty">No pucks have checked in yet. Put one on the pad and it appears here within 30 seconds.<br>Developing on a laptop? Run <code>python tools/fake_pucks.py</code>.</div>';
+      : `<div class="empty">No pucks have checked in yet. Put one on the pad and it appears here within 30 seconds.${d.demo ? '<br>Developing on a laptop? Run <code>python tools/fake_pucks.py</code>.' : ''}</div>`;
 
     // summary
     const docked = list.filter(p => p.docked), charging = docked.filter(p => p.charging === 'charging'),
@@ -202,12 +199,11 @@ async function refresh() {
     $('#apNote').innerHTML = `Pucks and phones join the dock's own WiFi, <b>${esc(d.dock_wifi)}</b>, which stays on whatever happens here.`;
     const viaWifi = up && up.type === 'wifi';
     $('#wifiBtn').textContent = viaWifi ? 'Change WiFi' : 'Connect to WiFi';
-    $('#wifiBtn').hidden = d.can_manage_wifi === false;   // the phone app can't change WiFi
+    $('#wifiBtn').hidden = d.can_manage_wifi === false;   // only a Pi with NetworkManager (or demo mode) can change WiFi
     if (d.phone) $('#apNote').innerHTML = `Pucks and phones join this phone's hotspot, <b>${esc(d.dock_wifi)}</b>. Keep WakeBack open while they upload.`;
     $('#wifiBtn').classList.toggle('primary', !d.online);
     $('#demoNote').hidden = !d.demo;
     if (d.demo && up) $('#netState').textContent = `Joined ${up.connection}` + (d.online ? '' : ' (demo)');
-    $('#wpin').hidden = !d.pin_required;
 
     // health
     const gb = b => (b / 1e9).toFixed(1) + ' GB';
@@ -217,10 +213,9 @@ async function refresh() {
       <dt>Clock</dt><dd>${new Date(d.time_ms).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })}</dd>
       <dt>Running for</dt><dd>${uptime}</dd>
       <dt>Storage</dt><dd>${d.disk_free == null ? 'n/a' : gb(d.disk_free) + ' free of ' + gb(d.disk_total)}${d.disk_free != null && d.disk_free < 2e9 ? ' <span class="cs w">(getting full)</span>' : ''}</dd>
-      <dt>Sessions</dt><dd>${d.sessions} sailing day${d.sessions === 1 ? '' : 's'} stored</dd>
-      <dt>Backup to NAS</dt><dd>${d.nas ? esc(d.nas) : 'Not set up yet'}</dd>`;
+      <dt>Sessions</dt><dd>${d.sessions} sailing day${d.sessions === 1 ? '' : 's'} stored</dd>`;
   } catch (e) {
-    $('#summary').innerHTML = '<span class="w">Can\'t reach the dock. Check you\'re on its WiFi.</span>';
+    $('#summary').innerHTML = '<span class="w">Can\'t reach WakeBack. Check your connection.</span>';
   }
 }
 
@@ -246,10 +241,9 @@ $('#wconnect').addEventListener('click', async () => {
   const msg = $('#wmsg'); msg.className = 'msg';
   if (!pick) { msg.className = 'msg err'; msg.textContent = 'Pick a network first.'; return; }
   if (!$('#wpass').hidden && !$('#wpass').value) { msg.className = 'msg err'; msg.textContent = 'Type the WiFi password.'; $('#wpass').focus(); return; }
-  if (!$('#wpin').hidden && !$('#wpin').value) { msg.className = 'msg err'; msg.textContent = 'Type the dock PIN.'; $('#wpin').focus(); return; }
   $('#wconnect').disabled = true; msg.textContent = `Connecting to ${pick}…`;
   try {
-    const r = await fetch('/api/wifi/connect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ssid: pick, password: $('#wpass').value, pin: $('#wpin').value }) });
+    const r = await fetch('/api/wifi/connect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ssid: pick, password: $('#wpass').value }) });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || 'Could not connect.');
     msg.className = 'msg ok'; msg.textContent = j.online ? `Connected to ${pick}. The dock is online.` : `Joined ${pick}, but there's no internet through it yet.`;
@@ -259,7 +253,7 @@ $('#wconnect').addEventListener('click', async () => {
   finally { $('#wconnect').disabled = false; }
 });
 
-refresh(); setInterval(refresh, 5000);
+refresh(); setInterval(refresh, 10000);
 </script>
 </body>
 </html>

@@ -86,7 +86,7 @@ td.num{font-variant-numeric:tabular-nums;color:var(--muted);white-space:nowrap}
     <input id="lpass" type="password" placeholder="Password" autocomplete="current-password">
     <button class="btn primary" id="lgo">Sign in</button>
     <div class="err" id="lerr"></div>
-    <div class="hint">First time? Create your account in the app (or via <code>/api/auth/signup</code>) using the admin email set on the server; it becomes the admin automatically.</div>
+    <div class="hint">First time? Create your account in the app with the admin email (the one set as <code>WAKEBACK_ADMIN</code> on the server); it becomes the admin automatically.</div>
   </section>
 
   <!-- ---------------- users ---------------- -->
@@ -120,13 +120,14 @@ td.num{font-variant-numeric:tabular-nums;color:var(--muted);white-space:nowrap}
     <div style="overflow-x:auto"><table id="tracks"><thead><tr><th>Session</th><th>Track</th><th>Owner</th><th>Sharing</th><th></th></tr></thead><tbody></tbody></table></div>
   </section>
 
-  <!-- ---------------- audit ---------------- -->
+  <!-- ---------------- pucks ---------------- -->
   <section id="tab-pucks" hidden class="box">
     <div class="row"><h2>Puck keys</h2><span class="spacer"></span><button class="btn sm" id="pucksRefresh">Refresh</button></div>
     <div class="hint">Every puck set up from the app gets a key tied to its owner's account; the puck sends it with every check-in and upload, so its tracks are theirs. Lost or sold a puck? Revoke its key here and it can't upload as them again; setting it up afresh in the app issues a new one.</div>
     <div style="overflow-x:auto"><table id="pucks"><thead><tr><th>Puck</th><th>Owner</th><th>Label</th><th>Issued</th><th>Last seen</th><th>Firmware</th><th></th></tr></thead><tbody></tbody></table></div>
   </section>
 
+  <!-- ---------------- audit ---------------- -->
   <section id="tab-audit" hidden class="box">
     <div class="row"><h2>Recent changes</h2><span class="spacer"></span><button class="btn sm" id="auditRefresh">Refresh</button></div>
     <div style="overflow-x:auto"><table id="audit"><thead><tr><th>When</th><th>Who</th><th>What</th><th>Target</th><th>Details</th></tr></thead><tbody></tbody></table></div>
@@ -227,6 +228,7 @@ function renderUsers() {
         ${u.status === 'disabled' ? '<button class="btn sm" data-act="enable">Enable</button>' : ''}
         <button class="btn sm" data-act="rename">Rename</button>
         <button class="btn sm" data-act="password">Reset password</button>
+        ${u.id !== me.id ? (u.role === 'admin' ? '<button class="btn sm" data-act="unadmin">Remove admin</button>' : '<button class="btn sm" data-act="admin">Make admin</button>') : ''}
         ${u.id !== me.id ? (u.status !== 'disabled' ? '<button class="btn sm danger" data-act="disable">Disable</button>' : '') + '<button class="btn sm danger" data-act="delete">Delete</button>' : ''}
       </div></td>
     </tr>`).join('') : '<tr><td colspan="6" class="empty">Nobody here yet.</td></tr>';
@@ -244,7 +246,9 @@ $('#users').addEventListener('click', async e => {
     else if (act === 'disable') { if (!confirm(`Disable ${u.name}? They'll be signed out everywhere and can't log in until you enable them again.`)) return; await api(`/api/admin/users/${uid}`, { method: 'POST', body: { status: 'disabled' } }); }
     else if (act === 'rename') { const n = prompt('Name', u.name); if (!n || !n.trim()) return; await api(`/api/admin/users/${uid}`, { method: 'POST', body: { name: n.trim() } }); }
     else if (act === 'password') { const p = prompt(`New password for ${u.name} (8+ characters). Tell them, then they can change it in the app.`); if (!p) return; await api(`/api/admin/users/${uid}`, { method: 'POST', body: { password: p, sign_out: true } }); toast(`Password set for ${u.name}; they've been signed out everywhere.`); }
-    else if (act === 'delete') { if (!confirm(`Delete ${u.name}'s account? Their tracks stay (owned by their name) but they can't sign in. This can't be undone.`)) return; await api(`/api/admin/users/${uid}`, { method: 'DELETE' }); }
+    else if (act === 'admin') { if (!confirm(`Make ${u.name} an admin? They'll see every track and this page, and can change anyone's account.`)) return; await api(`/api/admin/users/${uid}`, { method: 'POST', body: { role: 'admin' } }); }
+    else if (act === 'unadmin') { await api(`/api/admin/users/${uid}`, { method: 'POST', body: { role: 'user' } }); }
+    else if (act === 'delete') { if (!confirm(`Delete ${u.name}'s account? They can't sign in again, their friendships and puck keys go, and their tracks stay on the server as club tracks under their name (visible to everyone). This can't be undone.`)) return; const j = await api(`/api/admin/users/${uid}`, { method: 'DELETE' }); toast(`${u.name} deleted; ${j.tracks_kept || 0} track${j.tracks_kept === 1 ? '' : 's'} kept as club tracks`); }
     loadUsers();
   } catch (err) { toast(err.message); }
 });
@@ -274,11 +278,11 @@ function renderTracks() {
       <td>${owner ? `<select data-share><option value="friends"${share === 'friends' ? ' selected' : ''}>Friends</option><option value="private"${share === 'private' ? ' selected' : ''}>Private</option></select>` : '<span class="tag">everyone</span>'}</td>
       <td><div class="acts"><button class="btn sm danger" data-del>Remove</button></div></td>
     </tr>`).join('') : '<tr><td colspan="5" class="empty">No tracks match.</td></tr>';
-  // select the current owner where we can match by name
+  // select the current owner: the server tells the admin each track's owner email
   document.querySelectorAll('#tracks tbody tr').forEach(tr => {
-    const sx = allSessions.find(x => x.id === tr.dataset.s), name = sx.owners[tr.dataset.f];
-    const u = users.find(x => x.name === name); const sel = tr.querySelector('[data-owner]');
-    if (u && sel) sel.value = u.email;
+    const sx = allSessions.find(x => x.id === tr.dataset.s), email = (sx.owner_emails || {})[tr.dataset.f];
+    const sel = tr.querySelector('[data-owner]');
+    if (email && sel && users.some(u => u.email === email)) sel.value = email;
   });
 }
 $('#tsearch').oninput = renderTracks;
@@ -299,7 +303,6 @@ $('#tracks').addEventListener('click', async e => {
   catch (err) { toast(err.message); }
 });
 
-// ---------- audit ----------
 // ---------- pucks ----------
 async function loadPucks() {
   const rows = (await api('/api/admin/pucks')).pucks || [];
@@ -317,9 +320,12 @@ $('#pucks').addEventListener('click', async e => {
   try { await api(`/api/admin/pucks/${pid}`, { method: 'DELETE' }); toast(`${name}'s key revoked`); loadPucks(); } catch (err) { toast(err.message); }
 });
 
-const ACTIONS = { signup: 'Signed up', login: 'Logged in', upload: 'Uploaded a track', delete_track: 'Removed a track', track_settings: 'Changed a track',
+// ---------- audit ----------
+const ACTIONS = { signup: 'Signed up', login: 'Logged in', login_blocked: 'Login refused (too many tries)', upload: 'Uploaded a track', delete_track: 'Removed a track', track_settings: 'Changed a track',
   friend_request: 'Asked to be friends with', friend_accept: 'Became friends with', friend_decline: 'Declined a friend request', unfriend: 'Unfriended',
   admin_user: 'Changed a user', admin_delete_user: 'Deleted a user', setting: 'Changed a setting', password_changed: 'Changed their password',
+  password_forgot: 'Asked for a password reset', reset_code_made: 'Made a reset code for', password_reset: 'Reset their password with a code',
+  export: 'Downloaded their data', account_deleted: 'Deleted their own account',
   puck_key: 'Set up a puck', puck_revoke: 'Revoked a puck key', admin_puck_revoke: 'Revoked a puck key' };
 async function loadAudit() {
   const rows = await api('/api/admin/audit');

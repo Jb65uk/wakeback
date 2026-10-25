@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Checks the server's account routes end to end, on a throwaway copy:  python tools/test_server.py
-Covers: tiny tracks left out of stats, stats by boat, league by class, forgot password, puck keys, export, delete account."""
+Covers: tiny tracks left out of stats, stats by boat, league by class, forgot password, puck keys, who may read and change
+a session, moving sessions, venues, the admin deleting a user, export, delete account."""
 import io, json, math, os, shutil, sys, tempfile, zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -11,6 +12,13 @@ os.environ['WAKEBACK_ADMIN'] = 'admin@example.com'
 os.environ.pop('WAKEBACK_ADMIN_RESET', None)
 sys.path.insert(0, os.path.join(tmp, 'server'))
 import app as wb, accounts        # noqa: E402
+
+
+
+@wb.app.get('/api/_boom')
+def _boom():
+    raise RuntimeError('on purpose')   # a bug in a route: the app must still get JSON back
+
 
 c = wb.app.test_client()
 T0 = 1790000000000                # a fixed morning, ms
@@ -33,10 +41,16 @@ def signup(email, name, pw='password1'):
 def H(tok): return {'Authorization': f'Bearer {tok}'}
 
 
-def upload(tok, name, data, boat=''):
-    r = c.post('/api/upload', headers=H(tok), data={'file': (io.BytesIO(data), name), 'boat': boat}, content_type='multipart/form-data')
+def upload(tok, name, data, boat='', **form):
+    r = c.post('/api/upload', headers=H(tok), data={'file': (io.BytesIO(data), name), 'boat': boat, **form}, content_type='multipart/form-data')
     assert r.status_code == 200, r.get_json()
     return r.get_json()
+
+
+def owners_json(day):
+    try:
+        with open(os.path.join(tmp, 'data', 'sessions', day, 'owners.json')) as f: return json.load(f)
+    except FileNotFoundError: return {}
 
 
 try:
@@ -129,6 +143,101 @@ try:
     assert 8 in json.loads(zipfile.ZipFile(io.BytesIO(c.get('/api/me/export', headers=H(dave)).data)).read('account.json'))['pucks']
     # Dave's puck track doesn't muddle James's checks below
     assert c.delete(f'/api/sessions/{r.get_json()["session"]}/puck7_sail.csv', headers=H(dave)).status_code == 200
+
+    # ---- a bug in a route still answers in JSON
+    r = c.get('/api/_boom', headers=H(admin))
+    assert r.status_code == 500 and r.get_json() == {'error': 'Something went wrong on the server'}, r.data
+
+    # ---- only tracks are served or removed: the sidecars and made-up names are 404, never created
+    day = [s for s in c.get('/api/sessions', headers=H(james)).get_json() if 'solo_am.csv' in s['files']][0]['id']
+    assert c.get(f'/api/sessions/{day}/owners.json', headers=H(james)).status_code == 404
+    assert c.delete(f'/api/sessions/{day}/crew.json', headers=H(admin)).status_code == 404
+    assert c.get('/api/sessions/2030-01-01_nowhere/meta', headers=H(admin)).status_code == 404
+    assert c.put('/api/sessions/2030-01-01_nowhere/crew', headers=H(admin), json={'puck1': 'Bob'}).status_code == 404
+    assert not os.path.exists(os.path.join(tmp, 'data', 'sessions', '2030-01-01_nowhere')), 'no folder made for a made-up session'
+
+    # ---- a session's names, races and course: only for people who can see a track in it; changes only from an owner
+    eve = signup('eve@example.com', 'Eve')          # nobody's friend
+    assert c.get(f'/api/sessions/{day}/crew', headers=H(eve)).status_code == 404
+    assert c.put(f'/api/sessions/{day}/crew', headers=H(eve), json={'puck1': 'Eve'}).status_code == 404
+    assert c.get(f'/api/sessions/{day}/crew', headers=H(dave)).status_code == 200, 'a friend with a track there'
+    assert c.put(f'/api/sessions/{day}/crew', headers=H(dave), json={'solo_am.csv': 'James'}).status_code == 200
+    assert c.get('/api/sailors', headers=H(eve)).get_json() == [], 'no names from sessions Eve can\'t see'
+    assert 'James' in c.get('/api/sailors', headers=H(dave)).get_json()
+    # moving a session needs every owner's say-so (or the admin): Dave shares this day with James
+    assert c.post(f'/api/sessions/{day}/move', headers=H(dave), json={'venue': 'unknown'}).status_code == 403
+    assert c.post(f'/api/sessions/{day}/move', headers=H(eve), json={'venue': 'unknown'}).status_code in (403, 404)
+    # the admin lists owners' emails per track; nobody else does
+    adm = [s for s in c.get('/api/sessions', headers=H(admin)).get_json() if s['id'] == day][0]
+    assert adm['owner_emails']['solo_am.csv'] == 'james@example.com' and adm['owner_emails']['dave.csv'] == 'dave@example.com', adm
+    assert 'owner_emails' not in [s for s in c.get('/api/sessions', headers=H(james)).get_json() if s['id'] == day][0]
+
+    # ---- venues: anyone names an automatic one; a named venue is the admin's to change
+    assert c.put('/api/venues/southport-sc', headers=H(james), json={'name': 'Not Southport'}).status_code == 403
+    assert c.put('/api/venues/southport-sc', headers=H(admin), json={'name': 'Southport SC (Marine Lake)'}).status_code == 200
+    r = c.post('/api/venues', headers=H(james), json={'id': 'near-5340n-00310w', 'name': 'New venue near 53.40, -3.10', 'lat': 53.40, 'lon': -3.10, 'auto': True})
+    assert r.status_code == 201, r.get_json()
+    assert c.put('/api/venues/near-5340n-00310w', headers=H(james), json={'name': 'West Kirby SC'}).status_code == 200
+    assert c.put('/api/venues/near-5340n-00310w', headers=H(james), json={'name': 'West Kirby'}).status_code == 403, 'named now: admin only'
+
+    # ---- moving a session: owners and names follow the files, renamed ones included; the puck list follows too
+    r1 = upload(james, 'puck4_away.csv', track(25, 4.0, t0=T0 + 2 * 86400_000), boat='Solo 5843')
+    r = c.post(f"/api/sessions/{r1['session']}/move", headers=H(james), json={'venue': 'near-5340n-00310w'})
+    assert r.status_code == 200 and r.get_json()['session'].endswith('_near-5340n-00310w'), r.get_json()
+    moved = r.get_json()['session']
+    assert owners_json(moved)['puck4_away.csv']['email'] == 'james@example.com'
+    r2 = upload(james, 'puck4_away.csv', track(25, 4.0, t0=T0 + 2 * 86400_000 + 3600_000))
+    assert r2['session'] != moved
+    assert c.post(f"/api/sessions/{r2['session']}/move", headers=H(james), json={'venue': 'near-5340n-00310w'}).get_json()['session'] == moved
+    o = owners_json(moved)
+    assert set(o) == {'puck4_away.csv', 'puck4_away-2.csv'} and o['puck4_away-2.csv']['name'] == 'James', o
+    p4 = [p for p in c.get('/api/pucks', headers=H(james)).get_json()['pucks'] if p['puck'] == 4][0]
+    assert p4['last_upload']['session'] == moved and p4['last_upload']['file'] == 'puck4_away-2.csv', p4
+    for f in ('puck4_away.csv', 'puck4_away-2.csv'): assert c.delete(f'/api/sessions/{moved}/{f}', headers=H(james)).status_code == 200
+
+    # ---- a puck key only speaks for the puck it was issued to
+    key8 = c.post('/api/pucks/keys', headers=H(dave), json={'puck': 8}).get_json()['key']
+    r = c.post('/api/upload', headers={'X-Puck-Key': key8}, data={'file': (io.BytesIO(track(25, t0=T0 + 3 * 86400_000)), 'puck5_x.csv')}, content_type='multipart/form-data')
+    assert r.status_code == 200 and 'puck5_x.csv' not in owners_json(r.get_json()['session']), 'not Dave\'s track: the key is for puck 8'
+    assert c.post('/api/pucks/checkin', json={'puck': 5}, headers={'X-Puck-Key': key8}).status_code == 200
+    assert [p['owner'] for p in c.get('/api/pucks', headers=H(admin)).get_json()['pucks'] if p['puck'] == 5] == [None]
+    assert c.delete(f"/api/sessions/{r.get_json()['session']}/puck5_x.csv", headers=H(admin)).status_code == 200
+
+    # ---- the puck list only shows uploads you could open
+    r = upload(dave, 'puck9_secret.csv', track(25, t0=T0 + 4 * 86400_000), visibility='private')
+    p9 = lambda tok: [p['last_upload'] for p in c.get('/api/pucks', headers=H(tok)).get_json()['pucks'] if p['puck'] == 9]
+    assert p9(dave)[0]['file'] == 'puck9_secret.csv' and p9(admin)[0]['file'] == 'puck9_secret.csv'
+    assert p9(james) == [None], 'private: not for James'
+    assert c.delete(f"/api/sessions/{r['session']}/puck9_secret.csv", headers=H(dave)).status_code == 200
+
+    # ---- WiFi settings: the admin's, once accounts are on; this box can't change WiFi anyway
+    assert c.get('/api/wifi/scan', headers=H(james)).status_code == 403
+    assert c.get('/api/wifi/scan', headers=H(admin)).get_json()['available'] is False
+    st = c.get('/api/dock/status', headers=H(james)).get_json()
+    assert st['can_manage_wifi'] is False and 'nas' not in st and 'pin_required' not in st, st
+
+    # ---- the admin deletes a user: the account goes, the tracks stay as club tracks owned by name
+    tom = signup('tom@example.com', 'Tom')
+    rt = upload(tom, 'tom.csv', track(25, t0=T0 + 5 * 86400_000))
+    tid = [u['id'] for u in c.get('/api/admin/users', headers=H(admin)).get_json()['users'] if u['email'] == 'tom@example.com'][0]
+    assert c.delete(f'/api/admin/users/{tid}', headers=H(eve)).status_code == 403
+    r = c.delete(f'/api/admin/users/{tid}', headers=H(admin))
+    assert r.status_code == 200 and r.get_json()['tracks_kept'] == 1, r.get_json()
+    assert owners_json(rt['session'])['tom.csv'] == {'name': 'Tom', 'visibility': 'friends'}
+    s_tom = [s for s in c.get('/api/sessions', headers=H(eve)).get_json() if s['id'] == rt['session']]
+    assert s_tom and s_tom[0]['owners']['tom.csv'] == 'Tom' and 'tom.csv' in s_tom[0]['mine'], 'a club track now: everyone sees it'
+    assert c.get('/api/stats', headers=H(tom)).status_code == 401
+    assert c.delete(f"/api/sessions/{rt['session']}/tom.csv", headers=H(admin)).status_code == 200
+
+    # ---- with accounts off, the account-only routes don't exist
+    accounts.ENABLED = False
+    try:
+        assert c.post('/api/auth/signup', json={'email': 'x@example.com', 'name': 'X', 'password': 'password1'}).status_code == 404
+        assert c.get('/api/friends').status_code == 404 and c.get('/api/pucks/keys').status_code == 404
+        assert c.post('/api/auth/forgot', json={'email': 'x@example.com'}).status_code == 404
+        assert c.get('/api/sessions').status_code == 200, 'everything else works without a sign-in'
+    finally:
+        accounts.ENABLED = True
 
     # ---- export: account details and only your own tracks
     r = c.get('/api/me/export', headers=H(james))
