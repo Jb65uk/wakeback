@@ -4,6 +4,7 @@
 Usage:  python tools/pull_track.py              # finds the puck's USB port by itself
         python tools/pull_track.py --port COM5  # or name it (Windows COMx, Mac /dev/cu.usbmodem..., Linux /dev/ttyACM0)
         python tools/pull_track.py --upload     # also send it to the dock server running on this computer
+        python tools/pull_track.py --upload --key <puck key>   # ...with the key the app issued (accounts on)
 
 Needs:  pip install pyserial
 Close the PlatformIO serial monitor first: only one program can use the port at a time.
@@ -19,6 +20,7 @@ ap.add_argument('--port')
 ap.add_argument('--out', default='.')
 ap.add_argument('--upload', action='store_true', help='also upload to the dock (default http://localhost:5000)')
 ap.add_argument('--dock', default='http://localhost:5000')
+ap.add_argument('--key', default='', help='X-Puck-Key for the upload, when the server has accounts on')
 a = ap.parse_args()
 
 port = a.port
@@ -53,6 +55,12 @@ with open(path, 'w') as f: f.write('\n'.join(lines) + '\n')
 print(f'Saved {path}: {len(lines) - 1} points, about {(len(lines) - 1) / 600:.1f} minutes. Drop it on the viewer to see it.')
 
 if a.upload:
-    import subprocess
-    here = os.path.dirname(os.path.abspath(__file__))
-    subprocess.run([sys.executable, os.path.join(here, 'fake_puck_upload.py'), path, '--dock', a.dock])
+    import urllib.error
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from fake_puck_upload import upload
+    try:
+        r = upload(path, a.dock, key=a.key); print(f'Uploaded as {r.get("file")} in {r.get("session")}')
+    except urllib.error.HTTPError as e:
+        print(f'Upload refused: {e.code} {e.read().decode(errors="replace").strip()}')
+    except OSError as e:
+        print(f'Could not reach {a.dock}: {e}')

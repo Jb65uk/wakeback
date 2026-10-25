@@ -9,32 +9,27 @@ What it does (Ctrl+C to stop):
   P5  on the pad but its charger isn't working (battery slowly dropping)
   P6  has never checked in (shows when the dock runs with WAKEBACK_FLEET=6)
 
-Usage: python tools/fake_pucks.py [--dock http://localhost:5000] [--fast]
+Usage: python tools/fake_pucks.py [--dock http://localhost:5000] [--fast] [--key <puck key>]
 """
-import argparse, json, os, random, sys, time, urllib.request, uuid
+import argparse, json, os, random, sys, time, urllib.error, urllib.request
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gen_fake_data import sim_boat, write_csv   # reuse the boat simulator
+from fake_puck_upload import upload
 
 ap = argparse.ArgumentParser()
 ap.add_argument('--dock', default='http://localhost:5000')
 ap.add_argument('--fast', action='store_true', help='check in every 3 s instead of 30 s (for demos)')
+ap.add_argument('--key', default='', help='X-Puck-Key sent with every check-in and upload (a key the app issued for puck 4, if the server has accounts on)')
 a = ap.parse_args()
 EVERY = 3 if a.fast else 30
 
 def post_json(path, body):
-    req = urllib.request.Request(a.dock + path, data=json.dumps(body).encode(), method='POST', headers={'Content-Type': 'application/json'})
+    headers = {'Content-Type': 'application/json'}
+    if a.key: headers['X-Puck-Key'] = a.key
+    req = urllib.request.Request(a.dock + path, data=json.dumps(body).encode(), method='POST', headers=headers)
     with urllib.request.urlopen(req, timeout=5) as r: return json.loads(r.read())
-
-def upload(path, puck):
-    boundary = uuid.uuid4().hex
-    with open(path, 'rb') as f: data = f.read()
-    body = (f'--{boundary}\r\nContent-Disposition: form-data; name="puck"\r\n\r\npuck{puck}\r\n'
-            f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{os.path.basename(path)}"\r\n'
-            'Content-Type: text/csv\r\n\r\n').encode() + data + f'\r\n--{boundary}--\r\n'.encode()
-    req = urllib.request.Request(a.dock + '/api/upload', data=body, method='POST', headers={'Content-Type': f'multipart/form-data; boundary={boundary}'})
-    with urllib.request.urlopen(req, timeout=30) as r: return json.loads(r.read())
 
 def mv_for(pct):
     # rough inverse of the dock's LiPo table
@@ -67,7 +62,10 @@ try:
                     write_csv(path, sim_boat(4.5, random.randint(1, 999), 0, 12, wind=260, t0=t0, laps=1))
                     try:
                         post_json('/api/pucks/checkin', dict(puck=n, battery_mv=mv_for(p['pct']), charging='charging', on_pad=True, free_kb=p['free'], total_kb=14336, fw=p['fw'], pending=1))
-                        r = upload(path, n); print(f'P{n} docked and uploaded {r.get("file")} to {r.get("session")}')
+                        r = upload(path, a.dock, n, a.key); print(f'P{n} docked and uploaded {r.get("file")} to {r.get("session")}')
+                    except urllib.error.HTTPError as e:
+                        # the server said no (401 without a key when accounts are on): the other pucks carry on
+                        print(f'P{n} upload refused: {e.code} {e.read().decode(errors="replace").strip()}')
                     finally:
                         os.remove(path)
                 continue
@@ -79,6 +77,8 @@ try:
             try:
                 post_json('/api/pucks/checkin', dict(puck=n, battery_mv=mv_for(p['pct']), charging=p['state'], on_pad=True,
                                                    free_kb=p['free'], total_kb=14336, fw=p['fw'], pending=0, rssi=random.randint(-60, -40)))
+            except urllib.error.HTTPError as e:
+                print(f'P{n} check-in refused: {e.code}')
             except OSError as e:
                 print(f'dock not reachable: {e}'); break
         time.sleep(EVERY)
