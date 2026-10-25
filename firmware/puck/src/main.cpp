@@ -170,7 +170,9 @@ bool appPendingVerify = false;
 
 // how often to try the dock, by situation
 static const uint32_t PAD_RETRY_MS = 60000;              // on the pad, dock seen recently: once a minute (radio off in between, so the pad can actually charge it)
-static const uint32_t PAD_GPS_NAP_MS = 60000;            // on the pad for this long = indoors on the charger: GPS to standby until it's lifted
+static const uint32_t PAD_GPS_NAP_MS = 60000;
+static const uint32_t HOLD_MS = 5UL * 60 * 1000;         // the app asked (in a check-in reply) to keep WiFi up: this long, checking in every 10 s
+uint32_t holdUntil = 0;            // on the pad for this long = indoors on the charger: GPS to standby until it's lifted
 static const uint32_t PAD_RETRY_SLOW_MS = 2UL * 60 * 1000;   // on the pad, dock not seen for a while: two minutes
 static const uint32_t PAD_RECENT_MS = 10UL * 60 * 1000;  // "seen recently" = a join worked in the last ten minutes
 static const uint32_t AFTER_SAIL_RETRY_MS = 60000, AFTER_SAIL_FOR_MS = 15UL * 60 * 1000;   // tracks waiting: every minute for 15 min after a sail, then OFFPAD_RETRY_MS
@@ -661,6 +663,8 @@ static bool checkin() {
   if (code != 200) return false;
   takeDockTime(reply);
   dockRefused = false;
+  // the app wants to open our page: keep the radio up for a while and check in more often, so it can find us
+  if (reply.indexOf("\"hold\":true") >= 0 || reply.indexOf("\"hold\": true") >= 0) { holdUntil = millis() + HOLD_MS; Serial.println("Dock asked us to stay on."); }
   return replyOk(reply);
 }
 
@@ -786,7 +790,8 @@ static void wifiTick() {
     if (!dockOk && m - wSince > (onPad ? PAD_HELLO_FOR_MS : OFFPAD_TRY_FOR_MS)) { wifiOff(); wantLiftCheckin = false; }
     return;
   }
-  if (m - lastCheckin > CHECKIN_MS || lastCheckin == 0) {
+  const bool held = holdUntil && (int32_t)(holdUntil - m) > 0;
+  if (m - lastCheckin > (held ? 10000UL : CHECKIN_MS) || lastCheckin == 0) {
     lastCheckin = m;
     if (checkin()) {
       wantLiftCheckin = false;
@@ -799,7 +804,7 @@ static void wifiTick() {
   if (dockRefused) { wifiOff(); wantLiftCheckin = false; return; }
   // nothing left to say: let the radio go. On the pad that's most of the time: a check-in a minute with the
   // radio off in between leaves the pad's few hundred mA for charging.
-  if (!wantLiftCheckin && pendingCount() == 0 && !uploading) wifiOff();
+  if (!wantLiftCheckin && pendingCount() == 0 && !uploading && !(holdUntil && (int32_t)(holdUntil - m) > 0)) wifiOff();
 }
 
 // ---------- the web page and its API ----------

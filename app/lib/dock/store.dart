@@ -1006,8 +1006,13 @@ class DockStore {
       m['puck$puckNo'] = r;
       await _writeJson(_pucksFile, m);
     });
-    return {'ok': true, 'time_ms': now};
+    final hold = holdRequests.remove(puckNo) != null;
+    return {'ok': true, 'time_ms': now, if (hold) 'hold': true};
   }
+
+  /// Pucks the app wants to talk to: their next check-in reply tells them to keep WiFi up for a while.
+  /// Set by PuckReach, cleared when the puck has been told (one check-in).
+  final Map<int, int> holdRequests = {};
 
   Future<String?> _lastSailor(String session, String? fname) async {
     final j = await _readJson(File('${dayDir(session).path}/crew.json'));
