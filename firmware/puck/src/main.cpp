@@ -75,6 +75,7 @@ static const uint32_t CHECKIN_MS = 30000;
 static const uint32_t OFFPAD_RETRY_MS = 5UL * 60 * 1000, OFFPAD_TRY_FOR_MS = 25000;   // off the pad with tracks waiting: short tries
 static const uint32_t FW_CHECK_MS = 60UL * 60 * 1000;
 static const uint32_t FLASH_RESERVE = 96 * 1024;             // stop writing when this little is left
+static const int      REC_HZ = 5;                            // points a second while moving (1 while still): plenty for a dinghy, about 4.5 h of sailing in 4.5 MB
 
 static const char *TRK_DIR = "/trk";
 static const int DOCK_PORT = 5000;
@@ -112,10 +113,9 @@ struct Settings {
   int puck = 1;
   String ssid = "wakeback", pass = "", key = "";
   float zeroHeel = 0, zeroPitch = 0, twist = 0;
-  bool autoTwist = true, twistLearned = false, flipHeel = false, flipPitch = false;
+  bool twistLearned = false, flipHeel = false;
   int orientation = 0;               // 0 unknown, 1 deck (IMU up), 2 under the thwart (IMU down)
   bool autoRec = true, autoOff = true;
-  int rate = 5;                      // points a second while moving: 5 is plenty for a dinghy and gives ~9 h of storage
   bool configured = false;           // someone has set it up (page or app): only then does the setup WiFi stay down at power-up
 } S;
 
@@ -140,12 +140,11 @@ static void loadSettings() {
   S.key = prefs.getString("key", "");
   S.zeroHeel = prefs.getFloat("zh", 0); S.zeroPitch = prefs.getFloat("zp", 0);
   S.twist = prefs.getFloat("twist", 0);
-  S.autoTwist = prefs.getBool("atw", true); S.twistLearned = prefs.getBool("twl", false);
-  S.flipHeel = prefs.getBool("flip", false); S.flipPitch = prefs.getBool("flipp", false);
+  S.twistLearned = prefs.getBool("twl", false);
+  S.flipHeel = prefs.getBool("flip", false);
   S.orientation = prefs.getInt("orient", 0);
   S.autoRec = prefs.getBool("arec", true); S.autoOff = prefs.getBool("auto", true);
-  S.rate = prefs.getInt("rate", 5);
-  if (S.rate != 10 && S.rate != 5 && S.rate != 2) S.rate = 5;
+  if (prefs.isKey("rate")) prefs.remove("rate");       // the rate setting is gone: 5 Hz moving, 1 Hz still, always
 }
 
 static void saveSettings() {
@@ -153,11 +152,10 @@ static void saveSettings() {
   prefs.putString("ssid", S.ssid); prefs.putString("pass", S.pass); prefs.putString("key", S.key);
   prefs.putFloat("zh", S.zeroHeel); prefs.putFloat("zp", S.zeroPitch);
   prefs.putFloat("twist", S.twist);
-  prefs.putBool("atw", S.autoTwist); prefs.putBool("twl", S.twistLearned);
-  prefs.putBool("flip", S.flipHeel); prefs.putBool("flipp", S.flipPitch);
+  prefs.putBool("twl", S.twistLearned);
+  prefs.putBool("flip", S.flipHeel);
   prefs.putInt("orient", S.orientation);
   prefs.putBool("arec", S.autoRec); prefs.putBool("auto", S.autoOff);
-  prefs.putInt("rate", S.rate);
   if (S.configured) prefs.putBool("cfg", true);
 }
 
@@ -301,7 +299,7 @@ static void pollGps() {
 // ---------- IMU ----------
 static bool enableImuReports() {
   bool ok = bno.enableReport(SH2_GAME_ROTATION_VECTOR, 20000);        // 50 Hz, gyro + accel: heel and pitch
-  if (S.autoTwist) bno.enableReport(SH2_ROTATION_VECTOR, 100000);     // 10 Hz, with the magnetometer: heading, for the twist
+  bno.enableReport(SH2_ROTATION_VECTOR, 100000);                      // 10 Hz, with the magnetometer: heading, so the twist can be learnt
   return ok;
 }
 static bool startImu() {
@@ -328,7 +326,6 @@ static void boatAngles() {
   float heel = atan2f(-upStb, upZ) * RAD_TO_DEG;        // + = heeled to starboard
   float pitch = atan2f(-upBow, upZ) * RAD_TO_DEG;       // + = bow up
   if (S.flipHeel) heel = -heel;
-  if (S.flipPitch) pitch = -pitch;
   imu.heel = wrap180(heel - S.zeroHeel);
   imu.pitch = wrap180(pitch - S.zeroPitch);
 }
@@ -373,7 +370,7 @@ static void learnMounting() {
   // only a boat really under way counts: 2 kn or more for 15 s running, with a clean fix (GPS jitter on the bench can spike to 4 kn)
   const bool underWay = gps.fix >= 3 && gps.sogKn > 2.0f && gps.hAccM < 3;
   goingFor = underWay ? goingFor + 1 : 0;
-  if (S.autoTwist && !isnan(imu.headingX) && imu.magStatus >= 2 && goingFor >= 15) {
+  if (!isnan(imu.headingX) && imu.magStatus >= 2 && goingFor >= 15) {
     const float turn = fabsf(wrap180(gps.cogDeg - lastCog));
     if (turn < 3) {                                           // sailing straight: the puck's X is twist degrees clockwise of the course
       const float err = wrap180((imu.headingX - gps.cogDeg) - S.twist);
@@ -445,7 +442,7 @@ static void onFix() {
   const uint32_t m = millis();
   const uint64_t t = clockSet ? nowMs() : gps.tMs;
   const bool moving = gps.sogKn > STILL_KN;
-  const uint32_t gap = moving ? 1000 / S.rate : 1000;
+  const uint32_t gap = moving ? 1000 / REC_HZ : 1000;
   if (gps.fix >= 2 && t && (m - lastPointMs >= gap - 5)) {
     lastPointMs = m;
     char line[112];
@@ -772,15 +769,15 @@ static void okMsg(const char *msg) { sendJson(String("{\"ok\":true,\"msg\":\"") 
 static String statusJson() {
   String j; j.reserve(1800);
   char b[700];
-  snprintf(b, sizeof b, "{\"fw\":\"%s\",\"puck\":%d,\"uptime_s\":%lu,\"time_ms\":%llu,\"autorec\":%s,\"autooff\":%s,\"rate\":%d,\"autotwist\":%s,",
-           FW, S.puck, (unsigned long)(millis() / 1000), (unsigned long long)nowMs(), S.autoRec ? "true" : "false", S.autoOff ? "true" : "false", S.rate, S.autoTwist ? "true" : "false");
+  snprintf(b, sizeof b, "{\"fw\":\"%s\",\"puck\":%d,\"uptime_s\":%lu,\"time_ms\":%llu,\"autorec\":%s,\"autooff\":%s,",
+           FW, S.puck, (unsigned long)(millis() / 1000), (unsigned long long)nowMs(), S.autoRec ? "true" : "false", S.autoOff ? "true" : "false");
   j += b;
   snprintf(b, sizeof b, "\"gps\":{\"ok\":%s,\"fix\":%d,\"sats\":%d,\"lat\":%.7f,\"lon\":%.7f,\"sog\":%.2f,\"cog\":%.1f,\"hacc\":%.1f,\"hz\":%.0f},",
            gpsOk ? "true" : "false", gps.fix, gps.sats, gps.lat / 1e7, gps.lon / 1e7, gps.sogKn, gps.cogDeg, gps.hAccM, gps.rateHz);
   j += b;
-  snprintf(b, sizeof b, "\"imu\":{\"ok\":%s,\"heel\":%.1f,\"pitch\":%.1f,\"heading\":%.0f,\"twist\":%.1f,\"twist_learned\":%s,\"orientation\":\"%s\",\"mag\":%d,\"zero_heel\":%.1f,\"zero_pitch\":%.1f,\"flip\":%s,\"flip_pitch\":%s},",
+  snprintf(b, sizeof b, "\"imu\":{\"ok\":%s,\"heel\":%.1f,\"pitch\":%.1f,\"heading\":%.0f,\"twist\":%.1f,\"twist_learned\":%s,\"orientation\":\"%s\",\"mag\":%d,\"zero_heel\":%.1f,\"zero_pitch\":%.1f,\"flip\":%s},",
            imuOk ? "true" : "false", imu.heel, imu.pitch, isnan(imu.headingX) ? -1.0f : fmodf(imu.headingX - S.twist + 720, 360), S.twist, S.twistLearned ? "true" : "false",
-           S.orientation == 1 ? "deck" : S.orientation == 2 ? "thwart" : "unknown", imu.magStatus, S.zeroHeel, S.zeroPitch, S.flipHeel ? "true" : "false", S.flipPitch ? "true" : "false");
+           S.orientation == 1 ? "deck" : S.orientation == 2 ? "thwart" : "unknown", imu.magStatus, S.zeroHeel, S.zeroPitch, S.flipHeel ? "true" : "false");
   j += b;
   snprintf(b, sizeof b, "\"batt\":{\"mv\":%d,\"pct\":%d,\"on_pad\":%s,\"charging\":\"%s\"},\"rec\":{\"on\":%s,\"secs\":%lu,\"lines\":%lu,\"file\":\"%s\"},",
            (int)battMv, batteryPct(battMv), onPad ? "true" : "false", !onPad ? "not" : battFull ? "full" : "charging",
@@ -823,8 +820,6 @@ static void startWeb() {
     if (web.hasArg("key")) S.key = web.arg("key").substring(0, 64);
     if (web.hasArg("autorec")) S.autoRec = web.arg("autorec") == "1";
     if (web.hasArg("autooff")) S.autoOff = web.arg("autooff") == "1";
-    if (web.hasArg("autotwist")) { S.autoTwist = web.arg("autotwist") == "1"; if (imuOk) enableImuReports(); }
-    if (web.hasArg("rate")) { const int r = web.arg("rate").toInt(); if (r == 10 || r == 5 || r == 2) S.rate = r; }
     S.configured = true;                        // someone has been here: no more setup WiFi at power-up
     saveSettings(); okMsg("Saved.");
   });
@@ -833,9 +828,13 @@ static void startWeb() {
     S.zeroHeel = wrap180(S.zeroHeel + imu.heel); S.zeroPitch = wrap180(S.zeroPitch + imu.pitch); saveSettings(); okMsg("Level set: heel and pitch read 0 here.");
   });
   web.on("/api/cal/flip", HTTP_POST, [] { S.flipHeel = !S.flipHeel; S.zeroHeel = -S.zeroHeel; saveSettings(); okMsg(S.flipHeel ? "Heel sign flipped." : "Heel sign back to normal."); });
-  web.on("/api/cal/flippitch", HTTP_POST, [] { S.flipPitch = !S.flipPitch; S.zeroPitch = -S.zeroPitch; saveSettings(); okMsg(S.flipPitch ? "Pitch sign flipped." : "Pitch sign back to normal."); });
+  web.on("/api/cal/orient", HTTP_POST, [] {
+    // told which way up it is: the learner still corrects it later if gravity says otherwise for half a minute
+    const int o = web.arg("o").toInt(); if (o != 1 && o != 2) { web.send(400, "text/plain", "o must be 1 (deck) or 2 (thwart)"); return; }
+    S.orientation = o; saveSettings(); okMsg(o == 1 ? "Mounted on deck." : "Mounted under the thwart.");
+  });
   web.on("/api/cal/twist", HTTP_POST, [] { S.twist = wrap180(web.arg("deg").toFloat()); S.twistLearned = true; saveSettings(); okMsg("Twist set."); });
-  web.on("/api/cal/reset", HTTP_POST, [] { S.zeroHeel = S.zeroPitch = S.twist = 0; S.twistLearned = false; S.flipHeel = false; S.flipPitch = false; S.orientation = 0; saveSettings(); okMsg("Calibration cleared."); });
+  web.on("/api/cal/reset", HTTP_POST, [] { S.zeroHeel = S.zeroPitch = S.twist = 0; S.twistLearned = false; S.flipHeel = false; S.orientation = 0; saveSettings(); okMsg("Calibration cleared."); });
   web.on("/api/rec", HTTP_POST, [] {
     if (web.arg("op") == "start") { startRecording(true); okMsg(recording ? "Recording." : flashFull ? "Flash is full." : "Couldn't start."); }
     else { stopRecording("page"); okMsg("Stopped."); }
@@ -969,8 +968,8 @@ static void report() {
   if (gpsOk) Serial.printf(" at %lu baud, 10 Hz, sea mode\n", (unsigned long)gpsBaud);
   Serial.printf("IMU: %s\n", imuOk ? "found (BNO085)" : "NOT FOUND");
   Serial.printf("Storage: %s %.1f MB free, %d track(s)\n", fsOk ? "ok," : "NOT WORKING", freeBytes() / 1048576.0, trackCount());
-  Serial.printf("Dock WiFi: \"%s\"%s. Auto-record %s, %d Hz. Twist %.0f%s, mounted %s.\n", S.ssid.c_str(), S.pass.length() ? "" : " (no password)",
-                S.autoRec ? "on" : "off", S.rate, S.twist, S.twistLearned ? "" : " (not learnt yet)", S.orientation == 2 ? "under the thwart" : S.orientation == 1 ? "on deck" : "not known yet");
+  Serial.printf("Dock WiFi: \"%s\"%s. Auto-record %s. Twist %.0f%s, mounted %s.\n", S.ssid.c_str(), S.pass.length() ? "" : " (no password)",
+                S.autoRec ? "on" : "off", S.twist, S.twistLearned ? "" : " (not learnt yet)", S.orientation == 2 ? "under the thwart" : S.orientation == 1 ? "on deck" : "not known yet");
 }
 static void command(String c) {
   c.trim(); if (!c.length()) return;
