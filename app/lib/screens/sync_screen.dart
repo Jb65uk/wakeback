@@ -6,8 +6,9 @@ import 'package:share_plus/share_plus.dart';
 import '../app_state.dart';
 import '../sync/server_sync.dart';
 import '../widgets/common.dart';
-import 'sessions_screen.dart' show niceDate;
+import '../widgets/format.dart';
 import 'web_page.dart';
+import 'welcome_screen.dart';
 
 class SyncScreen extends StatefulWidget {
   const SyncScreen({super.key});
@@ -16,7 +17,6 @@ class SyncScreen extends StatefulWidget {
 }
 
 class _SyncScreenState extends State<SyncScreen> {
-  late final TextEditingController _url = TextEditingController(text: app.serverUrl);
   List<DayCompare>? _days;
   String? _error, _errorDetail;
   bool _checking = false;
@@ -30,13 +30,7 @@ class _SyncScreenState extends State<SyncScreen> {
     if (app.signedIn && !app.demoMode) WidgetsBinding.instance.addPostFrameCallback((_) => _check());
   }
 
-  @override
-  void dispose() {
-    _url.dispose();
-    super.dispose();
-  }
-
-  ServerSync? get _sync => app.serverUrl.isEmpty || app.demoMode ? null : ServerSync(app.serverUrl, app.store, token: app.token);
+  ServerSync? get _sync => app.signedIn && !app.demoMode ? ServerSync(app.serverUrl, app.store, token: app.token) : null;
 
   /// "Sat 3 Oct 2026 · Southport SC" rather than the folder name.
   String _label(DayCompare c) {
@@ -44,23 +38,19 @@ class _SyncScreenState extends State<SyncScreen> {
     return c.venueName.isEmpty ? niceDate(c.date) : '${niceDate(c.date)} · ${c.venueName}';
   }
 
-  Future<void> _lostSession(Object e) async {
-    if (e is SyncException && e.signedOut && app.signedIn) {
-      await app.signOut(tellServer: false);
-      if (mounted) toast(context, 'Your sign-in has expired. Log in again from the You tab.', error: true);
-    }
+  /// The cloud on the Sails tab follows what happened here; a sign-in the server no longer knows ends here too.
+  Future<void> _failed(Object e) async {
+    final wasIn = app.signedIn;
+    await app.syncFailed(e);
+    if (wasIn && !app.signedIn && mounted) toast(context, 'Your sign-in has expired. Log in again from the You tab.', error: true);
   }
 
   void _showError(Object e) {
     _error = e is SyncException ? e.message : 'Something went wrong while syncing.';
-    _errorDetail = e is SyncException ? e.detail : '$e';
+    _errorDetail = e is SyncException ? e.detail : friendly(e);
   }
 
   Future<void> _check() async {
-    if (!app.signedIn) {
-      app.serverUrl = _url.text;
-      _url.text = app.serverUrl;
-    }
     final s = _sync;
     if (s == null) return;
     setState(() {
@@ -72,7 +62,7 @@ class _SyncScreenState extends State<SyncScreen> {
       if (mounted) setState(() => _days = d);
     } catch (e) {
       if (mounted) setState(() => _showError(e));
-      await _lostSession(e);
+      await _failed(e);
     }
     if (mounted) setState(() => _checking = false);
   }
@@ -94,6 +84,9 @@ class _SyncScreenState extends State<SyncScreen> {
         ...r.changed,
       ];
       if (mounted) setState(() => _done[c.day] = parts.isEmpty ? 'Up to date' : parts.join(' · '));
+      if (r.conflicts.isNotEmpty) r.conflictDays.add(c.day);
+      app.syncWent(r); // the cloud on the Sails tab
+      if (r.up + r.down > 0) app.tracksChanged(); // the Sails tab reloads
       if (r.conflicts.isNotEmpty && mounted) {
         setState(() => _busy.remove(c.day));
         await _resolve(c, r.conflicts);
@@ -106,7 +99,7 @@ class _SyncScreenState extends State<SyncScreen> {
           _showError(e);
         });
       }
-      await _lostSession(e);
+      await _failed(e);
     }
     if (mounted) setState(() => _busy.remove(c.day));
     await _refreshQuietly();
@@ -172,16 +165,20 @@ class _SyncScreenState extends State<SyncScreen> {
     return ListenableBuilder(listenable: app, builder: (context, _) => _build(context));
   }
 
+  Future<void> _logIn() async {
+    final ok = await Navigator.push<bool>(context, MaterialPageRoute(builder: (_) => const WelcomeScreen(fromSetup: true)));
+    if (ok == true && mounted) await _check();
+  }
+
   Widget _build(BuildContext context) {
     final t = Theme.of(context);
-    final hasServer = app.serverUrl.isNotEmpty;
     final days = _days;
     final allDone = days != null && days.every((c) => c.tracksInSync);
     return Scaffold(
       appBar: AppBar(
         title: const Text('Sync'),
         actions: [
-          if (hasServer && !app.demoMode)
+          if (!app.demoMode)
             PopupMenuButton<String>(
               onSelected: (v) {
                 if (v == 'open') Navigator.push(context, MaterialPageRoute<void>(builder: (_) => ServerViewerPage(url: app.serverUrl)));
@@ -189,7 +186,7 @@ class _SyncScreenState extends State<SyncScreen> {
               },
               itemBuilder: (_) => const [
                 PopupMenuItem(value: 'invite', child: ListTile(leading: Icon(Icons.person_add_alt), title: Text('Invite a mate'), contentPadding: EdgeInsets.zero)),
-                PopupMenuItem(value: 'open', child: ListTile(leading: Icon(Icons.open_in_browser), title: Text('Open the server in a browser'), contentPadding: EdgeInsets.zero)),
+                PopupMenuItem(value: 'open', child: ListTile(leading: Icon(Icons.public), title: Text('Open WakeBack online'), contentPadding: EdgeInsets.zero)),
               ],
             ),
         ],
@@ -228,33 +225,29 @@ class _SyncScreenState extends State<SyncScreen> {
                             ),
                           ),
                         ])
-                      else ...[
-                        TextField(
-                          controller: _url,
-                          keyboardType: TextInputType.url,
-                          autocorrect: false,
-                          decoration: const InputDecoration(
-                            labelText: 'Server address',
-                            hintText: 'https://wakeback.bridgesolutions.uk',
-                            prefixIcon: Icon(Icons.dns_outlined),
-                          ),
-                          onSubmitted: (_) => _check(),
-                        ),
-                        const SizedBox(height: 6),
-                        const Hint('Not signed in: this syncs with a dock Pi or a server without accounts. For your account, sign in from the You tab.'),
-                      ],
+                      else
+                        Row(children: [
+                          Icon(Icons.cloud_outlined, color: t.colorScheme.onSurfaceVariant),
+                          const SizedBox(width: 10),
+                          Expanded(child: Text('Sign in to sync your sails', style: t.textTheme.titleMedium)),
+                        ]),
                       const SizedBox(height: 6),
-                      Hint(app.signedIn ? 'Your sails sync on their own. Signed in as ${app.account!.name}.' : 'Copies tracks, names, races and course both ways.'),
+                      Hint(app.signedIn
+                          ? 'Your sails sync on their own. Signed in as ${app.account!.name}.'
+                          : 'Your sails, names, races and courses then follow you to your other devices and your friends.'),
                       const SizedBox(height: 12),
                       Wrap(spacing: 8, runSpacing: 8, children: [
-                        FilledButton.icon(
-                          onPressed: _checking ? null : _check,
-                          icon: _checking
-                              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                              : const Icon(Icons.refresh),
-                          label: Text(app.signedIn ? 'Check again' : 'Check'),
-                        ),
-                        if (hasServer && (days?.isNotEmpty ?? false))
+                        if (app.signedIn)
+                          FilledButton.icon(
+                            onPressed: _checking ? null : _check,
+                            icon: _checking
+                                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                                : const Icon(Icons.refresh),
+                            label: const Text('Check again'),
+                          )
+                        else
+                          FilledButton.icon(onPressed: _logIn, icon: const Icon(Icons.login), label: const Text('Log in or create account')),
+                        if (app.signedIn && (days?.isNotEmpty ?? false))
                           FilledButton.tonalIcon(onPressed: _busy.isNotEmpty ? null : _syncAll, icon: const Icon(Icons.sync), label: const Text('Sync all')),
                       ]),
                     ]),
