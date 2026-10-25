@@ -48,8 +48,9 @@ club pucks ─► dock Pi at the club ──────────────
    The puck puts up its own WiFi `wakeback-puck-N` (first power-up, or hold the button 6 s) with a setup page:
    live numbers, calibration, the dock/hotspot WiFi name + password, puck number, auto-record, tracks, firmware
    update. It records by itself on movement-from-rest (no speed threshold), uploads to the dock or the app over
-   WiFi and deletes once accepted, sleeps after 30 min still (button or the pad wakes it). Already sends
-   `X-Puck-Key` if one is set; the server doesn't issue or check keys yet.
+   WiFi and deletes once accepted, sleeps after 30 min still (button or the pad wakes it). Sends
+   `X-Puck-Key` if one is set; the server issues keys (`/api/pucks/keys`) and checks them on every check-in
+   and upload, for the puck number they were issued to.
    **Push button on mk1** ✅ (21 Oct): the first case has a 12 mm waterproof momentary button (ring LED) in the
    side wall instead of the magnet idea: tap = record on/off, hold 2 s = sleep, press = wake, 30 min still = sleeps
    itself. `hardware/case` (flat boss, hole, shorter lid thread, 2 mm taller overall) and `firmware/bench_test` (D2 button, D9 ring LED).
