@@ -14,14 +14,7 @@
 //   Push button     D2 (GPIO3) -> switch -> GND
 //   Ring LED        D9 (GPIO8) -> 100R -> ring LED+ ; ring LED- -> GND   (only if the button has one)
 //
-// The button and the LED are described in README.md (the one place); briefly: tap = start/stop recording by hand.
-//              hold 2 s = three blinks, let go -> the puck sleeps.
-//              keep holding to 6 s = five quick blinks -> setup WiFi "wakeback-puck-N" for 10 minutes.
-//              press when asleep = wakes (a knock shorter than 0.3 s doesn't). Putting it on the pad wakes it too.
-//
-// Status LED (ring LED copies it; on the pad the ring breathes while charging, solid when full):
-//   slow blink = no GPS fix     1 blink/s = fix, waiting     double blink = recording
-//   fast blink = setup mode     steady on = talking to the dock    5 quick + pause = flash full
+// The button and the LED patterns are in README.md (the one place they're written down).
 //
 // Serial monitor at 115200: type h for the few commands that are handy on the bench (q pauses the status line).
 
