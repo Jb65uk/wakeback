@@ -36,7 +36,7 @@ UPLINK_IF = os.environ.get('WAKEBACK_UPLINK_IF', 'wlan1')        # USB WiFi dong
 HAVE_NMCLI = bool(shutil.which('nmcli'))                         # NetworkManager (the Pi): the Dock page can change WiFi
 DEMO_WIFI = os.environ.get('WAKEBACK_DEMO_WIFI', '0') == '1'      # made-up networks so the WiFi screens can be tried in VS Code
 DEBUG = os.environ.get('WAKEBACK_DEBUG', '0') == '1'             # Flask's debugger: dev only, never on a server people can reach
-ONLINE_SECS = 90      # a docked puck checks in every ~30 s; three missed = gone
+ONLINE_SECS = 180     # a docked puck checks in about once a minute; three missed = gone
 BOOT = time.time()
 lock = threading.Lock()   # one process (gunicorn --workers 1): this keeps the JSON sidecars consistent
 
