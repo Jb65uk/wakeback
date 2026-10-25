@@ -109,7 +109,7 @@ function fill(s){st=s;
  recOn=s.rec.on;$('rec').innerHTML=recOn?'<span class="ok">yes</span>, '+Math.floor(s.rec.secs/60)+' min, '+s.rec.lines+' pts':(s.autorec?'waiting for the boat to move':'off');
  $('recbtn').textContent=recOn?'Stop recording':'Start recording';
  const sto=s.store;$('store').innerHTML=(sto.full?'<span class="bad">FULL</span> ':'')+fmt(sto.free_kb/1024,1)+' MB free, '+sto.files+' track'+(sto.files==1?'':'s');
- $('mode').textContent=s.wifi.mode=='setup'?'Setup WiFi on: leaves setup mode after 10 minutes with nobody looking.':s.wifi.mode=='dock'?'On the dock WiFi '+s.wifi.ssid+' ('+s.wifi.ip+'), dock '+(s.wifi.dock_ok?'answering':'not found'):'';
+ $('mode').textContent=s.wifi.dock_refused?'Dock refused the key — set the puck up again from the app.':s.wifi.mode=='setup'?'Setup WiFi on: leaves setup mode after 10 minutes with nobody looking.':s.wifi.mode=='dock'?'On the dock WiFi '+s.wifi.ssid+' ('+s.wifi.ip+'), dock '+(s.wifi.dock_ok?'answering':'not found'):'';
  $('orient').textContent=i.orientation=='thwart'?'under the thwart':i.orientation=='deck'?'on deck':'not sure yet (keep it still)';
  $('twist').textContent=fmt(i.twist,0)+'°'+(s.autotwist?(i.twist_learned?' (learnt)':' (learning)'):'');
  $('mag').innerHTML=['<span class="bad">uncalibrated</span>','<span class="warn">rough</span>','<span class="warn">fair</span>','<span class="ok">good</span>'][i.mag]||'–';
