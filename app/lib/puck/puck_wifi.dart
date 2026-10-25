@@ -162,32 +162,56 @@ class PuckReach {
 
   /// The puck's address on the hotspot, from the phone dock's last check-in (null if not docked now).
   static Future<String?> hotspotAddress(int puck) async {
-    try {
-      final r = await http.get(Uri.parse('http://127.0.0.1:${PuckReach.dockPort}/api/pucks')).timeout(const Duration(seconds: 4));
-      if (r.statusCode != 200) return null;
-      final j = (jsonDecode(utf8.decode(r.bodyBytes)) as Map).cast<String, dynamic>();
-      for (final p in (j['pucks'] as List? ?? const [])) {
-        if (p is Map && (p['puck'] as num?)?.toInt() == puck && p['docked'] == true && p['ip'] is String && (p['ip'] as String).isNotEmpty) {
-          return 'http://${p['ip']}';
-        }
-      }
-    } catch (_) {}
+    for (final p in await dockPucks()) {
+      if ((p['puck'] as num?)?.toInt() == puck && p['docked'] == true && p['ip'] is String && (p['ip'] as String).isNotEmpty) return 'http://${p['ip']}';
+    }
     return null;
   }
 
   static int dockPort = 5000;
 
+  static Future<List<Map<String, dynamic>>> dockPucks() async {
+    try {
+      final r = await http.get(Uri.parse('http://127.0.0.1:$dockPort/api/pucks')).timeout(const Duration(seconds: 4));
+      if (r.statusCode != 200) return const [];
+      final j = (jsonDecode(utf8.decode(r.bodyBytes)) as Map).cast<String, dynamic>();
+      return ((j['pucks'] as List?) ?? const []).whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  static bool docked(List<Map<String, dynamic>> pucks, int puck) =>
+      pucks.any((p) => (p['puck'] as num?)?.toInt() == puck && p['docked'] == true);
+
   /// Hotspot first (no buttons to hold), then the puck's own WiFi (the user is told to hold the button).
   /// [onStep] gets a line to show while it works.
-  static Future<PuckReach> find(int puck, {void Function(String)? onStep}) async {
+  static Future<PuckReach> find(int puck, {void Function(String)? onStep, bool allowSetupWifi = true}) async {
+    // On the pad the puck only has its radio on for a moment each minute, so: ask the dock to tell it (in
+    // its next check-in reply) to stay on, then keep trying its address until it answers.
     onStep?.call('Looking for puck $puck on the hotspot…');
-    final addr = await hotspotAddress(puck);
-    if (addr != null) {
-      try {
-        final st = await PuckApi(addr).status();
-        if (st.isPuck) return PuckReach(addr, false);
-      } catch (_) {}
+    try {
+      await http.post(Uri.parse('http://127.0.0.1:$dockPort/api/pucks/$puck/hold')).timeout(const Duration(seconds: 3));
+    } catch (_) {}
+    final deadline = DateTime.now().add(const Duration(seconds: 80));
+    var told = false;
+    while (DateTime.now().isBefore(deadline)) {
+      final addr = await hotspotAddress(puck);
+      if (addr != null) {
+        try {
+          final st = await PuckApi(addr).status();
+          if (st.isPuck) return PuckReach(addr, false);
+        } catch (_) {}
+      } else if (!docked(await dockPucks(), puck)) {
+        break; // not on the pad as far as the dock knows: no point waiting for a check-in
+      }
+      if (!told) {
+        told = true;
+        onStep?.call('Puck $puck is on the pad. Waiting for its next check-in (up to a minute)…');
+      }
+      await Future<void>.delayed(const Duration(seconds: 3));
     }
+    if (!allowSetupWifi) throw PuckException('Puck $puck didn\'t answer on the hotspot. Is it on the pad with the hotspot on?');
     onStep?.call('Not on the hotspot. Hold the puck\'s button 6 s (five quick blinks), then tap Connect when your phone asks…');
     await PuckWifi.join();
     final st = await PuckApi().status();

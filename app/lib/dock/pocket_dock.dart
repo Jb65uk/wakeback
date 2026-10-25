@@ -201,6 +201,13 @@ class PocketDock {
 
     // pucks
     if (m == 'POST' && path == 'pucks/checkin') return _json(req, await store.checkin(await _body(req)));
+    // the app asks for a puck to stay on WiFi: told to it in its next check-in reply (phone only; needs no auth, it's loopback)
+    if (m == 'POST' && api.length == 3 && api[0] == 'pucks' && api[2] == 'hold') {
+      final n = int.tryParse(api[1]);
+      if (n == null) throw const DockError(400, 'bad puck');
+      store.holdRequests[n] = DateTime.now().millisecondsSinceEpoch;
+      return _json(req, {'ok': true});
+    }
     if (m == 'GET' && path == 'pucks') return _json(req, await store.pucks());
     if (m == 'GET' && path == 'hello') return _json(req, {'dock': 'wakeback', 'time_ms': DateTime.now().millisecondsSinceEpoch});
 

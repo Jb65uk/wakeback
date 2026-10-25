@@ -894,11 +894,23 @@ def puck_checkin():
         r['on_pad'] = bool(b.get('on_pad', True))
         r['last_seen'] = now
         if r['on_pad']: r['last_on_pad'] = now
+        hold = bool(r.pop('hold', False))                                  # the app asked for this puck to stay on WiFi: tell it once
         if owner: r['owner'] = {'name': owner['name'], 'email': owner['email']}
         elif key: r.pop('owner', None)       # its key was revoked: nobody's puck until it's set up again
         save_pucks(m)
     # the puck uses this reply to set its clock before GPS lock and to know the dock heard it
-    return jsonify(ok=True, time_ms=now)
+    return jsonify(ok=True, time_ms=now, **({'hold': True} if hold else {}))
+
+
+@app.post('/api/pucks/<int:num>/hold')
+@require_user
+def puck_hold(num):
+    """Ask a docked puck to keep its WiFi up for a few minutes (so a page can be opened on it). Told to it in
+    its next check-in reply."""
+    if not 1 <= num <= 99: return jsonify(error='puck number out of range'), 400
+    with lock:
+        m = load_pucks(); m.setdefault(f'puck{num}', {})['hold'] = True; save_pucks(m)
+    return jsonify(ok=True)
 
 
 def last_sailor(session, fname):

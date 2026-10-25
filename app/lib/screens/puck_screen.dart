@@ -48,8 +48,9 @@ class _PuckScreenState extends State<PuckScreen> {
     }
   }
 
-  /// Find the puck (hotspot, else its setup WiFi) and read its status.
-  Future<bool> _connect() async {
+  /// Find the puck and read its status. Over the hotspot if the dock says it's on the pad; its setup WiFi
+  /// only when [setupWifi] (the user chose that, having held the button).
+  Future<bool> _connect({bool setupWifi = false}) async {
     if (_reach != null) return true;
     setState(() {
       _busy = true;
@@ -57,9 +58,18 @@ class _PuckScreenState extends State<PuckScreen> {
       _step = null;
     });
     try {
-      final r = await PuckReach.find(widget.puck.puck, onStep: (s) {
-        if (mounted) setState(() => _step = s);
-      });
+      PuckReach r;
+      if (setupWifi) {
+        setState(() => _step = 'Joining the puck\'s WiFi — tap Connect when your phone asks…');
+        await PuckWifi.join();
+        final st0 = await PuckApi().status();
+        if (!st0.isPuck) throw const PuckException('That network isn\'t a WakeBack puck.');
+        r = const PuckReach('http://192.168.4.1', true);
+      } else {
+        r = await PuckReach.find(widget.puck.puck, allowSetupWifi: false, onStep: (s) {
+          if (mounted) setState(() => _step = s);
+        });
+      }
       final st = await PuckApi(r.base).status();
       if (!mounted) return false;
       setState(() {
@@ -79,12 +89,14 @@ class _PuckScreenState extends State<PuckScreen> {
     }
   }
 
-  Future<void> _openPage() async {
-    if (!await _connect() || !mounted) return;
+  Future<void> _openPage({bool setupWifi = false}) async {
+    if (!await _connect(setupWifi: setupWifi) || !mounted) return;
     await Navigator.push(context, MaterialPageRoute<void>(builder: (_) => ServerViewerPage(url: '${_reach!.base}/', title: 'Puck ${widget.puck.puck}')));
     // the page may have changed things (or the puck left setup mode): read it again next time
     if (mounted) setState(() => _status = null);
   }
+
+  Future<bool> _onPad() async => PuckReach.docked(await PuckReach.dockPucks(), widget.puck.puck);
 
   Future<void> _update() async {
     final f = _latest;
@@ -116,7 +128,7 @@ class _PuckScreenState extends State<PuckScreen> {
     }
     if (!mounted) return;
     setState(() => _busy = false);
-    if (!await _connect() || !mounted) {
+    if (!await _connect(setupWifi: _reach == null && !await _onPad()) || !mounted) {
       setState(() => _flashProgress = null);
       return;
     }
@@ -207,16 +219,20 @@ class _PuckScreenState extends State<PuckScreen> {
             ListTile(
               leading: const Icon(Icons.tune),
               title: const Text('Open the puck\'s page'),
-              subtitle: const Text('Boat is level, mounted on deck / under thwart, record on/off, tracks on the puck, WiFi.'),
+              subtitle: const Text('Boat is level, mounted on deck / under thwart, record on/off, tracks on the puck, WiFi. '
+                  'Puck on the pad, hotspot on: it answers within a minute.'),
               isThreeLine: true,
               enabled: !_busy,
-              onTap: _busy ? null : _openPage,
+              onTap: _busy ? null : () => _openPage(),
             ),
             const Divider(height: 1),
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 10, 16, 12),
-              child: Hint('On the pad and checked in, it opens straight away over the hotspot. Otherwise hold the puck\'s button for 6 seconds '
-                  '(five quick blinks) first, then tap Connect when your phone asks.'),
+            ListTile(
+              leading: const Icon(Icons.wifi_find),
+              title: const Text('Not on the pad? Use its setup WiFi'),
+              subtitle: const Text('Hold the puck\'s button 6 seconds (five quick blinks), then tap this and Connect when your phone asks.'),
+              isThreeLine: true,
+              enabled: !_busy,
+              onTap: _busy ? null : () => _openPage(setupWifi: true),
             ),
           ]),
         ),
