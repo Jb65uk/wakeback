@@ -41,8 +41,17 @@ COOKIE = 'wb_token'
 EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 
 bp = Blueprint('accounts', __name__)
-_db_lock = threading.Lock()
 _db_path = None
+MIN_PW = 8
+TOUCH_MS = 3600 * 1000     # a token's last_used is only written once an hour: the column is for tidying, not auditing
+# app.py sets this: called with the email when the admin deletes an account, so its tracks become club tracks
+on_account_deleted = None
+
+
+def _pw_error(pw):
+    """The reply for a password that's too short, or None when it's fine."""
+    if len(str(pw or '')) < MIN_PW: return jsonify(error=f'Password needs at least {MIN_PW} characters'), 400
+    return None
 
 
 def init(data_dir):
@@ -80,8 +89,8 @@ def apply_admin_reset():
     restart it once. The admin account's password becomes that; then take the setting out again."""
     pw = os.environ.get('WAKEBACK_ADMIN_RESET', '')
     if not (ENABLED and pw): return
-    if len(pw) < 8:
-        print('WAKEBACK_ADMIN_RESET ignored: the password needs at least 8 characters'); return
+    if len(pw) < MIN_PW:
+        print(f'WAKEBACK_ADMIN_RESET ignored: the password needs at least {MIN_PW} characters'); return
     with connect() as c:
         n = c.execute('UPDATE users SET pw=?, status=\'active\' WHERE email=?', (generate_password_hash(pw), ADMIN_EMAIL)).rowcount
     print(f'WAKEBACK_ADMIN_RESET: password set for {ADMIN_EMAIL}. Now remove WAKEBACK_ADMIN_RESET and restart.' if n
@@ -128,27 +137,39 @@ def _hash(token):
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+def _token_from_request():
+    """The sign-in token this request carries: a bearer header (the app) or the cookie (a browser)."""
+    auth = request.headers.get('Authorization', '')
+    return auth[7:].strip() if auth.lower().startswith('bearer ') else request.cookies.get(COOKIE, '')
+
+
 def user_from_request():
     """The signed-in user for this request (bearer token or cookie), or None."""
-    auth = request.headers.get('Authorization', '')
-    token = auth[7:].strip() if auth.lower().startswith('bearer ') else request.cookies.get(COOKIE, '')
+    token = _token_from_request()
     if not token: return user_from_puck_key(request.headers.get('X-Puck-Key', ''))
+    now = int(time.time() * 1000)
     with connect() as c:
-        r = c.execute('SELECT u.* FROM tokens t JOIN users u ON u.id=t.user_id WHERE t.hash=?', (_hash(token),)).fetchone()
+        r = c.execute('SELECT u.*, t.last_used tlu FROM tokens t JOIN users u ON u.id=t.user_id WHERE t.hash=?', (_hash(token),)).fetchone()
         if not r: return None
-        c.execute('UPDATE tokens SET last_used=? WHERE hash=?', (int(time.time() * 1000), _hash(token)))
-    return dict(r) if r['status'] == 'active' else None
+        if not r['tlu'] or now - r['tlu'] > TOUCH_MS:
+            c.execute('UPDATE tokens SET last_used=? WHERE hash=?', (now, _hash(token)))
+    u = dict(r); u.pop('tlu', None)
+    return u if r['status'] == 'active' else None
 
 
 # ---------------------------------------------------------------- puck keys
 
 def user_from_puck_key(key):
-    """The owner of a puck key (a puck checking in or uploading), or None if there's no such live key."""
+    """The owner of a puck key (a puck checking in or uploading), or None if there's no such live key.
+    Leaves the key's row in g.puck_key so a route can check the key was issued for the puck in the request."""
     key = (key or '').strip()
     if not key: return None
     with connect() as c:
-        r = c.execute('SELECT u.* FROM pucks p JOIN users u ON u.id=p.user_id WHERE p.hash=? AND p.revoked IS NULL', (_hash(key),)).fetchone()
-    return dict(r) if r and r['status'] == 'active' else None
+        r = c.execute('SELECT u.*, p.puck kpuck FROM pucks p JOIN users u ON u.id=p.user_id WHERE p.hash=? AND p.revoked IS NULL', (_hash(key),)).fetchone()
+    if not (r and r['status'] == 'active'): return None
+    g.puck_key = {'puck': r['kpuck']}
+    u = dict(r); u.pop('kpuck', None)
+    return u
 
 
 def touch_puck_key(key, fw=None):
@@ -189,10 +210,19 @@ def require_user(f):
     return w
 
 
+def require_account(f):
+    """Routes that only mean something with accounts on (friends, passwords, puck keys): 404 otherwise."""
+    @wraps(f)
+    def w(*a, **k):
+        if not ENABLED: return jsonify(error='Accounts are off on this server'), 404
+        return f(*a, **k)
+    return w
+
+
 def require_admin(f):
     @wraps(f)
     def w(*a, **k):
-        if not ENABLED: return jsonify(error='Accounts are not switched on (set WAKEBACK_ADMIN)'), 404
+        if not ENABLED: return jsonify(error='Accounts are off on this server'), 404
         u = current_user()
         if not u: return jsonify(error='Please sign in', login=True), 401
         if u['role'] != 'admin': return jsonify(error='Admin only'), 403
@@ -314,6 +344,7 @@ def _check_password_limited(email, pw):
 # ---------------------------------------------------------------- sign up / in / out
 
 @bp.post('/api/auth/signup')
+@require_account
 def signup():
     b = request.get_json(silent=True) or {}
     email, name, pw = str(b.get('email', '')).strip().lower(), str(b.get('name', '')).strip()[:40], str(b.get('password', ''))
@@ -322,12 +353,12 @@ def signup():
     if over: return jsonify(error='Too many sign-ups from here. Try again later'), 429
     _failed([('signup:' + client_ip(), 5)])
     if not name: return jsonify(error='What should we call you?'), 400
-    if len(pw) < 8: return jsonify(error='Password needs at least 8 characters'), 400
+    bad = _pw_error(pw)
+    if bad: return bad
     with connect() as c:
         if c.execute('SELECT 1 FROM users WHERE email=?', (email,)).fetchone():
             return jsonify(error='There\'s already an account for that email. Log in instead.'), 409
-        first = c.execute('SELECT COUNT(*) n FROM users').fetchone()['n'] == 0
-        admin = email == ADMIN_EMAIL or (first and not ADMIN_EMAIL)
+        admin = email == ADMIN_EMAIL          # only the configured admin email ever becomes admin by signing up
         status = 'active' if admin or setting('auto_approve', False) else 'pending'
         cur = c.execute('INSERT INTO users (email,name,pw,role,status,created) VALUES (?,?,?,?,?,?)',
                         (email, name, generate_password_hash(pw), 'admin' if admin else 'user', status, int(time.time() * 1000)))
@@ -353,8 +384,7 @@ def login():
 
 @bp.post('/api/auth/logout')
 def logout():
-    auth = request.headers.get('Authorization', '')
-    token = auth[7:].strip() if auth.lower().startswith('bearer ') else request.cookies.get(COOKIE, '')
+    token = _token_from_request()
     if token:
         with connect() as c: c.execute('DELETE FROM tokens WHERE hash=?', (_hash(token),))
     resp = make_response(jsonify(ok=True))
@@ -387,6 +417,7 @@ def status():
 
 
 @bp.post('/api/auth/password')
+@require_account
 @require_user
 def change_password():
     b = request.get_json(silent=True) or {}
@@ -394,7 +425,8 @@ def change_password():
     with connect() as c:
         r = c.execute('SELECT pw FROM users WHERE id=?', (u['id'],)).fetchone()
         if not check_password_hash(r['pw'], str(b.get('old', ''))): return jsonify(error='Current password is wrong'), 400
-        if len(str(b.get('new', ''))) < 8: return jsonify(error='Password needs at least 8 characters'), 400
+        bad = _pw_error(b.get('new'))
+        if bad: return bad
         c.execute('UPDATE users SET pw=? WHERE id=?', (generate_password_hash(str(b['new'])), u['id']))
     audit('password_changed', u['email'])
     return jsonify(ok=True)
@@ -409,8 +441,8 @@ RESET_HOURS = 24
 
 
 @bp.post('/api/auth/forgot')
+@require_account
 def forgot():
-    if not ENABLED: return jsonify(error='Accounts are not switched on'), 404
     email = str((request.get_json(silent=True) or {}).get('email', '')).strip().lower()
     if not EMAIL_RE.match(email): return jsonify(error='That doesn\'t look like an email address'), 400
     keys = [('forgot:' + client_ip(), 5)]
@@ -428,15 +460,16 @@ def forgot():
 
 
 @bp.post('/api/auth/reset')
+@require_account
 def reset_password():
-    if not ENABLED: return jsonify(error='Accounts are not switched on'), 404
     b = request.get_json(silent=True) or {}
     email, new = str(b.get('email', '')).strip().lower(), str(b.get('new', ''))
     code = ''.join(ch for ch in str(b.get('code', '')).upper() if ch.isalnum())
     keys = _rate_keys(email)
     over, wait = _too_many(keys)
     if over: return jsonify(error=f'Too many tries. Wait {max(1, wait // 60)} minutes and try again'), 429
-    if len(new) < 8: return jsonify(error='Password needs at least 8 characters'), 400
+    bad = _pw_error(new)
+    if bad: return bad
     with connect() as c:
         r = c.execute('SELECT r.*, u.email FROM resets r JOIN users u ON u.id=r.user_id WHERE u.email=?', (email,)).fetchone()
         ok = bool(r and r['code'] and code and r['expires'] and r['expires'] > time.time() * 1000 and secrets.compare_digest(r['code'], _hash(code)))
@@ -539,12 +572,14 @@ def _friends_of(me_id):
 
 
 @bp.get('/api/friends')
+@require_account
 @require_user
 def friends():
     return jsonify(_friends_of(current_user()['id']))
 
 
 @bp.post('/api/friends/request')
+@require_account
 @require_user
 def friend_request():
     me_ = current_user()
@@ -570,6 +605,7 @@ def friend_request():
 
 
 @bp.post('/api/friends/<int:fid>/<action>')
+@require_account
 @require_user
 def friend_action(fid, action):
     me_ = current_user()
@@ -587,6 +623,7 @@ def friend_action(fid, action):
 
 
 @bp.delete('/api/friends/<int:fid>')
+@require_account
 @require_user
 def unfriend(fid):
     me_ = current_user()
@@ -628,7 +665,8 @@ def admin_user(uid):
         if str(b.get('name', '')).strip():
             c.execute('UPDATE users SET name=? WHERE id=?', (str(b['name']).strip()[:40], uid)); changes['name'] = str(b['name']).strip()[:40]
         if b.get('password'):
-            if len(str(b['password'])) < 8: return jsonify(error='Password needs at least 8 characters'), 400
+            bad = _pw_error(b['password'])
+            if bad: return bad
             c.execute('UPDATE users SET pw=? WHERE id=?', (generate_password_hash(str(b['password'])), uid))
             c.execute('DELETE FROM tokens WHERE user_id=?', (uid,)); changes['password'] = 'reset'
         if b.get('sign_out'):
@@ -641,17 +679,15 @@ def admin_user(uid):
 @bp.delete('/api/admin/users/<int:uid>')
 @require_admin
 def admin_delete_user(uid):
+    """The account goes; its tracks stay as club tracks owned by name (the email is taken off them)."""
     if uid == current_user()['id']: return jsonify(error='You can\'t delete yourself'), 400
     with connect() as c:
-        r = c.execute('SELECT email FROM users WHERE id=?', (uid,)).fetchone()
-        if not r: abort(404)
-        c.execute('DELETE FROM tokens WHERE user_id=?', (uid,))
-        c.execute('DELETE FROM resets WHERE user_id=?', (uid,))
-        c.execute('DELETE FROM friends WHERE a=? OR b=?', (uid, uid))
-        c.execute('DELETE FROM pucks WHERE user_id=?', (uid,))
-        c.execute('DELETE FROM users WHERE id=?', (uid,))
-    audit('admin_delete_user', r['email'])
-    return jsonify(ok=True)
+        r = c.execute('SELECT * FROM users WHERE id=?', (uid,)).fetchone()
+    if not r: abort(404)
+    delete_account(dict(r))
+    n = on_account_deleted(r['email']) if on_account_deleted else 0
+    audit('admin_delete_user', r['email'], {'tracks_kept': n})
+    return jsonify(ok=True, tracks_kept=n)
 
 
 @bp.get('/api/admin/settings')
@@ -681,6 +717,7 @@ def admin_audit():
 # ---------------------------------------------------------------- puck key routes (helpers above, by user_from_request)
 
 @bp.get('/api/pucks/keys')
+@require_account
 @require_user
 def my_puck_keys():
     with connect() as c:
@@ -689,6 +726,7 @@ def my_puck_keys():
 
 
 @bp.post('/api/pucks/keys')
+@require_account
 @require_user
 def issue_puck_key():
     """A new key for puck N, tied to you. Any earlier key you had for that number is revoked (one phone sets
@@ -708,6 +746,7 @@ def issue_puck_key():
 
 
 @bp.delete('/api/pucks/keys/<int:pid>')
+@require_account
 @require_user
 def revoke_my_puck_key(pid):
     with connect() as c:

@@ -8,10 +8,9 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../app_state.dart';
-import '../auth/auth_api.dart';
 import '../demo/fake_race.dart';
-import '../dock/pocket_dock.dart';
 import '../dock/store.dart';
+import '../record/recorder.dart';
 import '../widgets/boats.dart';
 import '../widgets/common.dart';
 import 'friends_section.dart';
@@ -31,27 +30,11 @@ class SetupScreen extends StatefulWidget {
 Map<String, String> _demoFiles(int t0ms) => demoDayFiles(DateTime.fromMillisecondsSinceEpoch(t0ms, isUtc: true));
 
 class _SetupScreenState extends State<SetupScreen> {
-  late final TextEditingController _ssid = TextEditingController(text: app.hotspotName);
-  late final TextEditingController _pass = TextEditingController(text: app.hotspotPass);
   late final TextEditingController _name = TextEditingController(text: app.profileName);
-  List<String> _ips = [];
   bool _makingDemo = false, _exporting = false;
 
   @override
-  void initState() {
-    super.initState();
-    _loadIps();
-  }
-
-  Future<void> _loadIps() async {
-    final ips = await PocketDock.lanAddresses();
-    if (mounted) setState(() => _ips = ips);
-  }
-
-  @override
   void dispose() {
-    _ssid.dispose();
-    _pass.dispose();
     _name.dispose();
     super.dispose();
   }
@@ -67,7 +50,7 @@ class _SetupScreenState extends State<SetupScreen> {
         final res = await app.store.upload(f.name, bytes);
         ok.add('${res['session']}');
       } catch (e) {
-        bad.add('${f.name}: $e');
+        bad.add('${f.name}: ${friendly(e)}');
       }
     }
     if (!mounted) return;
@@ -95,7 +78,7 @@ class _SetupScreenState extends State<SetupScreen> {
         toast(context, n == 0 ? 'The demo day is already there ($day)' : 'Added demo day $day: 3 pucks + a phone GPX, two races, course laid. Open it from the sessions list.');
       }
     } catch (e) {
-      if (mounted) toast(context, 'Couldn\'t make demo day: $e', error: true);
+      if (mounted) toast(context, 'Couldn\'t make demo day: ${friendly(e)}', error: true);
     }
     if (mounted) setState(() => _makingDemo = false);
   }
@@ -161,66 +144,31 @@ class _SetupScreenState extends State<SetupScreen> {
               shape: const Border(),
               childrenPadding: EdgeInsets.zero,
               children: [
-          Padding(
-            padding: EdgeInsets.zero,
-            child: Padding(
-              padding: const EdgeInsets.all(14),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Row(children: [
-                  Icon(app.dockError == null ? Icons.check_circle : Icons.error_outline,
-                      color: app.dockError == null ? Colors.greenAccent : Colors.orangeAccent),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(app.dockError == null ? 'Dock running on port ${app.dock.port}' : app.dockError!,
-                        style: t.textTheme.titleSmall),
-                  ),
-                ]),
-                const SizedBox(height: 10),
-                const Hint('Pucks upload to this phone over its hotspot: turn the hotspot on with the name and password below, and keep WakeBack open while pucks are on their pads. '
-                    '"Set up a puck" above tells a puck these.'),
-                const SizedBox(height: 8),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: OutlinedButton.icon(
-                    onPressed: () => Navigator.push(context, MaterialPageRoute<void>(builder: (_) => ServerViewerPage(url: '${app.dock.localUrl}/dock', title: 'Pucks'))),
-                    icon: const Icon(Icons.sensors, size: 18),
-                    label: const Text('Dock page'),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _ssid,
-                  decoration: const InputDecoration(labelText: 'Hotspot name', prefixIcon: Icon(Icons.wifi_tethering)),
-                  onChanged: (v) => app.hotspotName = v,
-                ),
-                TextField(
-                  controller: _pass,
-                  obscureText: true,
-                  decoration: const InputDecoration(labelText: 'Hotspot password', prefixIcon: Icon(Icons.key)),
-                  onChanged: (v) => app.hotspotPass = v,
-                ),
-                const SizedBox(height: 10),
-                Row(children: [
-                  Expanded(
-                    child: Text(
-                      _ips.isEmpty
-                          ? 'Phone address: turn the hotspot or WiFi on to see it'
-                          : 'Phone address: ${_ips.map((ip) => 'http://$ip:${app.dock.port}').join('  ')}',
-                      style: t.textTheme.bodySmall,
+                Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    if (app.dockError != null) ...[
+                      Row(children: [
+                        const Icon(Icons.error_outline, color: Colors.orangeAccent),
+                        const SizedBox(width: 8),
+                        Expanded(child: Text(app.dockError!, style: t.textTheme.titleSmall)),
+                      ]),
+                      const SizedBox(height: 10),
+                    ],
+                    const Hint('Pucks upload to this phone over its hotspot. Keep WakeBack open while pucks are on their pads.'),
+                    const SizedBox(height: 8),
+                    Text('Hotspot: ${app.hotspotName} — set by Set up a puck', style: t.textTheme.bodyMedium),
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: OutlinedButton.icon(
+                        onPressed: () => Navigator.push(context, MaterialPageRoute<void>(builder: (_) => ServerViewerPage(url: '${app.dock.localUrl}/dock', title: 'Pucks'))),
+                        icon: const Icon(Icons.sensors, size: 18),
+                        label: const Text('Dock page'),
+                      ),
                     ),
-                  ),
-                  IconButton(tooltip: 'Refresh', onPressed: _loadIps, icon: const Icon(Icons.refresh, size: 20)),
-                ]),
-                Row(children: [
-                  const Expanded(child: Text('Rows on the Dock page (club pucks not set up here)')),
-                  const Spacer(),
-                  IconButton(onPressed: app.fleet > 0 ? () => app.fleet = app.fleet - 1 : null, icon: const Icon(Icons.remove_circle_outline)),
-                  Text('${app.fleet}', style: t.textTheme.titleMedium),
-                  IconButton(onPressed: app.fleet < 16 ? () => app.fleet = app.fleet + 1 : null, icon: const Icon(Icons.add_circle_outline)),
-                ]),
-              ]),
-            ),
-          ),
+                  ]),
+                ),
                 const Divider(height: 1),
                 ListTile(
                   leading: const Icon(Icons.dns_outlined),
@@ -235,6 +183,10 @@ class _SetupScreenState extends State<SetupScreen> {
                     title: const Text('Try the demo'),
                     subtitle: const Text('Pretend pucks and a demo race, kept separate from your data'),
                     onTap: () async {
+                      if (Recorder.instance.active) {
+                        toast(context, 'Finish the recording first');
+                        return;
+                      }
                       await app.setDemoMode(true);
                       if (context.mounted) toast(context, 'Demo mode on: add a demo race morning, or turn on Demo pucks');
                     },
@@ -252,7 +204,7 @@ class _SetupScreenState extends State<SetupScreen> {
                 secondary: const Icon(Icons.science_outlined),
                 title: const Text('Demo pucks'),
                 subtitle: Text(app.demo.lastEvent ??
-                    'Five pretend pucks check in to this phone every 3 s; P4 comes back from sailing after 20 s and uploads its session. See them under Advanced, See your pucks.'),
+                    'Five pretend pucks check in to this phone every 3 s; P4 comes back from sailing after 20 s and uploads its session. See them under You → Pucks → See them check in.'),
                 isThreeLine: true,
                 value: app.demo.running,
                 onChanged: (on) => on ? app.demo.start() : app.demo.stop(),
@@ -289,6 +241,10 @@ class _SetupScreenState extends State<SetupScreen> {
   }
 
   Future<void> _exitDemo() async {
+    if (Recorder.instance.active) {
+      toast(context, 'Finish the recording first');
+      return;
+    }
     if (!await confirm(context, 'Leave the demo?', 'The demo sessions and pretend pucks are deleted. Your own sailing is untouched.', ok: 'Exit demo', danger: true)) return;
     await app.setDemoMode(false);
     if (mounted) toast(context, 'Demo cleared');
@@ -354,7 +310,7 @@ class _SetupScreenState extends State<SetupScreen> {
               controller: _name,
               textCapitalization: TextCapitalization.words,
               decoration: const InputDecoration(labelText: 'Your name', hintText: 'e.g. James', prefixIcon: Icon(Icons.person_outline)),
-              onChanged: (v) => app.profileName = v,
+              onChanged: (v) => app.profileName = v, // saved as you type; nothing on screen depends on it
             ),
             const SizedBox(height: 8),
             const Hint('Sign in to sync your sails between devices and share them with friends.'),
@@ -381,10 +337,8 @@ class _SetupScreenState extends State<SetupScreen> {
       final f = File('${dir.path}/wakeback-my-data.zip');
       await f.writeAsBytes(bytes, flush: true);
       await Share.shareXFiles([XFile(f.path, mimeType: 'application/zip')], subject: 'My WakeBack data');
-    } on AuthException catch (e) {
-      if (mounted) toast(context, e.message, error: true);
     } catch (e) {
-      if (mounted) toast(context, 'Couldn\'t export: $e', error: true);
+      if (mounted) toast(context, 'Couldn\'t export: ${friendly(e)}', error: true);
     }
     if (mounted) setState(() => _exporting = false);
   }
@@ -419,10 +373,8 @@ class _SetupScreenState extends State<SetupScreen> {
       final n = await app.auth.deleteAccount(pw.text);
       await app.signOut(tellServer: false);
       if (mounted) toast(context, 'Account deleted, with $n sail${n == 1 ? '' : 's'} removed from the server');
-    } on AuthException catch (e) {
-      if (mounted) toast(context, e.message, error: true);
     } catch (e) {
-      if (mounted) toast(context, 'Couldn\'t delete the account: $e', error: true);
+      if (mounted) toast(context, 'Couldn\'t delete the account: ${friendly(e)}', error: true);
     }
   }
 
@@ -446,8 +398,8 @@ class _SetupScreenState extends State<SetupScreen> {
     try {
       await app.auth.changePassword(oldC.text, newC.text);
       if (mounted) toast(context, 'Password changed');
-    } on AuthException catch (e) {
-      if (mounted) toast(context, e.message, error: true);
+    } catch (e) {
+      if (mounted) toast(context, friendly(e), error: true);
     }
   }
 }

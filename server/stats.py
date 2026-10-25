@@ -7,11 +7,26 @@ moving (> 1 kn), time on the water counts samples over 1.5 kn.
 Per-track stats are cached in each session folder's stats.json (keyed by file name + size), so a
 day's folder is only parsed once. The phone app computes exactly the same (app/lib/dock/store.dart).
 """
-import math, os, re, json
+import math, os, re, json, threading
 from datetime import datetime, timezone
 
 KN = 1.943844
 CACHE_V = 2   # bump when compute_stats learns something new, so old stats.json files are redone
+
+
+def read_json(path, default):
+    """A JSON file, or `default` if it's missing or broken."""
+    try:
+        with open(path) as f: return json.load(f)
+    except (OSError, ValueError): return default
+
+
+def write_json(path, value):
+    """Write a JSON file atomically: a reader never sees a half-written file, and two threads writing at once
+    (gunicorn runs several) never trip over the same temp name."""
+    tmp = f'{path}.{os.getpid()}.{threading.get_ident()}.tmp'
+    with open(tmp, 'w') as f: json.dump(value, f, indent=1)
+    os.replace(tmp, path)
 
 
 def _hav_m(la1, lo1, la2, lo2):
@@ -171,20 +186,14 @@ def compute_stats(path, weather=None):
     return out
 
 
-def session_stats(folder, files, lock=None):
+def session_stats(folder, files):
     """{file: stats} for the tracks in a session folder, cached in stats.json
     (re-done if a file's size changed, or the day's weather was fetched since)."""
     cp = os.path.join(folder, 'stats.json')
-    try:
-        with open(cp) as f: cache = json.load(f)
-        if not isinstance(cache, dict): cache = {}
-    except (OSError, ValueError):
-        cache = {}
-    weather = None
-    try:
-        with open(os.path.join(folder, 'meta.json')) as f: weather = (json.load(f) or {}).get('weather') or None
-    except (OSError, ValueError, AttributeError):
-        pass
+    cache = read_json(cp, {})
+    if not isinstance(cache, dict): cache = {}
+    meta = read_json(os.path.join(folder, 'meta.json'), {})
+    weather = meta.get('weather') if isinstance(meta, dict) else None
     wx_key = weather.get('got', 1) if isinstance(weather, dict) else 0
     out, changed = {}, False
     for fn in files:
@@ -201,11 +210,9 @@ def session_stats(folder, files, lock=None):
         if st: out[fn] = st
     if changed:
         try:
-            tmp = cp + '.tmp'
             # drop entries for tracks that have gone (not merely ones this viewer can't see)
             present = set(os.listdir(folder))
-            with open(tmp, 'w') as f: json.dump({k: v for k, v in cache.items() if k in present}, f)
-            os.replace(tmp, cp)
+            write_json(cp, {k: v for k, v in cache.items() if k in present})
         except OSError:
             pass
     return out
@@ -236,7 +243,6 @@ def counts(st):
 def boat_class(boat):
     """'Solo 5843' -> 'Solo': the boat's name without a trailing sail number, so friends in the same
     class can be compared. '' if no boat."""
-    import re
     return re.sub(r'[\s#-]*\d+\s*$', '', str(boat or '').strip()).strip()
 
 

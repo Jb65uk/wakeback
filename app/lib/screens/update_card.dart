@@ -24,7 +24,7 @@ class _UpdateCardState extends State<UpdateCard> {
       });
       if (mounted) toast(context, 'Android\'s installer should be open. If it asks, allow WakeBack to install updates.');
     } catch (e) {
-      if (mounted) toast(context, 'Couldn\'t install: $e. You can still get it from the releases page.', error: true);
+      if (mounted) toast(context, 'Couldn\'t install (${friendly(e)}). You can still get it from the releases page.', error: true);
     }
     if (mounted) setState(() => _progress = null);
   }
@@ -100,7 +100,7 @@ class _AboutCardState extends State<AboutCard> {
       final u = await app.checkForUpdate(force: true);
       if (mounted) toast(context, u == null ? 'You\'re on the latest build' : 'Build ${u.build} is available — see the card above');
     } catch (e) {
-      if (mounted) toast(context, 'Couldn\'t check: $e', error: true);
+      if (mounted) toast(context, friendly(e), error: true);
     }
     if (mounted) setState(() => _checking = false);
   }

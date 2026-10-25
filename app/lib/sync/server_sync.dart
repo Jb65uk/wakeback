@@ -55,7 +55,6 @@ class DayCompare {
   final Set<String> serverMine;
   const DayCompare(this.day, this.phoneOnly, this.serverOnly, this.both,
       {this.serverOwners = const {}, this.serverSharing = const {}, this.serverBoats = const {}, this.serverMine = const {}, this.date = '', this.venueName = ''});
-  bool get onPhone => phoneOnly.isNotEmpty || both.isNotEmpty;
   bool get onServer => serverOnly.isNotEmpty || both.isNotEmpty;
   bool get tracksInSync => phoneOnly.isEmpty && serverOnly.isEmpty;
 }
@@ -145,10 +144,7 @@ class ServerSync {
   Future<Map<String, dynamic>> leagueTable(String period, {String cls = ''}) async =>
       ((await _getJson('/api/league?period=$period${cls.isEmpty ? '' : '&cls=${Uri.encodeQueryComponent(cls)}'}')) as Map).cast<String, dynamic>();
 
-  /// Change how one of your tracks on the server is shared ('friends' / 'private').
-  Future<void> setSharing(String day, String file, String visibility) => setTrack(day, file, {'visibility': visibility});
-
-  /// Change a track's settings on the server (visibility, boat).
+  /// Change a track's settings on the server ({'visibility': 'friends'|'private'}, {'boat': ...}).
   Future<void> setTrack(String day, String file, Map<String, dynamic> settings) async {
     await _go(http.post(_u('/api/sessions/$day/tracks/$file'), headers: _authJson, body: jsonEncode(settings)));
   }

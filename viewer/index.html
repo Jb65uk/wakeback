@@ -61,7 +61,7 @@ h1 span{color:var(--signal)}
 .legend-l{display:flex;justify-content:space-between;color:var(--muted);font-size:12px;margin-top:3px}
 #speedLegend{display:none}
 #tackLegend{display:none;gap:14px;font-size:13px;color:var(--muted)}
-#tackLegend i,.sw2{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-1px;margin-right:5px}
+#tackLegend i{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-1px;margin-right:5px}
 .tp{display:inline-block;font-size:11px;font-weight:700;border-radius:4px;padding:1px 5px;color:#fff;margin-left:4px;vertical-align:1px}
 .tp.port{background:#E63946}.tp.stbd{background:#2DC653;color:#08260f}
 .tp.warn{background:#FFC72C;color:#13293A}
@@ -99,7 +99,6 @@ h1 span{color:var(--signal)}
 .mrow .buoy{width:14px;height:14px;border-width:1.5px}
 .mark-ico{background:none;border:0}
 .mark-ico .blabel{position:absolute;left:22px;top:0;white-space:nowrap;font-family:var(--num);font-weight:700;font-size:14px;color:#fff;text-shadow:0 0 3px #000,0 0 3px #000}
-.mark-ico.sel .buoy{box-shadow:0 0 0 3px #FFC72C}
 body.addmark #map{cursor:crosshair}
 .hint{font-size:12px;color:var(--muted);line-height:1.4}
 .mpop{display:flex;flex-direction:column;gap:6px;min-width:170px;font-family:var(--body)}
@@ -134,7 +133,6 @@ body.addmark #map{cursor:crosshair}
 #loginBox h2{font-family:var(--num);font-size:28px;margin:0;line-height:1}
 #loginBox input{background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:9px 10px;color:var(--ink)}
 #loginBox .err{color:var(--danger);font-weight:600;min-height:1.2em}
-body.appmode #demo{display:none}
 body.nodemo #demo{display:none}
 .venuebar{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;background:var(--panel-2);border-radius:6px;padding:8px 10px;font-size:14px;margin-top:8px}
 .venuebar.new{border:1px solid var(--signal)}
@@ -174,7 +172,6 @@ body.big #raceTitle{display:block}
 .tsum2 .kk{font-family:var(--num);font-weight:600;font-size:15px;color:var(--ink)}
 .tk.sel{border-color:var(--signal);background:#26485f}
 .tk .dot{width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:6px;vertical-align:middle}
-.tkrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .tk .g{grid-column:1/-1}
 .tk .k{display:flex;align-items:center;gap:2px;min-width:0}
 .tk{display:grid;grid-template-columns:1fr auto auto;row-gap:2px;gap:8px;align-items:center;background:var(--panel-2);border:1px solid transparent;border-radius:6px;padding:6px 8px;text-align:left;cursor:pointer;font-variant-numeric:tabular-nums}
@@ -378,8 +375,8 @@ body.big #togglePanel,body.big #trailOnlyWrap{display:none}
     </div>
     </div></details>
     <details class="foot"><summary>How to use</summary>
-      <p><b>Saving:</b> every change (names, races, marks, lines, gun time, corrections) saves the moment you make it. The line under the title says when it last saved, and warns you if the dock couldn't be reached. It keeps trying until it gets through.</p>
-      <p><b>Load</b> a session from the dock, or drop GPX/CSV files anywhere on the map.</p>
+      <p><b>Saving:</b> every change (names, races, marks, lines, gun time, corrections) saves the moment you make it. The line under the title says when it last saved, and warns you if WakeBack couldn't be reached. It keeps trying until it gets through.</p>
+      <p><b>Load</b> a saved session, or drop GPX/CSV files anywhere on the map.</p>
       <p><b>Names:</b> puck numbers never change (P3 is always P3, always the same colour). Tap a name to say who had that puck today. It's saved for this session only.</p>
       <p><b>Races:</b> WakeBack works out the likely races from the tracks (boats milling about, then setting off together, then stopping) and offers them under Races: tick the ones that are right and Add selected, then nudge the times if you need to. Nothing is added until you say. Suggest races looks again; or add them by hand with start and end times. Everything follows the race you pick. With one track it's a rougher guess than with a fleet.</p>
       <p><b>Weather:</b> Get weather fetches the wind (direction, speed, gusts) for where and when you sailed, from Open-Meteo (free, needs internet once). It's saved with the day, sets the wind for each race, and shows live on the map and the big screen. Estimate or typing a direction still overrides it.</p>
@@ -414,6 +411,7 @@ body.big #togglePanel,body.big #trailOnlyWrap{display:none}
       <button class="btn primary" id="lgo">Sign in</button>
       <div class="err" id="lerr"></div>
       <div class="hint" style="color:var(--muted);font-size:13px">No account? Create one in the WakeBack app.</div>
+      <div class="hint" style="color:var(--muted);font-size:13px"><a href="/record" style="color:var(--signal)">Record on this phone instead</a> (no account needed to record; sign in to send it here).</div>
     </div>
   </div>
 
@@ -458,7 +456,7 @@ let races = [], raceIdx = -1;      // raceIdx -1 = whole session
 let crew = {};                      // who had which puck this session: { puck3: 'Dave', 'Steve_phone.gpx': 'Steve' }
 let tkFilter = 'all', tkSort = 'time', tkSel = null;
 let meta = { marks: [], fixes: [], lines: [] };  // per session: whole-session marks, and your corrections to tacks/gybes/marks
-let addingMark = false, selMark = null;
+let addingMark = false;
 const activeCourse = () => raceIdx >= 0 && races[raceIdx] ? races[raceIdx] : meta;   // marks, lines and gun live on the race (or the session)
 const activeMarks = () => { const c = activeCourse(); return (c.marks = c.marks || []); };
 const activeLines = () => { const c = activeCourse(); return (c.lines = c.lines || []); };
@@ -510,9 +508,7 @@ function parseTime(v) {
   v = String(v).trim();
   if (/^-?\d+(\.\d+)?$/.test(v)) {
     const n = +v;
-    if (n > 1e12) return n;          // epoch ms
-    if (n > 1e9) return n * 1000;    // epoch s
-    return n * 1000;                 // relative seconds
+    return n > 1e12 ? n : n * 1000;  // epoch ms, else seconds (epoch or relative)
   }
   return Date.parse(v);
 }
@@ -1274,7 +1270,9 @@ $('#fs').addEventListener('click', () => {
 
 // ---------- races ----------
 function sessionDate() { return boats.length ? new Date(Math.min(...boats.map(b => b.start))) : null; }
-function sessionKey() { const d = sessionDate(); return d ? d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') : null; }
+// the key for this session's saved names, races and course on this device: the server's session id when one is
+// open (two venues on one day stay apart), else the sailing date for files dropped straight in
+function sessionKey() { if (dock.session) return dock.session; const d = sessionDate(); return d ? d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') : null; }
 const hhmm = ms => { const d = new Date(ms); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
 function msFromHHMM(v) { const d = sessionDate(); if (!d || !/^\d\d:\d\d$/.test(v)) return null; const [h, m] = v.split(':').map(Number); return new Date(d.getFullYear(), d.getMonth(), d.getDate(), h, m).getTime(); }
 function saveRaces() {
@@ -1293,7 +1291,7 @@ async function loadRaces() {
 function selectRace(i) {
   raceIdx = i; T = -Infinity;
   if (meta.weather && (windSrc === 'weather' || wind == null)) applyWeatherWind();
-  selMark = null; map.closePopup();
+  map.closePopup();
   recomputeAll(); recomputeTimeline(); T = tMin; renderRaces(); renderMarks(); renderWx(); render(); fit();
 }
 function renderRaces() {
@@ -1490,7 +1488,7 @@ $('#raceAuto').addEventListener('click', () => {
 // ---------- course marks ----------
 const markLayer = L.layerGroup().addTo(map);
 function markIcon(m) {
-  return L.divIcon({ className: 'mark-ico' + (selMark === m.id ? ' sel' : ''), iconSize: [22, 22], iconAnchor: [11, 11],
+  return L.divIcon({ className: 'mark-ico', iconSize: [22, 22], iconAnchor: [11, 11],
     html: `<div class="buoy ${m.side}"></div><span class="blabel">${esc(m.name)}</span>` });
 }
 function markPopup(m) {
@@ -1669,7 +1667,7 @@ function saveMeta() {
   saveToDock('meta', meta);
 }
 
-// ---------- saving: every change saves straight away; this shows it happened, and keeps trying if the dock can't be reached ----------
+// ---------- saving: every change saves straight away; this shows it happened, and keeps trying if the server can't be reached ----------
 const unsaved = new Map();   // "day/what" -> { day, what, body, after }
 let saveBusy = false, saveRetry = null, lastSaved = null;
 function saveToDock(what, data, after) {
@@ -1696,9 +1694,9 @@ function showSave(state) {
   const el = $('#saveState'); el.hidden = false;
   el.className = 'savest ' + (state === 'local' ? '' : state);
   el.innerHTML = state === 'busy' ? 'Saving…'
-    : state === 'ok' ? `All changes saved to the dock · ${new Date(lastSaved).toTimeString().slice(0, 5)}`
-    : state === 'err' ? `${unsaved.size} change${unsaved.size > 1 ? 's' : ''} not saved yet: can't reach the dock. Trying again… <button class="lnk" id="saveNow">Try now</button>`
-    : 'Changes are saved on this computer only. Open the session from the dock to share them.';
+    : state === 'ok' ? `All changes saved · ${new Date(lastSaved).toTimeString().slice(0, 5)}`
+    : state === 'err' ? `${unsaved.size} change${unsaved.size > 1 ? 's' : ''} not saved yet: can't reach WakeBack. Trying again… <button class="lnk" id="saveNow">Try now</button>`
+    : 'Changes are saved on this device only. Open a saved session to share them.';
 }
 document.addEventListener('click', e => { if (e.target.id === 'saveNow') flushSaves(); });
 window.addEventListener('beforeunload', e => { if (unsaved.size) { e.preventDefault(); e.returnValue = ''; } });
@@ -1832,7 +1830,7 @@ windCtl.addTo(map);
 if (wind != null) $('#wind').value = wind;
 
 // ---------- dock server (optional: only when served by server/app.py or the phone app) ----------
-const dock = { on: false, session: null, list: [], owners: {}, sharing: {}, mine: null, me: null };
+const dock = { on: false, session: null, list: [], owners: {}, sharing: {}, mine: null };
 let showFriends = true;
 try { showFriends = localStorage.getItem('wakeback-friends') !== '0'; } catch {}
 // Whose boat is this? 'mine' = mine (or the club's, editable), 'friend' = someone else's
@@ -1856,7 +1854,6 @@ async function whoAmI() {
   try {
     const r = await fetch('/api/auth/me', { cache: 'no-store' });
     const j = await r.json().catch(() => ({}));
-    dock.me = j.user || null;
     dock.accounts = !!j.accounts;
     return r.status !== 401;
   } catch { return true; }
@@ -1872,7 +1869,7 @@ $('#lgo').addEventListener('click', async () => {
     const r = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: $('#lemail').value.trim(), password: $('#lpass').value, cookie: true, device: 'browser' }) });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || 'Sign-in failed');
-    dock.me = j.user; $('#loginBox').hidden = true; if (loginDone) loginDone(true);
+    $('#loginBox').hidden = true; if (loginDone) loginDone(true);
   } catch (e) { $('#lerr').textContent = e.message; }
 });
 $('#lpass').addEventListener('keydown', e => { if (e.key === 'Enter') $('#lgo').click(); });
@@ -1883,7 +1880,7 @@ async function dockInit() {
     if (!r.ok) return;
     dock.on = true;
     if (dock.accounts) document.body.classList.add('nodemo');   // real data: no demo button
-    $('#dock').classList.add('on'); document.body.classList.add('dockon'); $('#tabs').hidden = false;
+    $('#dock').classList.add('on'); $('#tabs').hidden = false;
     const dockBadge = async () => {
       try {
         const pk = (await (await fetch('/api/pucks', { cache: 'no-store' })).json()).pucks;
@@ -1898,7 +1895,7 @@ async function dockInit() {
     if (want) openSession(want);
     setInterval(async () => {
       try { const rr = await fetch('/api/sessions', { cache: 'no-store' }); if (rr.status === 401) { await needLogin(); return; } const list = await rr.json(); renderSessions(list); pickUpNewTracks(list); } catch {}
-    }, 5000);
+    }, 20000);
   } catch {}
 }
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'], MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -1975,18 +1972,21 @@ $('#venueBar').addEventListener('click', async e => {
       dock.session = (await r.json()).session; toast('Session moved');
     } else return;
     venueEdit = null; renderSessions.last = null;
-    renderSessions(await (await fetch('/api/sessions', { cache: 'no-store' })).json());
+    await refreshSessions();
   } catch (err) { toast('Couldn\'t change the venue: ' + err.message); }
 });
 $('#venueBar').addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.id === 'venueName') $('#venueSave').click(); });
+// the named track files of a session, as File objects loadFiles() takes
+const fetchTracks = (id, names) => Promise.all(names.map(async f => new File([await (await fetch(`/api/sessions/${encodeURIComponent(id)}/${encodeURIComponent(f)}`)).blob()], f)));
+// the current list of sessions, redrawn
+async function refreshSessions() { const list = await (await fetch('/api/sessions', { cache: 'no-store' })).json(); renderSessions(list); return list; }
 async function openSession(id) {
   try {
     const list = await (await fetch('/api/sessions', { cache: 'no-store' })).json();
     const sx = list.find(x => x.id === id); if (!sx) { toast('That session isn\'t here any more'); return false; }
     $('#clear').click(); dock.session = id; dock.owners = sx.owners || {}; dock.boats = sx.boats || {}; dock.sharing = sx.sharing || {}; dock.mine = sx.mine || null; venueEdit = null; if (!unsaved.size) $('#saveState').hidden = true;
     renderSessions.last = null; renderSessions(list);
-    const files = await Promise.all(sx.files.map(async f => new File([await (await fetch(`/api/sessions/${id}/${f}`)).blob()], f)));
-    await loadFiles(files);
+    await loadFiles(await fetchTracks(id, sx.files));
     $('#panel').classList.remove('open');
     return true;
   } catch (err) { toast('Could not load session: ' + err.message); return false; }
@@ -2009,24 +2009,37 @@ async function pickUpNewTracks(list) {
   pulling = true;
   try {
     const keepT = T, keepRace = raceIdx;
-    const files = await Promise.all(fresh.map(async f => new File([await (await fetch(`/api/sessions/${dock.session}/${f}`)).blob()], f)));
     const before = boats.length;
-    await loadFiles(files, true);
+    await loadFiles(await fetchTracks(dock.session, fresh), true);
     if (keepRace >= 0 && races[keepRace]) selectRace(keepRace);
     T = Math.max(tMin, Math.min(tMax, keepT)); render();
     const added = boats.slice(before).map(b => b.name).join(', ');
     if (added) toast(`New track: ${added}`, 5000);
   } catch {} finally { pulling = false; }
 }
-async function dockUpload(file) {
-  if (!dock.on) return;
-  try {
-    const fd = new FormData(); fd.append('file', file);
-    const r = await fetch('/api/upload', { method: 'POST', body: fd });
-    if (!r.ok) throw new Error(await r.text());
-    const j = await r.json(); toast(`Saved to ${j.venue_name ? niceDate(j.session) + ', ' + j.venue_name : j.session}`);
-    renderSessions(await (await fetch('/api/sessions', { cache: 'no-store' })).json());
-  } catch (err) { toast('Upload to dock failed: ' + err.message, 5000); }
+// files added here are saved to the server too; when they all land in one session, that session is opened so
+// names, races and the course save there rather than only on this device
+async function dockUpload(files) {
+  if (!dock.on || !files.length) return;
+  const landed = new Set(); let lastReply = null;
+  for (const file of files) {
+    try {
+      const fd = new FormData(); fd.append('file', file);
+      const r = await fetch('/api/upload', { method: 'POST', body: fd });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      landed.add(j.session); lastReply = j;
+    } catch (err) { toast(`Couldn't save ${file.name}: ${err.message}`, 5000); }
+  }
+  if (landed.size === 1 && lastReply) {
+    toast(`Saved to ${lastReply.venue_name ? niceDate(lastReply.session) + ', ' + lastReply.venue_name : lastReply.session}`);
+    if (dock.session !== lastReply.session) { await openSession(lastReply.session); return; }
+    pickUpNewTracks(await refreshSessions());    // added to the session on screen without waiting for the next poll
+    return;
+  }
+  // nothing saved, or files from different days: show them from this device as before
+  if (landed.size) { toast(`Saved into ${landed.size} sessions`); await refreshSessions(); }
+  loadFiles(files);
 }
 
 // ---------- boat list ----------
@@ -2056,7 +2069,7 @@ $('#boats').addEventListener('click', async e => {
   const v = e.target.closest('[data-vis]'), r = e.target.closest('[data-rm]'), an = e.target.closest('[data-an]');
   if (an) { focusBoat(an.dataset.an); openTool('t-tacks').scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
   if (v) { const b = boats.find(x => x.id === v.dataset.vis); b.visible = !b.visible; buildBoat(b); recomputeTimeline(); renderList(); renderCards(); render(); }
-  if (r) { const b = boats.find(x => x.id === r.dataset.rm); if (!confirm(`Remove ${label(b)} from the view? (The file stays on the dock.)`)) return; clearLayers(b); boats = boats.filter(x => x !== b); recomputeTimeline(); renderList(); renderCards(); renderTacks(); render(); }
+  if (r) { const b = boats.find(x => x.id === r.dataset.rm); if (!confirm(`Remove ${label(b)} from the view? (The saved file is kept.)`)) return; clearLayers(b); boats = boats.filter(x => x !== b); recomputeTimeline(); renderList(); renderCards(); renderTacks(); render(); }
 });
 $('#boats').addEventListener('change', e => { const n = e.target.closest('[data-name]'); if (n) renameBoat(n.dataset.name, n.value); });
 
@@ -2106,12 +2119,12 @@ async function loadFiles(files, quiet) {
   if (bad.length) toast('Skipped ' + bad.join('; '), 6000);
   else if (ok.length && !quiet) toast(`Added ${ok.length} track${ok.length > 1 ? 's' : ''}`);
 }
-$('#file').addEventListener('change', e => { const fs = [...e.target.files]; loadFiles(fs); fs.forEach(dockUpload); e.target.value = ''; });
+$('#file').addEventListener('change', e => { const fs = [...e.target.files]; (dock.on ? dockUpload(fs) : loadFiles(fs)); e.target.value = ''; });
 let dragDepth = 0;
 window.addEventListener('dragenter', e => { e.preventDefault(); dragDepth++; $('#drop').classList.add('show'); });
 window.addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; $('#drop').classList.remove('show'); } });
 window.addEventListener('dragover', e => e.preventDefault());
-window.addEventListener('drop', e => { e.preventDefault(); dragDepth = 0; $('#drop').classList.remove('show'); const fs = [...e.dataTransfer.files]; loadFiles(fs); fs.forEach(dockUpload); });
+window.addEventListener('drop', e => { e.preventDefault(); dragDepth = 0; $('#drop').classList.remove('show'); const fs = [...e.dataTransfer.files]; (dock.on ? dockUpload(fs) : loadFiles(fs)); });
 
 // ---------- export ----------
 $('#export').addEventListener('click', () => {
@@ -2129,7 +2142,7 @@ $('#export').addEventListener('click', () => {
   a.download = `wakeback-${d}.gpx`; document.body.appendChild(a); a.click(); a.remove();
   toast('Downloaded ' + a.download);
 });
-$('#clear').addEventListener('click', () => { boats.forEach(clearLayers); boats = []; colourIdx = 0; focusId = ''; tkSel = null; crew = {}; races = []; raceIdx = -1; meta = { marks: [], fixes: [], lines: [] }; setAdding(false); addingLine = null; sfState = null; renderWx(); setPlaying(false); recomputeTimeline(); renderList(); renderCards(); renderTacks(); renderRaces(); render(); });
+$('#clear').addEventListener('click', () => { dock.session = null; boats.forEach(clearLayers); boats = []; colourIdx = 0; focusId = ''; tkSel = null; crew = {}; races = []; raceIdx = -1; meta = { marks: [], fixes: [], lines: [] }; setAdding(false); addingLine = null; sfState = null; renderWx(); setPlaying(false); recomputeTimeline(); renderList(); renderCards(); renderTacks(); renderRaces(); render(); });
 $('#metric').addEventListener('change', drawChartBase);
 
 // ---------- controls ----------
@@ -2219,7 +2232,7 @@ function demoLines() {
 }
 $('#demo').addEventListener('click', async () => {
   if (wind == null) { wind = 25; $('#wind').value = 25; windCtl.update(); }
-  dock.session = null; $('#clear').click();
+  $('#clear').click();
   await addBoats([simBoat('James 5154', 4.6, 11, 0, 12, 'puck1'), simBoat('Dave', 4.4, 23, 8, 5, 'puck2'), simBoat('Mike', 4.2, 37, -8, 24, 'puck3')]);
   meta.marks = demoMarks(); meta.lines = demoLines(); saveMeta(); recomputeAll(); renderMarks();
   toast('Demo loaded: three Solos, three laps. Press Play, then B for big screen.');

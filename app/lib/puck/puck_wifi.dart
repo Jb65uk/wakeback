@@ -15,7 +15,6 @@ class PuckWifi {
   static const _ch = MethodChannel('wakeback/puck_wifi');
 
   static const prefix = 'wakeback-puck-';
-  static String ssidFor(int puck) => '$prefix$puck';
 
   /// Can this phone join the puck's WiFi from the app (Android 10+)?
   static Future<bool> supported() async {
@@ -28,13 +27,13 @@ class PuckWifi {
     }
   }
 
-  /// Join a puck's setup WiFi: any "wakeback-puck-*" (the phone's dialog lists them; the user picks one),
-  /// or exactly [ssid] when given. Resolves once the phone is on it and this app's traffic is routed there;
-  /// throws with a readable message if the user said no or no puck's WiFi is about.
-  static Future<void> join({String ssid = ''}) async {
-    final what = ssid.isEmpty ? 'the puck\'s WiFi ($prefix…)' : '"$ssid"';
+  /// Join a puck's setup WiFi: any "wakeback-puck-*" (the phone's dialog lists them; the user picks one).
+  /// Resolves once the phone is on it and this app's traffic is routed there; throws with a readable
+  /// message if the user said no or no puck's WiFi is about.
+  static Future<void> join() async {
+    const what = 'the puck\'s WiFi ($prefix…)';
     try {
-      await _ch.invokeMethod<bool>('join', {'ssid': ssid, 'prefix': prefix});
+      await _ch.invokeMethod<bool>('join', {'prefix': prefix});
     } on PlatformException catch (e) {
       throw PuckException(switch (e.code) {
         'unavailable' => 'Couldn\'t find $what. Is the puck in setup mode (hold the button 6 s: five quick blinks), and did you tap Connect?',
@@ -73,24 +72,16 @@ class PuckException implements Exception {
 /// What a puck says about itself on /api/status (the bits the app shows; shape from firmware/puck statusJson()).
 class PuckStatus {
   final int puck;
-  final String fw, ssid, wifiMode, orientation;
-  final int batteryPct, gpsFix, sats, tracks;
-  final bool onPad, recording, autoRec, twistLearned;
+  final String fw;
+  final int batteryPct, tracks;
+  final bool autoRec;
   final Map<String, dynamic> raw;
 
   PuckStatus._(this.raw)
       : puck = _i(raw['puck']) ?? 0,
         fw = '${raw['fw'] ?? ''}',
-        ssid = '${_m(raw['wifi'])['ssid'] ?? ''}',
-        wifiMode = '${_m(raw['wifi'])['mode'] ?? ''}',
-        orientation = '${_m(raw['imu'])['orientation'] ?? 'unknown'}',
         batteryPct = _i(_m(raw['batt'])['pct']) ?? -1,
-        gpsFix = _i(_m(raw['gps'])['fix']) ?? 0,
-        sats = _i(_m(raw['gps'])['sats']) ?? 0,
-        onPad = _m(raw['batt'])['on_pad'] == true,
-        recording = _m(raw['rec'])['on'] == true,
         autoRec = raw['autorec'] != false,
-        twistLearned = _m(raw['imu'])['twist_learned'] == true,
         tracks = raw['tracks'] is List ? (raw['tracks'] as List).length : 0;
 
   static int? _i(Object? v) => v is num ? v.toInt() : int.tryParse('$v');

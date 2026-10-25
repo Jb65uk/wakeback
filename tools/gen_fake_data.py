@@ -105,7 +105,7 @@ def main():
     ap.add_argument('--out', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'sessions'))
     a = ap.parse_args()
 
-    # Sunday: two back-to-back races in one log per puck, plus one phone track. Try "Auto split" on this one.
+    # Sunday: two back-to-back races in one log per puck, plus one phone track. Try "Suggest races" on this one.
     day = datetime(2026, 9, 20, 10, 30, tzinfo=timezone.utc)
     d = os.path.join(a.out, day.strftime('%Y-%m-%d') + '_southport-sc'); os.makedirs(d, exist_ok=True)   # sessions are date + venue
     fleet = [('puck1', 4.6, 11,  0, 12), ('puck2', 4.4, 23,  8,  5), ('puck3', 4.2, 37, -8, 24)]

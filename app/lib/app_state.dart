@@ -15,6 +15,7 @@ import 'dock/store.dart';
 import 'dock/tiles.dart';
 import 'sync/server_sync.dart';
 import 'updates.dart';
+import 'widgets/common.dart' show friendly;
 
 /// Your WakeBack server. Change in You → Advanced if you run your own.
 const String kDefaultServer = 'https://wakeback.bridgesolutions.uk';
@@ -31,7 +32,7 @@ class AppState extends ChangeNotifier {
   late final DemoPucks demo;
   final DockSettings dockSettings = DockSettings();
 
-  /// Set if port 5000 couldn't be opened (pucks then can't reach the phone; replays still work).
+  /// Set if port 5000 couldn't be opened (pucks then can't reach the phone; replays still work). Plain words.
   String? dockError;
 
   /// The viewer asked for full screen (projector / tablet): hide the app's own bars.
@@ -47,10 +48,11 @@ class AppState extends ChangeNotifier {
     dock.tiles = tiles;
     dock.me = () => {'name': profileName, 'email': profileEmail};
     dock.demoMode = () => demoMode;
+    dock.onUpload = tracksChanged; // a puck's track just landed: the Sails tab reloads and it syncs
     try {
       await dock.start(port: 5000);
-    } catch (e) {
-      dockError = 'Couldn\'t open port 5000 ($e). Replays work, but pucks can\'t upload to this phone until the app restarts.';
+    } catch (_) {
+      dockError = 'Another app is using the dock\'s port. Restart WakeBack.';
       await dock.start(port: 0, address: InternetAddress.loopbackIPv4);
     }
     demo = DemoPucks(dock.localUrl);
@@ -60,8 +62,8 @@ class AppState extends ChangeNotifier {
   Future<DockStore> _openStore(bool demo) async {
     final s = DockStore(Directory('${_docs.path}/${demo ? 'wakeback-demo' : 'wakeback'}'));
     await s.init();
-    s.fleet = fleet;
     s.myPucks = myPucks.map((p) => p.puck).toSet();
+    s.fleet = _fleet;
     s
       ..ownerName = profileName
       ..ownerEmail = profileEmail
@@ -219,44 +221,32 @@ class AppState extends ChangeNotifier {
 
   // ------------------------------------------------------------------ settings
 
-  /// The phone hotspot pucks join (shown on the Dock page).
+  // These three are typed into text fields, so they don't notify on every keystroke: the screens that show
+  // them read them when they build.
+
+  /// The phone hotspot pucks join (set by Set up a puck; shown on the Dock page).
   String get hotspotName => _p.getString('hotspotName') ?? 'wakeback';
   set hotspotName(String v) {
     final s = v.trim().isEmpty ? 'wakeback' : v.trim();
     _p.setString('hotspotName', s);
     dockSettings.wifi = s;
-    notifyListeners();
   }
 
-  /// Kept for setting up pucks to join this phone's hotspot (stage 4).
+  /// Kept for setting up pucks to join this phone's hotspot.
   String get hotspotPass => _p.getString('hotspotPass') ?? '';
-  set hotspotPass(String v) {
-    _p.setString('hotspotPass', v);
-    notifyListeners();
-  }
+  set hotspotPass(String v) => _p.setString('hotspotPass', v);
 
   /// You: owner of everything this phone records or imports (your account when signed in).
   String get profileName => _p.getString('profileName') ?? '';
   set profileName(String v) {
     _p.setString('profileName', v.trim());
     store.ownerName = v.trim();
-    notifyListeners();
   }
 
   String get profileEmail => _p.getString('profileEmail') ?? '';
-  set profileEmail(String v) {
-    _p.setString('profileEmail', v.trim());
-    store.ownerEmail = v.trim();
-    notifyListeners();
-  }
 
-  /// How many pucks you have, so ones never seen still get a row on the Dock page.
-  int get fleet => _p.getInt('fleet') ?? 0;
-  set fleet(int v) {
-    _p.setInt('fleet', v.clamp(0, 16));
-    store.fleet = v.clamp(0, 16);
-    notifyListeners();
-  }
+  /// Rows on the Dock page: one per puck set up from this phone, so one never seen still shows.
+  int get _fleet => myPucks.fold(0, (m, p) => p.puck > m ? p.puck : m);
 
   // ------------------------------------------------------------------ your pucks (set up from this app)
 
@@ -277,14 +267,17 @@ class AppState extends ChangeNotifier {
   Future<void> putMyPuck(MyPuck p) async {
     final l = myPucks.where((x) => x.puck != p.puck).toList()..add(p);
     await _p.setStringList('myPucks', l.map((x) => jsonEncode(x.toJson())).toList());
-    store.myPucks = l.map((x) => x.puck).toSet();
-    if (fleet < p.puck) fleet = p.puck; // so it gets a row on the Dock page before it's ever seen
+    store
+      ..myPucks = l.map((x) => x.puck).toSet()
+      ..fleet = _fleet;
     notifyListeners();
   }
 
   Future<void> removeMyPuck(int puck) async {
     await _p.setStringList('myPucks', myPucks.where((x) => x.puck != puck).map((x) => jsonEncode(x.toJson())).toList());
-    store.myPucks = myPucks.map((x) => x.puck).toSet();
+    store
+      ..myPucks = myPucks.map((x) => x.puck).toSet()
+      ..fleet = _fleet;
     notifyListeners();
   }
 
@@ -351,7 +344,7 @@ class AppState extends ChangeNotifier {
   /// without being asked. At most every 5 minutes unless [force]. Null = didn't run. Throws
   /// SyncException if the server can't be reached.
   Future<SyncReport?> autoSync({bool force = false}) async {
-    if (!signedIn || demoMode || serverUrl.isEmpty || _syncing) return null;
+    if (!signedIn || demoMode || _syncing) return null;
     final now = DateTime.now().millisecondsSinceEpoch;
     if (!force && now - _lastSync < 5 * 60 * 1000) return null;
     _syncing = true;
@@ -359,20 +352,32 @@ class AppState extends ChangeNotifier {
     syncStatus.value = 'syncing';
     try {
       final r = await ServerSync(serverUrl, store, token: token).syncNew();
-      syncProblem = null;
-      syncStatus.value = r.conflictDays.isEmpty ? 'ok' : 'attention';
+      syncWent(r);
       if (r.up + r.down > 0) notifyListeners();
       return r;
-    } on SyncException catch (e) {
-      syncProblem = e.message;
-      syncStatus.value = e.offline ? 'offline' : 'error';
-      rethrow;
     } catch (e) {
-      syncProblem = '$e';
-      syncStatus.value = 'error';
+      await syncFailed(e);
       rethrow;
     } finally {
       _syncing = false;
+    }
+  }
+
+  /// A sync (automatic or from the Sync page) finished: the cloud on the Sails tab shows how it went.
+  void syncWent(SyncReport r) {
+    syncProblem = null;
+    syncStatus.value = r.conflictDays.isEmpty ? 'ok' : 'attention';
+  }
+
+  /// A sync failed. If the server no longer knows our sign-in, sign out here too so nothing keeps trying.
+  Future<void> syncFailed(Object e) async {
+    if (e is SyncException) {
+      syncProblem = e.signedOut ? 'Signed out: log in again' : e.message;
+      syncStatus.value = e.offline ? 'offline' : 'error';
+      if (e.signedOut && signedIn) await signOut(tellServer: false);
+    } else {
+      syncProblem = friendly(e);
+      syncStatus.value = 'error';
     }
   }
 }

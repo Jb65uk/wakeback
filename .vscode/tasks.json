@@ -21,7 +21,9 @@
       "problemMatcher": [],
       "options": {
         "env": {
-          "WAKEBACK_FLEET": "6"
+          "WAKEBACK_FLEET": "6",
+          "WAKEBACK_DEBUG": "1",
+          "WAKEBACK_DEMO_WIFI": "1"
         }
       }
     },

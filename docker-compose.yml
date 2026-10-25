@@ -13,8 +13,7 @@ services:
       WAKEBACK_ADMIN: "you@example.com"   # your email: turns accounts on, and makes that account the admin (/admin)
       # Locked out of the admin account? Add the line below with a new password, restart, log in, then remove it again:
       # WAKEBACK_ADMIN_RESET: "a-new-password"
-      WAKEBACK_WIFI: wakeback              # the dock WiFi name shown on the Dock page
-      WAKEBACK_OWNER: ""                   # owner for pucks with none set (e.g. "Southport SC"); blank for personal use
+      # WAKEBACK_WIFI, WAKEBACK_OWNER and WAKEBACK_FLEET only matter on a club dock Pi: see the README.
     labels:
       com.centurylinklabs.watchtower.enable: "true"
 

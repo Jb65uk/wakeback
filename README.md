@@ -4,34 +4,44 @@ GPS WakeBack pucks for dinghy racing: log where you sailed, how fast and how hee
 
 ```
 wakeback/
-├── viewer/index.html     the whole viewer, one file, works offline or served by the dock
+├── viewer/index.html     the replay viewer, one file; works on its own or served by the server (and inside the app)
+├── viewer/dock.html      the Dock page: puck status, internet, WiFi (on a Pi)
+├── viewer/admin.html     the admin page (/admin): users, tracks, puck keys, log of changes
+├── viewer/record.html    record a sail with the phone's own GPS in the browser (/record)
 ├── app/                  Android phone/tablet app: the dock in your pocket, runs this same viewer (see app/README.md)
 ├── docs/PHONE_DOCK.md    how pucks upload to a phone hotspot instead of the dock (firmware notes)
-├── server/app.py         dock server (Flask) — runs on the dock Pi, or your laptop for dev
-├── tools/gen_fake_data.py    makes demo sessions in the exact puck CSV format
-├── tools/fake_puck_upload.py pretends to be a puck landing on the dock
-├── tools/fake_pucks.py       a dock full of pretend pucks checking in (for the Dock page)
-├── data/sessions/<date>_<venue>/  one folder per session (sailing date + venue), one file per boat
-├── data/venues.json      venues (Southport SC to start; new places are added as they're sailed)
 ├── docs/ROADMAP.md       where this is heading: your own sailing, friends, events
+├── server/app.py         the server (Flask): sessions, uploads, venues, pucks, dock
+├── server/accounts.py    accounts, friends, sharing, puck keys, admin (SQLite)
+├── server/stats.py       per-track numbers, your totals and the league
+├── Dockerfile, docker-compose.yml, .dockerignore   the server as a container (NAS), with updater and backup
+├── tools/gen_fake_data.py    makes demo sessions in the exact puck CSV format (data/sessions is generated, not in git)
+├── tools/fake_puck_upload.py pretends to be a puck landing on the dock (the other tools share its upload())
+├── tools/fake_pucks.py       a dock full of pretend pucks checking in (for the Dock page)
+├── tools/test_server.py      end-to-end checks of the server on a throwaway copy
+├── tools/test_race_suggest.mjs  checks the viewer's race suggestions against made-up fleets
+├── data/sessions/<date>_<venue>/  one folder per session (sailing date + venue), one file per boat
 ├── BUILD.md              build one puck on a breadboard: shopping list, wiring in stages, first track
 ├── hardware/carrier/     60 mm carrier PCB: Gerbers for JLCPCB, previews, assembly notes, generator
 ├── hardware/case/        3D-printed puck case: base, screw lid (O-ring), GPS shelf, deck cradle. STLs + generator
-├── firmware/bench_test/  PlatformIO bench test: checks GPS, IMU, battery, Qi, records a test track
-├── tools/pull_track.py   copies a recorded track off the puck over USB
-└── firmware/             (next) the real puck firmware
+└── firmware/puck/        the puck firmware: setup WiFi page, auto-record, upload, sleep
 ```
 
 ## Quick start (VS Code)
 
 1. Open this folder in VS Code. Install the recommended extensions when prompted.
 2. `Terminal > Run Task > Install requirements` (or `pip install -r server/requirements.txt`).
-3. Press F5 with **Run dock server** selected, then open http://localhost:5000.
-4. The panel shows two demo sessions from the fake data: click **Sun 20 Sep, Southport SC** to load Sunday (three pucks plus Steve's phone, two races back to back in one log), press **Play**, then **B** for the big-screen projector view.
-5. The course is already laid for the demo day (three marks, left to starboard). Under Races, WakeBack offers the likely races it found in the tracks: tick them and press **Add selected** (or press **Suggest races** to look again). Pick **Race 1**, then **Estimate** next to Wind. Tap **Tacks & gybes** under a boat, then filter to Tacks or Gybes, sort Worst first, and tap any one to jump the replay there.
-6. `Run Task > Fake puck upload` to watch a session appear on the dock as a puck would post it.
+3. `Run Task > Generate fake data`: `data/sessions` isn't in git, this makes the two demo days.
+4. Press F5 with **Run dock server** selected, then open http://localhost:5000.
+5. The panel shows two demo sessions from the fake data: click **Sun 20 Sep, Southport SC** to load Sunday (three pucks plus Steve's phone, two races back to back in one log), press **Play**, then **B** for the big-screen projector view.
+6. The course is already laid for the demo day (three marks, left to starboard). Under Races, WakeBack offers the likely races it found in the tracks: tick them and press **Add selected** (or press **Suggest races** to look again). Pick **Race 1**, then **Estimate** next to Wind. Tap **Tacks & gybes** under a boat, then filter to Tacks or Gybes, sort Worst first, and tap any one to jump the replay there.
+7. `Run Task > Fake puck upload` to watch a session appear on the dock as a puck would post it.
+
+Checks: `python tools/test_server.py` and `node tools/test_race_suggest.mjs`.
 
 No server? Just open `viewer/index.html` in a browser and drag files from `data/sessions/` onto it. Everything works except the sessions list and shared puck names.
+
+No puck? Open **/record** on a phone: it records a sail with the phone's GPS in the browser, saves it on the phone, and sends it to the server (sign in on the viewer first when accounts are on). The viewer's sign-in box links to it.
 
 ## Dock page
 
@@ -39,18 +49,22 @@ Open **Dock** (tab at the top, or http://localhost:5000/dock). To see it with pu
 
 - Every puck: on the dock or away, battery % with charging / full / not charging, last upload (when, which day, how big, who sailed it), last seen, storage free, firmware (flags ones behind)
 - Warnings up top: pucks not charging on the pad, low batteries
-- Internet: online or not, and through what. "Connect to WiFi" scans for networks and joins one (club WiFi, a phone hotspot at an away venue). On the Pi this is real (NetworkManager, the default on Raspberry Pi OS); on a laptop it runs in demo mode with made-up networks so you can try it. The dock's own `wakeback` WiFi stays up regardless
-- Dock health: disk space, clock, uptime, sessions stored, NAS backup (not set up yet)
+- Internet: online or not, and through what. "Connect to WiFi" scans for networks and joins one (club WiFi, a phone hotspot at an away venue). It only appears where the server can change WiFi: a Pi with NetworkManager (the default on Raspberry Pi OS), or a laptop with `WAKEBACK_DEMO_WIFI=1` (made-up networks, so the flow can be tried; the VS Code tasks set it). With accounts on, only the admin may change WiFi. The dock's own `wakeback` WiFi stays up regardless
+- Dock health: disk space, clock, uptime, sessions stored
 
-Dock settings (environment variables):
+Settings (environment variables):
 
 | Variable | What | Default |
 |---|---|---|
+| `WAKEBACK_ADMIN` | your email: turns accounts on, and the account with this email is the admin (`/admin`) | off |
+| `WAKEBACK_ADMIN_RESET` | locked out? a new admin password, applied once at start-up; then remove it | none |
 | `WAKEBACK_FLEET` | how many pucks the club has, so ones never seen still get a row | 0 |
-| `WAKEBACK_WIFI` | the dock's own WiFi name, shown on the Dock page | wakeback |
+| `WAKEBACK_WIFI` | the dock Pi's own WiFi name, shown on the Dock page | wakeback |
 | `WAKEBACK_OWNER` | owner of tracks from pucks with no owner set, e.g. `Southport SC` | none |
-| `WAKEBACK_UPLINK_IF` | WiFi adapter used to reach the internet (USB dongle; onboard wlan0 runs the dock WiFi) | wlan1 |
-| `WAKEBACK_PIN` | PIN needed to change the dock's WiFi | none |
+| `WAKEBACK_UPLINK_IF` | WiFi adapter the Pi uses to reach the internet (USB dongle; onboard wlan0 runs the dock WiFi) | wlan1 |
+| `WAKEBACK_DEMO_WIFI` | `1`: made-up WiFi networks on the Dock page (laptop demo) | 0 |
+| `WAKEBACK_DEBUG` | `1`: Flask's debugger and auto-reload when run as `python server/app.py` (dev only) | 0 |
+| `PORT` | the port `python server/app.py` listens on | 5000 |
 
 ## Phone / tablet app
 
@@ -103,22 +117,36 @@ Phone/watch GPX files are accepted too; they just lack heel and pitch.
 
 | Method | Path | What |
 |---|---|---|
-| GET | `/api/sessions` | list sessions: `[{"id":"2026-09-20_southport-sc","date","venue","venue_name","venue_new","files","count","races","owners":{"file":"name"}}]` (owners' emails are never listed) |
-| GET | `/api/sessions/<session>/<file>` | fetch one track |
-| POST | `/api/upload` | multipart `file` (+ optional `puck`, `owner_name`, `owner_email`, `sailor`); filed under the date of its first timestamp and the venue of its first position → `{session, file, venue, venue_name}` |
-| GET / POST | `/api/venues` | list venues / add one `{"name","lat","lon","radius_m"}` (an `id` that already exists is returned as-is, for sync) |
-| PUT | `/api/venues/<id>` | rename or move a venue, e.g. name an automatic "New venue near …" |
-| POST | `/api/sessions/<session>/move` | `{"venue": id}`: a session filed at the wrong venue; merges into that venue's session for the day |
-| DELETE | `/api/sessions/<session>/<file>` | remove a track |
+With accounts on, every route below except `/api/hello` and `/api/pucks/checkin` needs a sign-in (bearer token or cookie) or a puck key; errors come back as `{"error": "..."}`.
+
+| Method | Path | What |
+|---|---|---|
+| GET | `/api/sessions` | list the sessions you can see: `[{"id":"2026-09-20_southport-sc","date","venue","venue_name","venue_new","files","count","races","owners":{"file":"name"},"sharing","boats","mine","stats"}]` (owners' emails are listed only for the admin, as `owner_emails`) |
+| GET | `/api/sessions/<session>/<file>` | fetch one track (`.csv`/`.gpx` only; 404 if you can't see it) |
+| POST | `/api/upload` | multipart `file` (+ optional `puck`, `owner_name`, `owner_email`, `visibility`, `boat`); filed under the date of its first timestamp and the venue of its first position → `{session, file, venue, venue_name}` |
+| DELETE | `/api/sessions/<session>/<file>` | remove a track (its owner or the admin) |
+| POST | `/api/sessions/<session>/tracks/<file>` | `{visibility: "friends"/"private", boat}` (owner or admin); the admin may also set `owner_email` |
 | GET / PUT | `/api/sessions/<session>/races` | race windows for that day: `[{"name","start","end","gun","marks":[...],"lines":[{"kind":"start"/"finish"/"both","a":{lat,lon},"b":{lat,lon}}]}]`, times in epoch ms, a = committee boat end, b = pin |
 | GET / PUT | `/api/sessions/<session>/meta` | whole-session marks, your corrections and the day's weather: `{"marks":[{"name","lat","lon","side":"port"/"stbd"}],"fixes":[...],"weather":{"src","lat","lon","got","pts":[[t_ms,dir,kn,gust],...]}}` |
 | GET / PUT | `/api/sessions/<session>/crew` | who had which puck that day: `{"puck3": "Dave"}` |
-| GET | `/api/sailors` | every name used in any session (for the name picker) |
-| POST | `/api/pucks/checkin` | puck check-in every ~30 s on the pad: `{"puck":3,"battery_mv":4012,"charging":"charging"/"full"/"not","on_pad":true,"free_kb":12000,"total_kb":14336,"fw":"0.3.1","pending":1}`; reply carries dock time |
-| GET | `/api/pucks` | every puck's status for the Dock page |
-| GET | `/api/dock/status` | internet, disk, clock, uptime |
-| GET / POST | `/api/wifi/scan`, `/api/wifi/connect` | find and join a WiFi network (on the Pi) |
-| GET | `/api/hello` | dock time, used by pucks to confirm they're talking to the right box |
+| | | races, meta and crew: 404 unless the session exists and you can see a track in it; PUT needs you to own a track in it (or be the admin) |
+| POST | `/api/sessions/<session>/move` | `{"venue": id}`: a session filed at the wrong venue; merges into that venue's session for the day (every track's owner, or the admin) |
+| GET / POST | `/api/venues` | list venues / add one `{"name","lat","lon","radius_m"}` (an `id` that already exists is returned as-is, for sync) |
+| PUT | `/api/venues/<id>` | name an automatic "New venue near …" (anyone); rename or move a named venue (admin, when accounts are on) |
+| GET | `/api/sailors` | every name used in a session you can see (for the name picker) |
+| GET | `/api/stats` | your totals: `?period=month/year/all`, `?boat=Solo 5843` |
+| GET | `/api/league` | you and your friends ranked: `?period=`, `?cls=Solo` |
+| GET / DELETE | `/api/me/export`, `/api/me` | your data as a zip / delete your account and tracks (`{password}`) |
+| POST | `/api/auth/signup`, `/login`, `/logout`, `/status`, `/password`, `/forgot`, `/reset` | accounts (see `server/accounts.py`); 404 when accounts are off |
+| GET | `/api/auth/me` | `{accounts, user, friends, pending_in, pending_out}` |
+| GET / POST / DELETE | `/api/friends`, `/api/friends/request`, `/api/friends/<id>/accept`, `/decline`, `/api/friends/<id>` | friends |
+| GET / POST / DELETE | `/api/pucks/keys`, `/api/pucks/keys/<id>` | your puck keys: issue one for puck N (shown once), revoke one |
+| POST | `/api/pucks/checkin` | puck check-in every ~30 s on the pad: `{"puck":3,"battery_mv":4012,"charging":"charging"/"full"/"not","on_pad":true,"free_kb":12000,"total_kb":14336,"fw":"0.3.1","pending":1}` (+ `X-Puck-Key` header); reply carries dock time |
+| GET | `/api/pucks` | every puck's status for the Dock page (last uploads only from tracks you can see) |
+| GET | `/api/dock/status` | internet, disk, clock, uptime, `can_manage_wifi` |
+| GET / POST | `/api/wifi/scan`, `/api/wifi/connect` | find and join a WiFi network (a Pi with NetworkManager; admin only with accounts on) |
+| GET / POST / PUT / DELETE | `/api/admin/users`, `/api/admin/users/<id>`, `/api/admin/settings`, `/api/admin/audit`, `/api/admin/resets`, `/api/admin/pucks` | the admin page's routes |
+| GET | `/api/hello` | server time, used by pucks to confirm they're talking to the right box |
 
 ## On a NAS (or any Docker box): accounts, friends, admin
 
@@ -148,7 +176,7 @@ A dock Pi or the phone app runs without `WAKEBACK_ADMIN`: no logins, everything 
 
 ## On the Pi
 
-Same server. Set the Pi up as a WiFi access point (`wakeback`, no internet needed), run `app.py` under systemd, and point Chromium in kiosk mode at `http://localhost:5000` for the projector. Pucks join the AP when they sit on the charging pad and POST to `/api/upload`.
+Same server. Set the Pi up as a WiFi access point (`wakeback`, no internet needed), run it under systemd with gunicorn as the Dockerfile does (`gunicorn --workers 1 --threads 8 --bind 0.0.0.0:5000 --chdir server app:app`; or the container itself), never `python server/app.py` with `WAKEBACK_DEBUG=1`, and point Chromium in kiosk mode at `http://localhost:5000` for the projector. Pucks join the AP when they sit on the charging pad and POST to `/api/upload`. `WAKEBACK_WIFI`, `WAKEBACK_OWNER`, `WAKEBACK_FLEET` and `WAKEBACK_UPLINK_IF` are for the Pi; they do nothing on the NAS.
 
 ## Later list
 
@@ -159,9 +187,9 @@ Agreed, not built yet. Roughly in the order they'd make sense. The bigger direct
    - **Travel-proof:** (a) over ~25 kn for a minute = not sailing, stop and discard; (b) needs boat-like heel/pitch rocking, not car motion; (c) only records near known venues (Southport + clubs added on the dock; dock asks "new venue?" first time somewhere new); (d) travel mode, set by triple-tap or from the dock page, sleeps until next put on a pad (use for long trips and flying).
    - Dock double-checks on upload and drops anything with road speeds or no boat motion.
    - GPS off while asleep, so a full charge lasts weeks in a bag.
-2. **Home viewing, read-only**: dock syncs sessions to the home server (NAS/Tower) when online; published through a Cloudflare tunnel (e.g. puck.bridgesolutions.uk). Public copy runs the viewer locked: replay, races, colours, chart, focus a boat, tack list, big/full screen, download a track. No editing of names, races, marks or corrections; server refuses all changes. Choose per session whether it's published. Decide: club members only (Cloudflare Access email code) or anyone with the link.
-3. **Up to 16 pucks**: 16 distinct colours (no red/green), compact one-row-per-boat projector view, stress test with a fake 16-boat race, bigger pad tray and power supply.
-4. **Weather data**: ~~Open-Meteo~~ done — **Get weather** fills in wind direction, speed and gusts per race (hourly model). Next: the SSC weather station when it's running (log direction/speed every few seconds with a timestamp) for real shifts, lifts and headers — same `meta.weather.pts` format, just finer.
-5. **Offline map backgrounds**: dock keeps the satellite/chart tiles for each venue it's been online at, so away venues work without internet.
-6. **Leg analysis**: with marks placed, split each race into legs and show who gained or lost on each beat and run.
-7. **NAS backup** of sessions from the dock.
+2. **Up to 16 pucks**: 16 distinct colours (no red/green), compact one-row-per-boat projector view, stress test with a fake 16-boat race, bigger pad tray and power supply.
+3. **Weather from the SSC station** when it's running (log direction/speed every few seconds with a timestamp) for real shifts, lifts and headers — same `meta.weather.pts` format as Open-Meteo, just finer.
+4. **Offline map backgrounds**: dock keeps the satellite/chart tiles for each venue it's been online at, so away venues work without internet.
+5. **Leg analysis**: with marks placed, split each race into legs and show who gained or lost on each beat and run.
+
+Done and gone from this list: weather (Open-Meteo, **Get weather**), the home server with accounts and friends (the NAS section above, which replaced the read-only public copy idea), nightly backups (the compose file's backup container).

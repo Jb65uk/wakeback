@@ -9,6 +9,7 @@ import 'package:share_plus/share_plus.dart';
 
 import 'app_state.dart';
 import 'dock/stats.dart';
+import 'widgets/format.dart';
 
 class ShareTrack {
   final String name;
@@ -160,7 +161,7 @@ void _text(Canvas c, String s, Offset at, double size, Color colour, FontWeight 
 }
 
 /// Build the card for a session and hand it to the share sheet.
-Future<void> shareSession(BuildContext context, Map<String, dynamic> session) async {
+Future<void> shareSession(Map<String, dynamic> session) async {
   final id = session['id'] as String;
   final files = (session['files'] as List).cast<String>();
   final mine = ((session['mine'] as List?) ?? const []).cast<String>().toSet();
@@ -177,10 +178,7 @@ Future<void> shareSession(BuildContext context, Map<String, dynamic> session) as
     } catch (_) {}
   }
   if (tracks.isEmpty) throw StateError('No tracks to draw');
-  final date = DateTime.tryParse('${session['date']}');
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-  final title = date == null ? '${session['date']}' : '${days[date.weekday - 1]} ${date.day} ${months[date.month - 1]} ${date.year}';
+  final title = niceDate('${session['date']}');
   final img = await paintShareCard(
     title: title,
     subtitle: '${session['venue_name'] ?? ''}${tracks.length > 1 ? '  ·  ${tracks.length} boats' : ''}',
