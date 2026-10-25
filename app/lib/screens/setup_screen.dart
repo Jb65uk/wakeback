@@ -16,6 +16,7 @@ import '../widgets/boats.dart';
 import '../widgets/common.dart';
 import 'friends_section.dart';
 import 'offline_maps.dart';
+import 'pucks_card.dart';
 import 'update_card.dart';
 import 'web_page.dart';
 import 'welcome_screen.dart';
@@ -126,6 +127,10 @@ class _SetupScreenState extends State<SetupScreen> {
           if (app.signedIn) const FriendsSection(),
           const BoatsCard(),
 
+          // ------------------------------------------------ pucks
+          const SectionLabel('Pucks'),
+          const PucksCard(),
+
           // ------------------------------------------------ tracks
           const SectionLabel('Tracks'),
           Card(
@@ -152,7 +157,7 @@ class _SetupScreenState extends State<SetupScreen> {
             child: ExpansionTile(
               leading: const Icon(Icons.tune),
               title: const Text('Advanced'),
-              subtitle: const Text('Pucks and hotspot, server, demo'),
+              subtitle: const Text('Hotspot and dock, server, demo'),
               shape: const Border(),
               childrenPadding: EdgeInsets.zero,
               children: [
@@ -171,14 +176,15 @@ class _SetupScreenState extends State<SetupScreen> {
                   ),
                 ]),
                 const SizedBox(height: 10),
-                const Hint('Pucks upload to this phone over its hotspot: turn the hotspot on with the name and password below, and keep WakeBack open while pucks are on their pads.'),
+                const Hint('Pucks upload to this phone over its hotspot: turn the hotspot on with the name and password below, and keep WakeBack open while pucks are on their pads. '
+                    '"Set up a puck" above tells a puck these.'),
                 const SizedBox(height: 8),
                 Align(
                   alignment: Alignment.centerLeft,
                   child: OutlinedButton.icon(
                     onPressed: () => Navigator.push(context, MaterialPageRoute<void>(builder: (_) => ServerViewerPage(url: '${app.dock.localUrl}/dock', title: 'Pucks'))),
                     icon: const Icon(Icons.sensors, size: 18),
-                    label: const Text('See your pucks'),
+                    label: const Text('Dock page'),
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -189,6 +195,7 @@ class _SetupScreenState extends State<SetupScreen> {
                 ),
                 TextField(
                   controller: _pass,
+                  obscureText: true,
                   decoration: const InputDecoration(labelText: 'Hotspot password', prefixIcon: Icon(Icons.key)),
                   onChanged: (v) => app.hotspotPass = v,
                 ),
@@ -205,7 +212,7 @@ class _SetupScreenState extends State<SetupScreen> {
                   IconButton(tooltip: 'Refresh', onPressed: _loadIps, icon: const Icon(Icons.refresh, size: 20)),
                 ]),
                 Row(children: [
-                  const Text('Pucks in your fleet'),
+                  const Expanded(child: Text('Rows on the Dock page (club pucks not set up here)')),
                   const Spacer(),
                   IconButton(onPressed: app.fleet > 0 ? () => app.fleet = app.fleet - 1 : null, icon: const Icon(Icons.remove_circle_outline)),
                   Text('${app.fleet}', style: t.textTheme.titleMedium),

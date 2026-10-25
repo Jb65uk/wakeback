@@ -46,6 +46,15 @@ if ($m -notmatch 'android.permission.INTERNET') {
     $m = ([regex]'<manifest[^>]*>').Replace($m, { param($x) $x.Value + $perms }, 1)
     $changed = $true
 }
+# Set up a puck: joining the puck's setup WiFi from the app (android_src\MainActivity.kt, copied over the generated one)
+foreach ($perm in 'ACCESS_FINE_LOCATION', 'ACCESS_COARSE_LOCATION', 'FOREGROUND_SERVICE', 'FOREGROUND_SERVICE_LOCATION', 'WAKE_LOCK', 'POST_NOTIFICATIONS',
+                  'ACCESS_WIFI_STATE', 'CHANGE_WIFI_STATE', 'CHANGE_NETWORK_STATE') {
+    if ($m -notmatch "android.permission.$perm`"") {
+        $m = ([regex]'<manifest[^>]*>').Replace($m, { param($x) $x.Value + "`n    <uses-permission android:name=`"android.permission.$perm`" />" }, 1)
+        $changed = $true
+    }
+}
+Copy-Item (Join-Path $PSScriptRoot 'android_src\MainActivity.kt') (Join-Path $PSScriptRoot 'android\app\src\main\kotlin\uk\bridgesolutions\wakeback\MainActivity.kt') -Force
 if ($m -notmatch 'usesCleartextTraffic') {
     $m = ([regex]'<application').Replace($m, '<application android:usesCleartextTraffic="true"', 1)
     $changed = $true

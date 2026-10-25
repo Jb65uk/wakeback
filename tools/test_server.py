@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Checks the server's account routes end to end, on a throwaway copy:  python tools/test_server.py
-Covers: tiny tracks left out of stats, stats by boat, league by class, forgot password, export, delete account."""
+Covers: tiny tracks left out of stats, stats by boat, league by class, forgot password, puck keys, export, delete account."""
 import io, json, math, os, shutil, sys, tempfile, zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -94,6 +94,41 @@ try:
     james = c.post('/api/auth/login', json={'email': 'james@example.com', 'password': 'newpassword'}).get_json()['token']
     c.delete_cookie('wb_token')
     assert c.get('/api/admin/resets', headers=H(admin)).get_json()['resets'] == []
+
+    # ---- puck keys: a puck with Dave's key checks in and uploads as Dave, no sign-in needed
+    assert c.post('/api/pucks/checkin', json={'puck': 7, 'battery_mv': 4000}).status_code == 200, 'check-ins never need a key (club pucks)'
+    assert c.post('/api/upload', data={'file': (io.BytesIO(track(25)), 'puck7_x.csv')}, content_type='multipart/form-data').status_code == 401, 'uploads do'
+    r = c.post('/api/pucks/keys', headers=H(dave), json={'puck': 7, 'label': 'Blue puck'})
+    assert r.status_code == 200 and r.get_json()['key'] and r.get_json()['puck'] == 7, r.get_json()
+    key7 = r.get_json()['key']
+    assert c.post('/api/pucks/checkin', json={'puck': 7, 'fw': '1.2.0'}, headers={'X-Puck-Key': key7}).status_code == 200
+    r = c.post('/api/upload', headers={'X-Puck-Key': key7}, data={'file': (io.BytesIO(track(25, t0=T0 + 86400_000)), 'puck7_sail.csv')}, content_type='multipart/form-data')
+    assert r.status_code == 200, r.get_json()
+    pk = [p for p in c.get('/api/pucks', headers=H(admin)).get_json()['pucks'] if p['puck'] == 7][0]
+    assert pk['owner'] == 'Dave' and pk['fw'] == '1.2.0', pk
+    mine = c.get('/api/pucks/keys', headers=H(dave)).get_json()['pucks']
+    assert [(p['puck'], p['label'], p['fw']) for p in mine] == [(7, 'Blue puck', '1.2.0')] and mine[0]['last_seen'], mine
+    assert 'key' not in mine[0], 'the key is only ever shown once'
+    assert c.get('/api/pucks/keys', headers=H(james)).get_json()['pucks'] == [], 'not James\'s puck'
+    owners7 = [s['owners'].get('puck7_sail.csv') for s in c.get('/api/sessions', headers=H(james)).get_json() if 'puck7_sail.csv' in s['files']]
+    assert owners7 == ['Dave'], owners7
+    # setting the same puck up again issues a new key and the old one stops working
+    key7b = c.post('/api/pucks/keys', headers=H(dave), json={'puck': 7}).get_json()['key']
+    assert c.post('/api/upload', headers={'X-Puck-Key': key7}, data={'file': (io.BytesIO(track(25)), 'puck7_old.csv')}, content_type='multipart/form-data').status_code == 401
+    assert len(c.get('/api/pucks/keys', headers=H(dave)).get_json()['pucks']) == 1
+    # the admin sees every key, with the owner, and can revoke one
+    ap = c.get('/api/admin/pucks', headers=H(admin)).get_json()['pucks']
+    assert len(ap) == 2 and ap[0]['owner']['email'] == 'dave@example.com' and ap[0]['revoked'] is None and ap[1]['revoked'], ap
+    assert c.get('/api/admin/pucks', headers=H(dave)).status_code == 403
+    assert c.delete(f'/api/admin/pucks/{ap[0]["id"]}', headers=H(admin)).status_code == 200
+    assert c.post('/api/pucks/checkin', json={'puck': 7}, headers={'X-Puck-Key': key7b}).status_code == 200, 'a check-in with a dead key is still just a check-in'
+    assert c.post('/api/upload', headers={'X-Puck-Key': key7b}, data={'file': (io.BytesIO(track(25)), 'puck7_x.csv')}, content_type='multipart/form-data').status_code == 401
+    assert c.get('/api/pucks/keys', headers=H(dave)).get_json()['pucks'] == []
+    assert [p['owner'] for p in c.get('/api/pucks', headers=H(admin)).get_json()['pucks'] if p['puck'] == 7] == [None], 'no live key: nobody\'s puck'
+    c.post('/api/pucks/keys', headers=H(dave), json={'puck': 8})
+    assert 8 in json.loads(zipfile.ZipFile(io.BytesIO(c.get('/api/me/export', headers=H(dave)).data)).read('account.json'))['pucks']
+    # Dave's puck track doesn't muddle James's checks below
+    assert c.delete(f'/api/sessions/{r.get_json()["session"]}/puck7_sail.csv', headers=H(dave)).status_code == 200
 
     # ---- export: account details and only your own tracks
     r = c.get('/api/me/export', headers=H(james))

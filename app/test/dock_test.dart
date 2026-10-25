@@ -227,6 +227,15 @@ void main() {
     expect(p3['docked'], true);
     expect(p3['battery_pct'], 78);
     expect(p3['charging'], 'charging');
+    expect(p3['owner'], isNull);
+    // a puck set up from this phone is yours on the Dock page (like a keyed puck on the server)
+    d.store
+      ..myPucks = {3}
+      ..ownerName = 'James';
+    expect(((await d.req('GET', '/api/pucks')).$2['pucks'] as List).single['owner'], 'James');
+    d.store
+      ..myPucks = const <int>{}
+      ..ownerName = '';
     final (_, st) = await d.req('GET', '/api/dock/status');
     expect(st['can_manage_wifi'], false);
     expect(st['phone'], true);

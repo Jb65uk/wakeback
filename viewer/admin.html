@@ -73,6 +73,7 @@ td.num{font-variant-numeric:tabular-nums;color:var(--muted);white-space:nowrap}
     <nav id="tabs" hidden>
       <button class="on" data-tab="users">Users<span id="pendN" class="pending-badge" hidden></span></button>
       <button data-tab="tracks">Tracks</button>
+      <button data-tab="pucks">Pucks</button>
       <button data-tab="audit">Changes</button>
       <a href="/">Replay</a><a href="/dock">Dock</a>
     </nav>
@@ -120,6 +121,12 @@ td.num{font-variant-numeric:tabular-nums;color:var(--muted);white-space:nowrap}
   </section>
 
   <!-- ---------------- audit ---------------- -->
+  <section id="tab-pucks" hidden class="box">
+    <div class="row"><h2>Puck keys</h2><span class="spacer"></span><button class="btn sm" id="pucksRefresh">Refresh</button></div>
+    <div class="hint">Every puck set up from the app gets a key tied to its owner's account; the puck sends it with every check-in and upload, so its tracks are theirs. Lost or sold a puck? Revoke its key here and it can't upload as them again; setting it up afresh in the app issues a new one.</div>
+    <div style="overflow-x:auto"><table id="pucks"><thead><tr><th>Puck</th><th>Owner</th><th>Label</th><th>Issued</th><th>Last seen</th><th>Firmware</th><th></th></tr></thead><tbody></tbody></table></div>
+  </section>
+
   <section id="tab-audit" hidden class="box">
     <div class="row"><h2>Recent changes</h2><span class="spacer"></span><button class="btn sm" id="auditRefresh">Refresh</button></div>
     <div style="overflow-x:auto"><table id="audit"><thead><tr><th>When</th><th>Who</th><th>What</th><th>Target</th><th>Details</th></tr></thead><tbody></tbody></table></div>
@@ -166,7 +173,7 @@ $('#logout').onclick = logout;
 function showTab(name) {
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === name));
   document.querySelectorAll('[id^=tab-]').forEach(t => t.hidden = t.id !== 'tab-' + name);
-  ({ users: loadUsers, tracks: loadTracks, audit: loadAudit })[name]();
+  ({ users: loadUsers, tracks: loadTracks, pucks: loadPucks, audit: loadAudit })[name]();
 }
 $('#tabs').addEventListener('click', e => { const b = e.target.closest('button[data-tab]'); if (b) showTab(b.dataset.tab); });
 
@@ -293,9 +300,27 @@ $('#tracks').addEventListener('click', async e => {
 });
 
 // ---------- audit ----------
+// ---------- pucks ----------
+async function loadPucks() {
+  const rows = (await api('/api/admin/pucks')).pucks || [];
+  $('#pucks tbody').innerHTML = rows.length ? rows.map(p => `
+    <tr data-pid="${p.id}" style="${p.revoked ? 'opacity:.5' : ''}"><td>puck ${p.puck}</td><td>${esc(p.owner.name)}<div class="hint">${esc(p.owner.email)}</div></td><td>${esc(p.label)}</td>
+    <td class="num">${when(p.created)}</td><td class="num">${p.last_seen ? when(p.last_seen) : 'never'}</td><td>${esc(p.fw || '–')}</td>
+    <td>${p.revoked ? `<span class="hint">revoked ${when(p.revoked)}</span>` : `<button class="btn sm" data-act="revoke">Revoke</button>`}</td></tr>`).join('')
+    : '<tr><td colspan="7" class="empty">No pucks set up from the app yet.</td></tr>';
+}
+$('#pucksRefresh').onclick = loadPucks;
+$('#pucks').addEventListener('click', async e => {
+  const b = e.target.closest('button[data-act]'); if (!b) return;
+  const tr = b.closest('tr'), pid = tr.dataset.pid, name = tr.children[0].textContent;
+  if (!confirm(`Revoke ${name}'s key? It won't be able to upload as ${tr.children[1].firstChild.textContent} until it's set up again from the app.`)) return;
+  try { await api(`/api/admin/pucks/${pid}`, { method: 'DELETE' }); toast(`${name}'s key revoked`); loadPucks(); } catch (err) { toast(err.message); }
+});
+
 const ACTIONS = { signup: 'Signed up', login: 'Logged in', upload: 'Uploaded a track', delete_track: 'Removed a track', track_settings: 'Changed a track',
   friend_request: 'Asked to be friends with', friend_accept: 'Became friends with', friend_decline: 'Declined a friend request', unfriend: 'Unfriended',
-  admin_user: 'Changed a user', admin_delete_user: 'Deleted a user', setting: 'Changed a setting', password_changed: 'Changed their password' };
+  admin_user: 'Changed a user', admin_delete_user: 'Deleted a user', setting: 'Changed a setting', password_changed: 'Changed their password',
+  puck_key: 'Set up a puck', puck_revoke: 'Revoked a puck key', admin_puck_revoke: 'Revoked a puck key' };
 async function loadAudit() {
   const rows = await api('/api/admin/audit');
   $('#audit tbody').innerHTML = rows.length ? rows.map(r => `

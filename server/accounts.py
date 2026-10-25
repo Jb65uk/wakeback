@@ -23,6 +23,10 @@ API (all JSON):
   GET  /api/admin/users · POST /api/admin/users/<id> {status,name,role,password}
   GET/PUT /api/admin/settings {auto_approve}
   GET  /api/admin/audit
+  Puck keys (roadmap stage 4): the app issues one per puck when it sets it up; the puck sends it as X-Puck-Key
+  on every check-in and upload, which signs the request in as the key's owner (so their tracks are theirs).
+  GET  /api/pucks/keys · POST /api/pucks/keys {puck, label?} -> {key, ...} · DELETE /api/pucks/keys/<id>
+  GET  /api/admin/pucks · DELETE /api/admin/pucks/<id>   (revoke a lost or sold puck's key)
 """
 import os, re, json, secrets, sqlite3, threading, time, hashlib
 from contextlib import contextmanager
@@ -65,6 +69,9 @@ def init(data_dir):
             CREATE TABLE IF NOT EXISTS audit (
                 id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, user_id INTEGER, who TEXT, action TEXT NOT NULL,
                 target TEXT, details TEXT);
+            CREATE TABLE IF NOT EXISTS pucks (
+                id INTEGER PRIMARY KEY, hash TEXT UNIQUE NOT NULL, user_id INTEGER NOT NULL, puck INTEGER NOT NULL,
+                label TEXT, created INTEGER NOT NULL, last_seen INTEGER, fw TEXT, revoked INTEGER);
         ''')
 
 
@@ -125,12 +132,48 @@ def user_from_request():
     """The signed-in user for this request (bearer token or cookie), or None."""
     auth = request.headers.get('Authorization', '')
     token = auth[7:].strip() if auth.lower().startswith('bearer ') else request.cookies.get(COOKIE, '')
-    if not token: return None
+    if not token: return user_from_puck_key(request.headers.get('X-Puck-Key', ''))
     with connect() as c:
         r = c.execute('SELECT u.* FROM tokens t JOIN users u ON u.id=t.user_id WHERE t.hash=?', (_hash(token),)).fetchone()
         if not r: return None
         c.execute('UPDATE tokens SET last_used=? WHERE hash=?', (int(time.time() * 1000), _hash(token)))
     return dict(r) if r['status'] == 'active' else None
+
+
+# ---------------------------------------------------------------- puck keys
+
+def user_from_puck_key(key):
+    """The owner of a puck key (a puck checking in or uploading), or None if there's no such live key."""
+    key = (key or '').strip()
+    if not key: return None
+    with connect() as c:
+        r = c.execute('SELECT u.* FROM pucks p JOIN users u ON u.id=p.user_id WHERE p.hash=? AND p.revoked IS NULL', (_hash(key),)).fetchone()
+    return dict(r) if r and r['status'] == 'active' else None
+
+
+def touch_puck_key(key, fw=None):
+    """A puck with this key checked in: note when, and its firmware. Returns the key's row or None."""
+    key = (key or '').strip()
+    if not key: return None
+    with connect() as c:
+        r = c.execute('SELECT * FROM pucks WHERE hash=? AND revoked IS NULL', (_hash(key),)).fetchone()
+        if not r: return None
+        c.execute('UPDATE pucks SET last_seen=?, fw=COALESCE(?, fw) WHERE id=?', (int(time.time() * 1000), (fw or None) and str(fw)[:16], r['id']))
+    return dict(r)
+
+
+def puck_owners():
+    """{puck number: owner's public user} for every live key, for the dock's puck list."""
+    with connect() as c:
+        rows = c.execute('SELECT p.puck, u.* FROM pucks p JOIN users u ON u.id=p.user_id WHERE p.revoked IS NULL ORDER BY p.created').fetchall()
+    return {r['puck']: public_user(r) for r in rows}
+
+
+def _puck_row(r, with_owner=False):
+    out = {'id': r['id'], 'puck': r['puck'], 'label': r['label'] or '', 'created': r['created'], 'last_seen': r['last_seen'], 'fw': r['fw'],
+           'revoked': r['revoked']}
+    if with_owner: out['owner'] = {'id': r['user_id'], 'name': r['oname'], 'email': r['oemail']}
+    return out
 
 
 def current_user():
@@ -447,10 +490,12 @@ def export_account(user):
     """What's held about this person, apart from their tracks."""
     with connect() as c:
         u = c.execute('SELECT * FROM users WHERE id=?', (user['id'],)).fetchone()
+        pucks = [r['puck'] for r in c.execute('SELECT puck FROM pucks WHERE user_id=? AND revoked IS NULL ORDER BY puck', (user['id'],))]
     fr = _friends_of(user['id'])
     return {'name': u['name'], 'email': u['email'], 'role': u['role'], 'created_ms': u['created'], 'last_login_ms': u['last_login'],
             'friends': [f['user']['name'] for f in fr['friends']],
-            'friend_requests_waiting': len(fr['incoming']) + len(fr['outgoing'])}
+            'friend_requests_waiting': len(fr['incoming']) + len(fr['outgoing']),
+            'pucks': pucks}
 
 
 def check_can_delete(user, password):
@@ -470,6 +515,7 @@ def delete_account(user):
         for q in ('DELETE FROM tokens WHERE user_id=?', 'DELETE FROM resets WHERE user_id=?'):
             c.execute(q, (user['id'],))
         c.execute('DELETE FROM friends WHERE a=? OR b=?', (user['id'], user['id']))
+        c.execute('DELETE FROM pucks WHERE user_id=?', (user['id'],))
         c.execute('DELETE FROM users WHERE id=?', (user['id'],))
 
 
@@ -602,6 +648,7 @@ def admin_delete_user(uid):
         c.execute('DELETE FROM tokens WHERE user_id=?', (uid,))
         c.execute('DELETE FROM resets WHERE user_id=?', (uid,))
         c.execute('DELETE FROM friends WHERE a=? OR b=?', (uid, uid))
+        c.execute('DELETE FROM pucks WHERE user_id=?', (uid,))
         c.execute('DELETE FROM users WHERE id=?', (uid,))
     audit('admin_delete_user', r['email'])
     return jsonify(ok=True)
@@ -629,6 +676,66 @@ def admin_audit():
     with connect() as c:
         rows = c.execute('SELECT * FROM audit ORDER BY id DESC LIMIT 300').fetchall()
     return jsonify([{**dict(r), 'details': json.loads(r['details']) if r['details'] else None} for r in rows])
+
+
+# ---------------------------------------------------------------- puck key routes (helpers above, by user_from_request)
+
+@bp.get('/api/pucks/keys')
+@require_user
+def my_puck_keys():
+    with connect() as c:
+        rows = c.execute('SELECT * FROM pucks WHERE user_id=? AND revoked IS NULL ORDER BY puck', (current_user()['id'],)).fetchall()
+    return jsonify(pucks=[_puck_row(r) for r in rows])
+
+
+@bp.post('/api/pucks/keys')
+@require_user
+def issue_puck_key():
+    """A new key for puck N, tied to you. Any earlier key you had for that number is revoked (one phone sets
+    a puck up at a time), so setting a puck up again just works. The key is only ever shown here, once."""
+    b = request.get_json(silent=True) or {}
+    try: puck = int(str(b.get('puck', '')).replace('puck', ''))
+    except ValueError: return jsonify(error='Puck number missing'), 400
+    if not 1 <= puck <= 99: return jsonify(error='Puck number must be 1 to 99'), 400
+    label = str(b.get('label', '')).strip()[:40]
+    u = current_user(); key = secrets.token_urlsafe(24); now = int(time.time() * 1000)
+    with connect() as c:
+        c.execute('UPDATE pucks SET revoked=? WHERE user_id=? AND puck=? AND revoked IS NULL', (now, u['id'], puck))
+        c.execute('INSERT INTO pucks (hash,user_id,puck,label,created) VALUES (?,?,?,?,?)', (_hash(key), u['id'], puck, label, now))
+        r = c.execute('SELECT * FROM pucks WHERE hash=?', (_hash(key),)).fetchone()
+    audit('puck_key', f'puck{puck}', {'label': label} if label else None)
+    return jsonify(key=key, **_puck_row(r))
+
+
+@bp.delete('/api/pucks/keys/<int:pid>')
+@require_user
+def revoke_my_puck_key(pid):
+    with connect() as c:
+        r = c.execute('SELECT * FROM pucks WHERE id=? AND user_id=?', (pid, current_user()['id'])).fetchone()
+        if not r: abort(404)
+        c.execute('UPDATE pucks SET revoked=? WHERE id=? AND revoked IS NULL', (int(time.time() * 1000), pid))
+    audit('puck_revoke', f'puck{r["puck"]}')
+    return jsonify(ok=True)
+
+
+@bp.get('/api/admin/pucks')
+@require_admin
+def admin_pucks():
+    with connect() as c:
+        rows = c.execute('''SELECT p.*, u.name oname, u.email oemail FROM pucks p JOIN users u ON u.id=p.user_id
+                            ORDER BY p.revoked IS NOT NULL, p.puck, p.created DESC''').fetchall()
+    return jsonify(pucks=[_puck_row(r, with_owner=True) for r in rows])
+
+
+@bp.delete('/api/admin/pucks/<int:pid>')
+@require_admin
+def admin_revoke_puck(pid):
+    with connect() as c:
+        r = c.execute('SELECT p.*, u.email oemail FROM pucks p JOIN users u ON u.id=p.user_id WHERE p.id=?', (pid,)).fetchone()
+        if not r: abort(404)
+        c.execute('UPDATE pucks SET revoked=? WHERE id=? AND revoked IS NULL', (int(time.time() * 1000), pid))
+    audit('admin_puck_revoke', f'puck{r["puck"]}', {'owner': r['oemail']})
+    return jsonify(ok=True)
 
 
 def users_by_email():

@@ -164,6 +164,7 @@ function puckCard(p, newestFw) {
       <dt>Last upload</dt><dd>${lu ? `${when(lu.time)}<br><span class="hint">${esc(sessionLbl(lu.session))} · ${(lu.bytes / 1048576).toFixed(1)} MB${lu.sailor ? ' · ' + esc(lu.sailor) : ''}</span>` : 'None yet'}</dd>
       ${p.free_kb != null ? `<dt>Storage</dt><dd>${mb(p.free_kb)} free</dd>` : ''}
       ${p.fw ? `<dt>Firmware</dt><dd>${esc(p.fw)}${oldFw ? ` <span class="cs w">(update to ${esc(newestFw)})</span>` : ''}</dd>` : ''}
+      ${p.owner ? `<dt>Owner</dt><dd>${esc(p.owner)}</dd>` : ''}
     </dl>
   </article>`;
 }
