@@ -33,6 +33,7 @@
 #include <esp_ota_ops.h>
 #include <driver/rtc_io.h>
 #include "page.h"
+#include "ble.h"
 
 #ifndef WB_FW_VERSION
 #define WB_FW_VERSION "dev"
@@ -548,6 +549,7 @@ static void goToSleep(const char *why) {
   Serial.printf("Sleeping (%s). Press the button or put it on the pad to wake it.\n", why);
   Serial.flush();
   WiFi.mode(WIFI_OFF);
+  bleStop();
   blinkN(3);
   if (gpsOk) gnss.powerOffWithInterrupt(0, VAL_RXM_PMREQ_WAKEUPSOURCE_UARTRX);
   if (imuOk) { bno.enableReport(SH2_GAME_ROTATION_VECTOR, 0); bno.enableReport(SH2_ROTATION_VECTOR, 0); }
@@ -852,25 +854,74 @@ static bool captive() {       // phones probing for internet: send them to the p
   return false;
 }
 
+// ---------- shared by the web page and Bluetooth ----------
+static String urlDecode(const String &v) {
+  String out; out.reserve(v.length());
+  for (size_t i = 0; i < v.length(); i++) {
+    const char c = v[i];
+    if (c == '+') out += ' ';
+    else if (c == '%' && i + 2 < v.length()) { out += (char)strtol(v.substring(i + 1, i + 3).c_str(), nullptr, 16); i += 2; }
+    else out += c;
+  }
+  return out;
+}
+static String urlEncode(const String &v) {
+  String out; out.reserve(v.length() * 3);
+  for (size_t i = 0; i < v.length(); i++) {
+    const char c = v[i];
+    if (isalnum((unsigned char)c) || c == '-' || c == '_' || c == '.' || c == '~') out += c;
+    else { char b[4]; snprintf(b, sizeof b, "%%%02X", (unsigned char)c); out += b; }
+  }
+  return out;
+}
+// "puck=3&ssid=James%20Phone&pass=…&key=…&autorec=1": the settings the app or the page sends
+static String applySettings(const String &form) {
+  int start = 0; const int oldPuck = S.puck;
+  while (start <= (int)form.length()) {
+    int amp = form.indexOf('&', start); if (amp < 0) amp = form.length();
+    const String kv = form.substring(start, amp); start = amp + 1;
+    const int eq = kv.indexOf('='); if (eq < 0) continue;
+    const String k = kv.substring(0, eq), v = urlDecode(kv.substring(eq + 1));
+    if (k == "puck") { const int n = v.toInt(); if (n >= 1 && n <= 99) S.puck = n; }
+    else if (k == "ssid") { String t = v; t.trim(); if (t.length() && t.length() < 33) S.ssid = t; }
+    else if (k == "pass") { if (v.length()) S.pass = v.substring(0, 63); }
+    else if (k == "key") S.key = v.substring(0, 64);
+    else if (k == "autorec") S.autoRec = v == "1";
+    else if (k == "autooff") S.autoOff = v == "1";
+  }
+  S.configured = true;                        // someone has been here: no more setup WiFi at power-up
+  saveSettings();
+  if (S.puck != oldPuck && bleServer) bleSetName(S.puck);
+  dockRefused = false; lastOffPadTry = 0;     // new WiFi or key: have another go at the dock straight away
+  return "Saved.";
+}
+// told which way up it is: the learner still corrects it later if gravity says otherwise for half a minute
+static bool setOrientation(int o) {
+  if (o != 1 && o != 2) return false;
+  S.orientation = o; saveSettings(); return true;
+}
+// the app is here and listening: go and find the hotspot now, whatever the retry timers say
+static void wantDockNow() { if (wmode == W_SETUP) leaveSetup(); lastOffPadTry = 0; wantLiftCheckin = true; dockRefused = false; lastActive = millis(); }
+// firmware over Bluetooth, in pieces
+static bool otaBegin(size_t bytes) { if (recording) stopRecording("firmware update"); uploading = true; led(); return Update.begin(bytes); }
+static bool otaWrite(const uint8_t *data, size_t len) { return Update.write((uint8_t *)data, len) == len; }
+static bool otaEnd() { uploading = false; return Update.end(true); }
+static void bleNote(const char *what) { Serial.printf("BLE: %s\n", what); }
+
 static void startWeb() {
   web.on("/", HTTP_GET, [] { if (captive()) return; web.send_P(200, "text/html", PAGE_HTML); });
   web.on("/api/status", HTTP_GET, [] { setupLastSeen = millis(); lastActive = millis(); sendJson(statusJson()); });
   web.on("/api/settings", HTTP_POST, [] {
-    if (web.hasArg("puck")) { const int n = web.arg("puck").toInt(); if (n >= 1 && n <= 99) S.puck = n; }
-    if (web.hasArg("ssid")) { String s = web.arg("ssid"); s.trim(); if (s.length() && s.length() < 33) S.ssid = s; }
-    if (web.hasArg("pass") && web.arg("pass").length()) S.pass = web.arg("pass").substring(0, 63);
-    if (web.hasArg("key")) S.key = web.arg("key").substring(0, 64);
-    if (web.hasArg("autorec")) S.autoRec = web.arg("autorec") == "1";
-    if (web.hasArg("autooff")) S.autoOff = web.arg("autooff") == "1";
-    S.configured = true;                        // someone has been here: no more setup WiFi at power-up
-    saveSettings(); okMsg("Saved.");
+    String form;
+    for (int i = 0; i < web.args(); i++) { if (i) form += '&'; form += web.argName(i) + "=" + urlEncode(web.arg(i)); }
+    okMsg(applySettings(form).c_str());
   });
   web.on("/api/cal/level", HTTP_POST, [] { calLevel(); okMsg("Level set: heel and pitch read 0 here."); });
   web.on("/api/cal/flip", HTTP_POST, [] { calFlipHeel(); okMsg(S.flipHeel ? "Heel sign flipped." : "Heel sign back to normal."); });
   web.on("/api/cal/orient", HTTP_POST, [] {
-    // told which way up it is: the learner still corrects it later if gravity says otherwise for half a minute
-    const int o = web.arg("o").toInt(); if (o != 1 && o != 2) { web.send(400, "text/plain", "o must be 1 (deck) or 2 (thwart)"); return; }
-    S.orientation = o; saveSettings(); okMsg(o == 1 ? "Mounted on deck." : "Mounted under the thwart.");
+    const int o = web.arg("o").toInt();
+    if (!setOrientation(o)) { web.send(400, "text/plain", "o must be 1 (deck) or 2 (thwart)"); return; }
+    okMsg(o == 1 ? "Mounted on deck." : "Mounted under the thwart.");
   });
   web.on("/api/cal/twist", HTTP_POST, [] { S.twist = wrap180(web.arg("deg").toFloat()); S.twistLearned = true; saveSettings(); okMsg("Twist set."); });
   web.on("/api/cal/reset", HTTP_POST, [] { S.zeroHeel = S.zeroPitch = S.twist = 0; S.twistLearned = false; S.flipHeel = false; S.orientation = 0; saveSettings(); okMsg("Calibration cleared."); });
@@ -984,6 +1035,7 @@ static void everySecond() {
   learnMounting();
   static int tick = 0; if (++tick % 10 == 0) { measureFs(); countTracks(); }
   if (flashFull && fsFree > FLASH_RESERVE * 2) flashFull = false;
+  if (bleConnected) lastActive = millis();      // the app is talking to us: not idle
   if (S.autoOff && !onPad && !recording && wmode != W_SETUP && millis() - lastActive > AUTO_OFF_MS) goToSleep("still for 30 minutes");
   // new firmware that has run a couple of minutes with the sensors alive counts as good even with no dock about
   if (appPendingVerify && millis() > 120000 && (gpsOk || imuOk)) { esp_ota_mark_app_valid_cancel_rollback(); appPendingVerify = false; }
@@ -1035,7 +1087,7 @@ static void command(String c) {
     case 'l': forEachTrack([](const String &n, size_t size) { Serial.printf("  %s  %u KB\n", n.c_str(), (unsigned)(size / 1024)); }); if (!nTracks) Serial.println("  no tracks"); break;
     case 'e': Serial.println("To erase every track type the whole word: erase"); break;
     case 'w': wmode == W_SETUP ? leaveSetup() : enterSetup(); break;
-    case 'u': if (wmode == W_SETUP) leaveSetup(); lastOffPadTry = 0; wantLiftCheckin = true;
+    case 'u': wantDockNow();
               Serial.println(recording ? "Recording: the puck won't talk to the dock until that stops (r, or the button)." : "Looking for the dock…"); break;
     case 'x': goToSleep("x typed"); break;
     default: Serial.println("Unknown command. Type h.");
@@ -1078,6 +1130,7 @@ void setup() {
 
   WiFi.persistent(false);
   startWeb();                                   // routes only; the server itself starts with the WiFi
+  bleStart(S.puck);                             // Bluetooth is how the app talks to the puck; WiFi only carries the tracks
   leds(false);
   lastActive = millis();
   battMv = readMilliVolts(PIN_BATT); onPad = readMilliVolts(PIN_PAD) > 4000;
