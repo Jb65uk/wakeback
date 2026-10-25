@@ -53,10 +53,11 @@ class _GuideScreenState extends State<GuideScreen> {
           open: widget.open == GuideTopic.puck,
           steps: [
             ('Give your phone a hotspot', 'Settings → Hotspot. Any name and password; 2.4 GHz (the puck can\'t see 5 GHz). Turn off "switch off hotspot automatically" so it\'s still up when you come ashore. This is the only WiFi the puck will ever use, so it works at the lake, the car park, anywhere.'),
-            ('Put the puck in setup mode', 'A brand-new puck is already in setup mode. Otherwise hold its button for 6 seconds until the light gives five quick blinks.'),
-            ('You → Pucks → Set up a puck', 'Type the hotspot name and password, give the puck a number, tap Connect to the puck, and tap Connect when the phone asks. The app hands the puck the hotspot details and a key tied to your account, so everything it records is yours.'),
+            ('Wake the puck', 'Put it on the pad, or press its button once (the light blinks). That\'s all: the phone talks to it over Bluetooth, so there\'s nothing to hold and no WiFi to join. Keep the phone next to it.'),
+            ('You → Pucks → Set up a puck', 'Type the hotspot name and password, give the puck a number, tap Connect to the puck. Not sure which puck is which? Find pucks nearby lists every puck it can hear. The app hands the puck the hotspot details and a key tied to your account, so everything it records is yours.'),
             ('Turn the hotspot on, puck on the pad', 'Within a minute You → Pucks → See them check in shows it on the dock with its battery. Done. Wrong hotspot password later? Change it on the phone and do Set up again.'),
-            ('Settings and firmware', 'Tap the puck under You → Pucks. Open the puck\'s page for Boat is level, which way it\'s mounted, the tracks on it. Update appears there when new puck firmware is out — one tap, the app sends it. Puck on the pad with hotspot "$hotspot" on: it answers within a minute.'),
+            ('Settings and firmware', 'Tap the puck under You → Pucks. With the puck awake it shows its battery and tracks, and the buttons do the everyday things over Bluetooth: Boat is level, which way it\'s mounted, Upload now, record, sleep. Update appears there when new puck firmware is out — one tap, the app sends it over Bluetooth. The puck\'s full page (over WiFi) is still there underneath.'),
+            ('If Bluetooth isn\'t playing', 'The old way still works: hold the puck\'s button for 6 seconds until the light gives five quick blinks. It puts up its own WiFi, "wakeback-puck-N", and the setup screen offers Use its WiFi.'),
           ],
         ),
         _Section(
@@ -68,7 +69,7 @@ class _GuideScreenState extends State<GuideScreen> {
             ('Press when asleep', 'Wakes it. (On the pad wakes it too.)'),
             ('Tap', 'Start or stop recording by hand. You rarely need this: it starts itself when the boat moves off and stops after 10 minutes still.'),
             ('Hold 2 s — three blinks, let go', 'Sleep now.'),
-            ('Keep holding to 6 s — five quick blinks', 'Setup WiFi on (or off again). Only needed off the pad.'),
+            ('Keep holding to 6 s — five quick blinks', 'Setup WiFi on (or off again). Only needed if Bluetooth isn\'t working out; the app talks to an awake puck over Bluetooth.'),
           ],
           table2: const [
             ('Slow blink', 'Awake, no GPS fix yet'),
@@ -130,7 +131,8 @@ class _GuideScreenState extends State<GuideScreen> {
           title: 'If something\'s not right',
           open: widget.open == GuideTopic.fixes,
           steps: [
-            ('Puck never shows on the dock', 'Hotspot on, 2.4 GHz, name and password exactly as given to the puck, and WakeBack open on screen — the phone only listens while the app is in front. Still nothing? You → Pucks → the puck → Set up again.'),
+            ('Puck never shows on the dock', 'Hotspot on, 2.4 GHz, name and password exactly as given to the puck, and WakeBack open on screen — the phone only listens while the app is in front. Still nothing? You → Pucks → the puck → Upload now sends it looking straight away; or Set up again.'),
+            ('The app can\'t find the puck', 'It has to be awake: on the pad, or press its button once. Bluetooth on, on the phone, and WakeBack allowed to use "Nearby devices". Stand next to it. Asleep pucks don\'t answer — and after half an hour still off the pad it goes to sleep.'),
             ('Puck says "dock refused the key"', 'Its key was revoked (forgotten in the app, or by the admin). Set up again gives it a new one.'),
             ('Tracks on the puck but not coming over', 'The puck only hands over finished tracks: if it\'s still recording (double blink), tap the button once to stop. Then it looks for hotspot "$hotspot" within a minute.'),
             ('Battery not charging on the pad', 'Make sure the puck sits centred on the pad (the light should breathe). Sitting there all day is fine; it rests its GPS and radio on the pad.'),

@@ -1,41 +1,55 @@
 // Set up a puck from the app (roadmap stage 4): no browser, nothing to type on the puck.
 //
 //   1. Hotspot name + password (what the puck will join), the puck's number, auto-record.
-//   2. Put the puck in setup mode (hold the button 6 s) and tap Connect: the phone joins
-//      "wakeback-puck-N", reads the puck, pushes the settings and a key from your account, and tells the
-//      puck to go and find the hotspot.
+//   2. With the puck awake (on the pad, or press its button) tap Connect: the phone finds it over Bluetooth,
+//      reads it, pushes the settings and a key from your account, and tells the puck to go and find the hotspot.
+//      No Bluetooth, or the puck isn't heard? The old way still works: the puck's own setup WiFi
+//      ("wakeback-puck-N", hold the button 6 s), joined from the app or by hand.
 //   3. Turn the hotspot on. Done: the puck uploads to this phone after every sail, as you.
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../app_state.dart';
+import '../puck/puck_ble.dart';
 import '../puck/puck_wifi.dart';
 import '../widgets/common.dart';
+import '../widgets/puck_picker.dart';
 import 'guide_screen.dart';
 import 'welcome_screen.dart';
 
 class PuckSetupScreen extends StatefulWidget {
   /// Setting an existing puck up again? Its number, so the form starts there.
   final int? puck;
-  const PuckSetupScreen({super.key, this.puck});
+
+  /// A puck just heard nearby (Your pucks → Find pucks nearby): its current number, to start from.
+  final PuckSeen? nearby;
+  const PuckSetupScreen({super.key, this.puck, this.nearby});
   @override
   State<PuckSetupScreen> createState() => _PuckSetupScreenState();
 }
 
 enum _Stage { form, connecting, done }
 
+/// How to reach the puck: Bluetooth (the normal way), its setup WiFi joined by the app, or the user has
+/// already joined that WiFi by hand.
+enum _Route { ble, wifi, wifiManual }
+
 class _PuckSetupScreenState extends State<PuckSetupScreen> {
   late final TextEditingController _ssid = TextEditingController(text: app.hotspotName);
   late final TextEditingController _pass = TextEditingController(text: app.hotspotPass);
-  late final TextEditingController _num = TextEditingController(text: '${widget.puck ?? _nextNumber()}');
-  bool _autoRec = true, _showPass = false, _canJoin = false, _manual = false, _noKey = false, _keyFailed = false;
+  late final TextEditingController _num = TextEditingController(text: '${widget.puck ?? widget.nearby?.puck ?? _nextNumber()}');
+  bool _autoRec = true, _showPass = false, _canJoin = false, _canBle = true, _noKey = false, _keyFailed = false;
+  _Route _route = _Route.ble;
   _Stage _stage = _Stage.form;
   final _log = <String>[];
   String? _error;
   PuckStatus? _found;
   MyPuck? _result;
   bool _keyed = false;
+
+  /// The puck picked from the nearby list, if any: Connect goes straight to it (whatever number it has now).
+  PuckSeen? _target;
 
   /// A key the server issued this time round, and the puck number it's for: Try again reuses it rather
   /// than asking for another (each new key revokes the last).
@@ -54,8 +68,12 @@ class _PuckSetupScreenState extends State<PuckSetupScreen> {
   @override
   void initState() {
     super.initState();
+    _target = widget.nearby;
     PuckWifi.supported().then((ok) {
       if (mounted) setState(() => _canJoin = ok);
+    });
+    PuckBle.available().then((ok) {
+      if (mounted) setState(() => _canBle = ok);
     });
   }
 
@@ -81,8 +99,19 @@ class _PuckSetupScreenState extends State<PuckSetupScreen> {
     if (mounted) setState(() => _log.add(s));
   }
 
+  /// "Find pucks nearby": scan, let the user pick one, and put its number in the box.
+  Future<void> _findNearby() async {
+    final p = await pickPuckNearby(context, title: 'Which puck?');
+    if (p == null || !mounted) return;
+    setState(() {
+      _target = p;
+      if (widget.puck == null) _num.text = '${p.puck}';
+    });
+    toast(context, 'Puck ${p.puck} is nearby (${p.signal}). Tap Connect to the puck when you\'re ready.');
+  }
+
   /// The whole thing, start to finish. Each step reports in the log; an error stops it with the reason.
-  Future<void> _go({required bool manual, bool withoutKey = false}) async {
+  Future<void> _go({required _Route route, bool withoutKey = false}) async {
     final problem = _formProblem();
     if (problem != null) {
       toast(context, problem, error: true);
@@ -94,15 +123,16 @@ class _PuckSetupScreenState extends State<PuckSetupScreen> {
     app.hotspotPass = pass;
     setState(() {
       _stage = _Stage.connecting;
-      _manual = manual;
+      _route = route;
       _log.clear();
       _error = null;
       _found = null;
       _noKey = withoutKey;
       _keyFailed = false;
     });
+    PuckBle? ble;
     try {
-      // 1. a key from your account, while the phone still has the internet (once it's on the puck's WiFi it hasn't)
+      // 1. a key from your account, while the phone still has the internet (on the puck's WiFi it hasn't)
       String key = '';
       int keyId = 0;
       if (withoutKey) {
@@ -131,41 +161,73 @@ class _PuckSetupScreenState extends State<PuckSetupScreen> {
         _say(app.demoMode ? 'Demo mode: no account key.' : 'Not signed in: no account key. The puck will still upload to this phone.');
       }
 
-      // 2. onto the puck's WiFi
-      if (manual) {
-        _say('Looking for the puck at 192.168.4.1…');
-      } else {
-        _say('Joining the puck\'s WiFi (tap Connect when your phone asks)…');
-        await PuckWifi.join();
-        if (!mounted) return;
-        _say('On the puck\'s WiFi.');
-      }
-      final api = PuckApi();
+      // 2. reach the puck: Bluetooth first, its setup WiFi if that doesn't work out
       PuckStatus st;
-      try {
-        st = await _retry(() => api.status(), tries: 4);
-      } on PuckException catch (e) {
-        throw PuckException('${e.message}\nIs the puck in setup mode? Hold its button for 6 s until it gives five quick blinks.');
+      var via = route;
+      if (route == _Route.ble) {
+        ble = await _overBluetooth(num);
+        if (!mounted) return;
+        if (ble == null) {
+          if (!_canJoin) {
+            throw const PuckException('Not heard over Bluetooth. Is the puck awake (on the pad, or press its button)? Or join its setup WiFi '
+                '"wakeback-puck-N" in your phone\'s settings (hold its button 6 s: five quick blinks) and tap "I\'ve already joined its WiFi myself".');
+          }
+          _say('Not heard over Bluetooth. Trying the puck\'s own WiFi instead: hold its button 6 s (five quick blinks), then tap Connect when your phone asks…');
+          via = _Route.wifi;
+        }
+      }
+      if (ble != null) {
+        st = await ble.status();
+      } else {
+        if (via == _Route.wifiManual) {
+          _say('Looking for the puck at 192.168.4.1…');
+        } else {
+          _say('Joining the puck\'s WiFi (tap Connect when your phone asks)…');
+          await PuckWifi.join();
+          if (!mounted) return;
+          _say('On the puck\'s WiFi.');
+        }
+        final api = PuckApi();
+        try {
+          st = await _retry(() => api.status(), tries: 4);
+        } on PuckException catch (e) {
+          throw PuckException('${e.message}\nIs the puck in setup mode? Hold its button for 6 s until it gives five quick blinks.');
+        }
       }
       if (!mounted) return;
-      if (!st.isPuck) throw const PuckException('That network isn\'t a WakeBack puck.');
+      if (!st.isPuck) throw const PuckException('That isn\'t a WakeBack puck.');
       setState(() => _found = st);
       _say('Found puck ${st.puck}, firmware ${st.fw.isEmpty ? '?' : st.fw}${st.batteryPct >= 0 ? ', battery ${st.batteryPct}%' : ''}.');
 
       // 3. settings over
       _say('Sending the hotspot name, password${key.isEmpty ? '' : ', your key'} and number $num…');
-      await api.settings(puck: num, ssid: ssid, pass: pass, key: key, autoRec: _autoRec);
+      if (ble != null) {
+        await ble.settings(puck: num, ssid: ssid, pass: pass, key: key, autoRec: _autoRec);
+      } else {
+        await PuckApi().settings(puck: num, ssid: ssid, pass: pass, key: key, autoRec: _autoRec);
+      }
       if (!mounted) return;
       _say('Saved on the puck.');
 
       // 4. let it go and find the hotspot
-      _say('Telling the puck to leave setup mode…');
-      try {
-        await api.done();
-      } catch (_) {
-        // it drops its WiFi as it leaves, so the reply often doesn't make it back: that's fine
+      if (ble != null) {
+        _say('Telling the puck to go and find the hotspot…');
+        try {
+          await ble.uploadNow();
+        } catch (_) {
+          // it's saved either way; it looks for the hotspot by itself after a sail
+        }
+        await ble.disconnect();
+        ble = null;
+      } else {
+        _say('Telling the puck to leave setup mode…');
+        try {
+          await PuckApi().done();
+        } catch (_) {
+          // it drops its WiFi as it leaves, so the reply often doesn't make it back: that's fine
+        }
+        await PuckWifi.leave();
       }
-      await PuckWifi.leave();
 
       final mine = MyPuck(puck: num, keyId: keyId, setUpMs: DateTime.now().millisecondsSinceEpoch, fw: st.fw, hotspot: ssid);
       await app.putMyPuck(mine);
@@ -186,8 +248,58 @@ class _PuckSetupScreenState extends State<PuckSetupScreen> {
         _stage = _Stage.done;
       });
     } catch (e) {
+      await ble?.disconnect();
       await PuckWifi.leave();
       if (mounted) setState(() => _error = friendly(e));
+    }
+  }
+
+  /// Find the puck over Bluetooth and connect. The one picked from the nearby list if there was one; else
+  /// whichever puck nearby already has the number in the box; else the only puck nearby; else ask. Null
+  /// when Bluetooth is off or no puck is heard (the caller falls back to WiFi).
+  Future<PuckBle?> _overBluetooth(int num) async {
+    if (!await PuckBle.available()) {
+      _say('Bluetooth is off, or this phone hasn\'t got it.');
+      return null;
+    }
+    var target = _target;
+    if (target == null) {
+      _say('Listening for pucks nearby over Bluetooth…');
+      final heard = <int, PuckSeen>{};
+      try {
+        await for (final p in PuckBle.scan(timeout: const Duration(seconds: 8))) {
+          heard[p.puck] = p;
+          if (p.puck == num) break; // the one we're after
+        }
+      } catch (e) {
+        _say(friendly(e));
+        return null;
+      }
+      if (!mounted) return null;
+      if (heard.containsKey(num)) {
+        target = heard[num];
+      } else if (heard.length == 1) {
+        target = heard.values.first;
+        _say('Heard puck ${heard.keys.first} (it becomes puck $num).');
+      } else if (heard.length > 1) {
+        _say('Heard ${heard.length} pucks. Which one is this?');
+        target = await pickPuckNearby(context, title: 'Which puck is this?');
+        if (!mounted) return null;
+        if (target == null) throw const PuckException('No puck picked. Tap Try again and choose the puck to set up.');
+      } else {
+        return null;
+      }
+      _target = target;
+    }
+    _say('Connecting to puck ${target!.puck} over Bluetooth…');
+    try {
+      final b = await PuckBle.connectTo(target);
+      _say('Connected.');
+      return b;
+    } on PuckException catch (e) {
+      _say(e.message);
+      _target = null; // it may have gone to sleep: look again next time
+      return null;
     }
   }
 
@@ -278,6 +390,11 @@ class _PuckSetupScreenState extends State<PuckSetupScreen> {
               const SizedBox(width: 12),
               const Expanded(child: Hint('Its name in the tracks and on the Dock page. Each of your pucks needs its own.')),
             ]),
+            if (_target != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Hint('Puck ${_target!.puck} is nearby (${_target!.signal}).${_target!.puck != int.tryParse(_num.text.trim()) ? ' It becomes puck ${_num.text.trim()}.' : ''}'),
+              ),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               title: const Text('Record on its own'),
@@ -311,27 +428,46 @@ class _PuckSetupScreenState extends State<PuckSetupScreen> {
         child: Padding(
           padding: const EdgeInsets.all(14),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('Put the puck in setup mode', style: t.textTheme.titleSmall),
+            Text('Make sure the puck is awake', style: t.textTheme.titleSmall),
             const SizedBox(height: 4),
-            const Hint('Hold its button for about 6 seconds until the light gives five quick blinks, then let go. (A brand-new puck, or one on a '
-                'USB lead, is in setup mode already.) It puts up its own WiFi, "wakeback-puck-N", for a few minutes.'),
+            const Hint('On the pad, or press its button once (the light blinks). The phone talks to it over Bluetooth: nothing to hold, no WiFi to join. '
+                'Keep the phone next to it.'),
             const SizedBox(height: 12),
-            if (_canJoin)
+            Wrap(spacing: 8, runSpacing: 4, children: [
               FilledButton.icon(
-                onPressed: () => _go(manual: false),
-                icon: const Icon(Icons.wifi_find),
+                onPressed: () => _go(route: _Route.ble),
+                icon: const Icon(Icons.bluetooth_searching),
                 label: const Text('Connect to the puck'),
               ),
-            if (_canJoin) const SizedBox(height: 6),
+              OutlinedButton.icon(
+                onPressed: _findNearby,
+                icon: const Icon(Icons.radar, size: 18),
+                label: const Text('Find pucks nearby'),
+              ),
+            ]),
+            if (!_canBle) ...[
+              const SizedBox(height: 6),
+              const Hint('Bluetooth looks to be off: turn it on, or the app will try the puck\'s WiFi instead.'),
+            ],
+            const SizedBox(height: 14),
+            Text('If the puck isn\'t heard', style: t.textTheme.titleSmall),
+            const SizedBox(height: 4),
+            const Hint('The old way: hold the puck\'s button for about 6 seconds until the light gives five quick blinks, then let go. It puts up its own '
+                'WiFi, "wakeback-puck-N", for a few minutes.'),
+            const SizedBox(height: 6),
             if (_canJoin)
-              const Hint('Your phone will ask "Connect to device wakeback-puck-N?" — tap Connect. It keeps its mobile data meanwhile.'),
-            if (!_canJoin) ...[
+              Wrap(spacing: 8, runSpacing: 4, children: [
+                OutlinedButton.icon(
+                  onPressed: () => _go(route: _Route.wifi),
+                  icon: const Icon(Icons.wifi_find, size: 18),
+                  label: const Text('Use its WiFi'),
+                ),
+                TextButton(onPressed: () => _go(route: _Route.wifiManual), child: const Text('I\'ve already joined its WiFi myself')),
+              ])
+            else ...[
               const Hint('Join "wakeback-puck-N" in your phone\'s WiFi settings (tap "stay connected" if it moans about no internet), then come back and:'),
               const SizedBox(height: 8),
-              FilledButton.icon(onPressed: () => _go(manual: true), icon: const Icon(Icons.check), label: const Text('I\'m on the puck\'s WiFi')),
-            ] else ...[
-              const SizedBox(height: 4),
-              TextButton(onPressed: () => _go(manual: true), child: const Text('I\'ve already joined its WiFi myself')),
+              OutlinedButton.icon(onPressed: () => _go(route: _Route.wifiManual), icon: const Icon(Icons.check, size: 18), label: const Text('I\'m on the puck\'s WiFi')),
             ],
           ]),
         ),
@@ -373,10 +509,10 @@ class _PuckSetupScreenState extends State<PuckSetupScreen> {
               ),
               const SizedBox(height: 10),
               Wrap(spacing: 8, runSpacing: 4, children: [
-                FilledButton.icon(onPressed: () => _go(manual: _manual), icon: const Icon(Icons.refresh), label: const Text('Try again')),
+                FilledButton.icon(onPressed: () => _go(route: _route), icon: const Icon(Icons.refresh), label: const Text('Try again')),
                 if (_keyFailed)
                   OutlinedButton.icon(
-                    onPressed: () => _go(manual: _manual, withoutKey: true),
+                    onPressed: () => _go(route: _route, withoutKey: true),
                     icon: const Icon(Icons.key_off, size: 18),
                     label: const Text('Continue without a key'),
                   ),

@@ -54,6 +54,15 @@ foreach ($perm in 'ACCESS_FINE_LOCATION', 'ACCESS_COARSE_LOCATION', 'FOREGROUND_
         $changed = $true
     }
 }
+# Talking to a puck over Bluetooth LE (lib\puck\puck_ble.dart). Scanning is never for location.
+foreach ($ble in @(@('BLUETOOTH', ' android:maxSdkVersion="30"'), @('BLUETOOTH_ADMIN', ' android:maxSdkVersion="30"'),
+                   @('BLUETOOTH_SCAN', ' android:usesPermissionFlags="neverForLocation"'), @('BLUETOOTH_CONNECT', ''))) {
+    $perm = $ble[0]; $extra = $ble[1]
+    if ($m -notmatch "android.permission.$perm`"") {
+        $m = ([regex]'<manifest[^>]*>').Replace($m, { param($x) $x.Value + "`n    <uses-permission android:name=`"android.permission.$perm`"$extra />" }, 1)
+        $changed = $true
+    }
+}
 Copy-Item (Join-Path $PSScriptRoot 'android_src\MainActivity.kt') (Join-Path $PSScriptRoot 'android\app\src\main\kotlin\uk\bridgesolutions\wakeback\MainActivity.kt') -Force
 if ($m -notmatch 'usesCleartextTraffic') {
     $m = ([regex]'<application').Replace($m, '<application android:usesCleartextTraffic="true"', 1)

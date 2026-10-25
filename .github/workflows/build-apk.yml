@@ -53,6 +53,14 @@ jobs:
                        'ACCESS_WIFI_STATE', 'CHANGE_WIFI_STATE', 'CHANGE_NETWORK_STATE']:
               if f'android.permission.{perm}"' not in s:
                   s = re.sub(r'(<manifest[^>]*>)', rf'\1\n    <uses-permission android:name="android.permission.{perm}" />', s, count=1)
+          # Talking to a puck over Bluetooth LE (lib/puck/puck_ble.dart). Scanning is never for location.
+          ble = [('android.permission.BLUETOOTH', ' android:maxSdkVersion="30"'),
+                 ('android.permission.BLUETOOTH_ADMIN', ' android:maxSdkVersion="30"'),
+                 ('android.permission.BLUETOOTH_SCAN', ' android:usesPermissionFlags="neverForLocation"'),
+                 ('android.permission.BLUETOOTH_CONNECT', '')]
+          for name, extra in ble:
+              if f'{name}"' not in s:
+                  s = re.sub(r'(<manifest[^>]*>)', rf'\1\n    <uses-permission android:name="{name}"{extra} />', s, count=1)
           if 'usesCleartextTraffic' not in s:
               s = s.replace('<application', '<application android:usesCleartextTraffic="true"', 1)
           s = s.replace('android:label="wakeback"', 'android:label="WakeBack"')
