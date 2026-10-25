@@ -287,11 +287,11 @@ int periodStart(String period, {DateTime? now}) {
 
 /// A track with where it lives and whose it is; the unit of stats and the league.
 class StatRow {
-  final String session, date, venue, venueName, file, ownerEmail, ownerName;
+  final String session, date, venueName, file, ownerEmail, ownerName;
   final Map<String, dynamic> stats;
   /// the raw owners.json entry (null when nobody has claimed it)
   final Object? owner;
-  const StatRow(this.session, this.date, this.venue, this.venueName, this.file, this.stats, {this.ownerEmail = '', this.ownerName = '', this.owner});
+  const StatRow(this.session, this.date, this.venueName, this.file, this.stats, {this.ownerEmail = '', this.ownerName = '', this.owner});
   double get distNm => (stats['dist_nm'] as num).toDouble();
   double get maxKn => (stats['max_kn'] as num).toDouble();
   double get avgKn => (stats['avg_kn'] as num).toDouble();

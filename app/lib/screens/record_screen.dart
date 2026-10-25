@@ -37,7 +37,7 @@ class _RecordScreenState extends State<RecordScreen> {
     try {
       await f();
     } catch (e) {
-      if (mounted) toast(context, '$e', error: true);
+      if (mounted) toast(context, friendly(e), error: true);
     }
     if (mounted) setState(() => _busy = false);
   }
@@ -159,7 +159,7 @@ class _RecordScreenState extends State<RecordScreen> {
               const Hint('Keeps recording with the screen off. Don\'t swipe WakeBack away while you sail.')
             else if (st == RecState.paused)
               const Hint('Paused. Nothing is added to the track until you resume, and the time doesn\'t count.'),
-            if (r.problem != null && st == RecState.idle) ...[
+            if (r.problem != null) ...[
               const SizedBox(height: 10),
               Card(
                 child: ListTile(
@@ -171,7 +171,7 @@ class _RecordScreenState extends State<RecordScreen> {
             ],
             if (st == RecState.idle && r.lastSaved != null && r.lastSavedLog != null) ...[
               const SectionLabel('Just saved'),
-              _SavedCard(res: r.lastSaved!, log: r.lastSavedLog!, onOpen: widget.onOpen),
+              _SavedCard(res: r.lastSaved!, log: r.lastSavedLog!, boat: r.lastSavedBoat, onOpen: widget.onOpen),
             ],
             const SectionLabel('GPS filter'),
             Row(children: [
@@ -336,8 +336,9 @@ class _LiveCard extends StatelessWidget {
 class _SavedCard extends StatelessWidget {
   final Map<String, dynamic> res;
   final TrackLog log;
+  final String boat;
   final void Function(String id) onOpen;
-  const _SavedCard({required this.res, required this.log, required this.onOpen});
+  const _SavedCard({required this.res, required this.log, required this.boat, required this.onOpen});
 
   @override
   Widget build(BuildContext context) {
@@ -350,7 +351,7 @@ class _SavedCard extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(16, 12, 12, 8),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(where, style: t.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
-          if (app.recordBoat.isNotEmpty) Text(app.recordBoat, style: TextStyle(color: t.colorScheme.onSurfaceVariant)),
+          if (boat.isNotEmpty) Text(boat, style: TextStyle(color: t.colorScheme.onSurfaceVariant)),
           const SizedBox(height: 4),
           Text('${log.distNm.toStringAsFixed(2)} nm · ${_hms(ms)} · top ${_f1(log.maxKn)} kn · avg ${_f1(avg)} kn',
               style: TextStyle(color: t.colorScheme.onSurfaceVariant, fontFeatures: _tab)),
@@ -362,7 +363,7 @@ class _SavedCard extends StatelessWidget {
                 try {
                   await recorder.shareGpx(log, title: 'Sail · $where');
                 } catch (e) {
-                  if (context.mounted) toast(context, 'Couldn\'t share: $e', error: true);
+                  if (context.mounted) toast(context, 'Couldn\'t share: ${friendly(e)}', error: true);
                 }
               },
               icon: const Icon(Icons.ios_share, size: 18),

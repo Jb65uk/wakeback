@@ -142,13 +142,19 @@ void main() {
     expect(s, 400);
     expect(j['error'], contains('Export GPX'));
     final gpx = toGpx('Steve', simBoat(4.3, 51, 20, 15, t0: DateTime.utc(2026, 9, 21, 9), laps: 1).take(600).toList());
-    final (s2, j2) = await d.upload('Morning sail (2).GPX', gpx, fields: {'sailor': 'Steve'});
+    final (s2, j2) = await d.upload('Morning sail (2).GPX', gpx);
     expect(s2, 200);
     expect(j2['file'], 'Morning sail _2_.GPX');
     expect(j2['session'], '2026-09-21_southport-sc');
+    // who was in the boat is set from the viewer (crew), not by the upload
+    await d.req('PUT', '/api/sessions/2026-09-21_southport-sc/crew', json: {'Morning sail _2_.GPX': 'Steve'});
     final (_, crew) = await d.req('GET', '/api/sessions/2026-09-21_southport-sc/crew');
     expect(crew, {'Morning sail _2_.GPX': 'Steve'});
     expect((await d.req('GET', '/api/sailors')).$2, ['Steve']);
+    // only tracks can be fetched or deleted by name: the session's own files are not reachable that way
+    expect((await d.req('GET', '/api/sessions/2026-09-21_southport-sc/owners.json')).$1, 404);
+    expect((await d.req('DELETE', '/api/sessions/2026-09-21_southport-sc/crew.json')).$1, 404);
+    expect((await d.req('GET', '/api/sessions/2026-09-21_southport-sc/crew')).$2, {'Morning sail _2_.GPX': 'Steve'});
   });
 
   test('races, course and crew are cleaned exactly like app.py', () async {
@@ -385,7 +391,7 @@ void main() {
 
   test('personal bests and badges', () {
     StatRow row(String date, {double max = 5, double avg = 3, double dist = 4, int moving = 3600, String venue = 'Southport SC', int hour = 11, Map<String, dynamic> extra = const {}}) =>
-        StatRow('${date}_x', date, 'x', venue, '$date.csv', {
+        StatRow('${date}_x', date, venue, '$date.csv', {
           'max_kn': max, 'avg_kn': avg, 'dist_nm': dist, 'moving_s': moving,
           'start_ms': DateTime.parse('${date}T${hour.toString().padLeft(2, '0')}:00:00').millisecondsSinceEpoch, 'end_ms': 0, 'points': 10, ...extra,
         });

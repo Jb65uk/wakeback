@@ -3,8 +3,8 @@
 //
 // Layout (same as the dock):  <data>/sessions/<YYYY-MM-DD>_<venue>/<puckN_HHMMSS.csv | *.gpx | races.json | meta.json | crew.json | owners.json>
 //                             <data>/pucks.json, <data>/venues.json
-// A session is a sailing date + venue. Each track has an owner (whose puck/phone sent it) as well as a
-// sailor (who was in the boat, crew.json).
+// A session is a sailing date + venue. Each track has an owner (whose puck/phone sent it); who was in the
+// boat is crew.json, set from the viewer.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -387,7 +387,7 @@ class DockStore {
           email = ownerEmail.toLowerCase();
           if (name.isEmpty) name = ownerName;
         }
-        rows.add(StatRow(day, m.group(1)!, vid, venueName(vid, vs), f, s.cast<String, dynamic>(), ownerEmail: email, ownerName: name, owner: o));
+        rows.add(StatRow(day, m.group(1)!, venueName(vid, vs), f, s.cast<String, dynamic>(), ownerEmail: email, ownerName: name, owner: o));
       }
     }
     return rows;
@@ -416,8 +416,10 @@ class DockStore {
     return {'period': period, 'people': league(rows, myEmail: ownerEmail, myName: ownerName), 'classes': classes, 'cls': cls};
   }
 
+  /// A track in a session. Only tracks: races.json, crew.json and the rest can't be fetched or deleted this way.
   Future<File> trackFile(String day, String name) async {
     if (!safeName.hasMatch(day) || !safeName.hasMatch(name)) throw const DockError(400, 'bad name');
+    if (!isTrack(name)) throw const DockError(404, 'not found');
     final f = File('${dayDir(day).path}/$name');
     if (!await f.exists()) throw const DockError(404, 'not found');
     return f;
@@ -477,8 +479,7 @@ class DockStore {
   /// The boat you usually sail: goes on your own tracks as they land unless the upload names one.
   String defaultBoat = '';
 
-  Future<Map<String, dynamic>> upload(String filename, Uint8List bytes,
-      {String puck = '', String sailor = '', String ownerName = '', String ownerEmail = '', String boat = ''}) async {
+  Future<Map<String, dynamic>> upload(String filename, Uint8List bytes, {String puck = '', String ownerName = '', String ownerEmail = '', String boat = ''}) async {
     var name = tidyName(filename);
     if (!isTrack(name)) {
       throw const DockError(400, 'That file isn\'t a GPX or CSV track. In your sailing app, look for "Export GPX".');
@@ -543,14 +544,6 @@ class DockStore {
             await _writeJson(cf, crew);
           }
         }
-      }
-      final who = cut(sailor.trim(), 40);
-      if (who.isNotEmpty) {
-        final cf = File('${dir.path}/crew.json');
-        final j = await _readJson(cf);
-        final crew = j is Map ? j.cast<String, dynamic>() : <String, dynamic>{};
-        crew[fname] = who;
-        await _writeJson(cf, crew);
       }
       return {'ok': true, 'session': day, 'file': fname, 'venue': vid, 'venue_name': venueName(vid, await venues())};
     });

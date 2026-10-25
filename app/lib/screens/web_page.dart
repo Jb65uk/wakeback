@@ -148,8 +148,6 @@ class WakeWebViewState extends State<WakeWebView> with AutomaticKeepAliveClientM
     super.dispose();
   }
 
-  Future<void> reload() => _c.reload();
-
   @override
   void didUpdateWidget(covariant WakeWebView old) {
     super.didUpdateWidget(old);

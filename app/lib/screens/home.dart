@@ -48,7 +48,7 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       }
     } catch (e) {
-      if (mounted) toast(context, '$e', error: true);
+      if (mounted) toast(context, friendly(e), error: true);
       return;
     }
     if (!mounted) return;

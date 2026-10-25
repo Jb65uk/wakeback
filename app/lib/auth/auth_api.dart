@@ -1,4 +1,4 @@
-// Talking to your WakeBack server's accounts: sign up, log in, who am I, friends.
+// Talking to your WakeBack server's accounts: sign up, log in, friends, puck keys.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -25,12 +25,11 @@ class Account {
 
 class Friend {
   final int id;
-  final String name, email, status;
-  final bool requestedByMe;
-  const Friend(this.id, this.name, this.email, this.status, this.requestedByMe);
+  final String name;
+  const Friend(this.id, this.name);
   static Friend fromJson(Map<String, dynamic> j) {
     final u = (j['user'] as Map?)?.cast<String, dynamic>() ?? const {};
-    return Friend((j['id'] as num).toInt(), '${u['name'] ?? ''}', '${u['email'] ?? ''}', '${j['status'] ?? ''}', j['requested_by_me'] == true);
+    return Friend((j['id'] as num).toInt(), '${u['name'] ?? ''}');
   }
 }
 
@@ -42,11 +41,8 @@ class FriendLists {
 /// A puck key the server issued to you (the key itself is only in [IssuedPuckKey]).
 class PuckKeyInfo {
   final int id, puck;
-  final String label, fw;
-  final int? created, lastSeen;
-  const PuckKeyInfo(this.id, this.puck, this.label, this.fw, this.created, this.lastSeen);
-  static PuckKeyInfo fromJson(Map<String, dynamic> j) => PuckKeyInfo((j['id'] as num?)?.toInt() ?? 0, (j['puck'] as num?)?.toInt() ?? 0,
-      '${j['label'] ?? ''}', '${j['fw'] ?? ''}', (j['created'] as num?)?.toInt(), (j['last_seen'] as num?)?.toInt());
+  const PuckKeyInfo(this.id, this.puck);
+  static PuckKeyInfo fromJson(Map<String, dynamic> j) => PuckKeyInfo((j['id'] as num?)?.toInt() ?? 0, (j['puck'] as num?)?.toInt() ?? 0);
 }
 
 class IssuedPuckKey {
@@ -95,42 +91,22 @@ class AuthApi {
     return j;
   }
 
-  /// Does this server have accounts switched on?
-  Future<bool> hasAccounts() async {
-    try {
-      final r = await http.get(_u('/api/auth/me')).timeout(_timeout);
-      if (r.statusCode == 401) return true;
-      final j = jsonDecode(utf8.decode(r.bodyBytes));
-      return j is Map && j['accounts'] == true;
-    } on TimeoutException {
-      throw const AuthException('The server didn\'t answer. Check the address and your signal.');
-    } catch (e) {
-      if (e is AuthException) rethrow;
-      throw AuthException('Can\'t reach the server: $e');
-    }
-  }
-
-  Future<SignInResult> signup(String email, String name, String password, {String device = 'phone'}) async {
+  Future<SignInResult> signup(String email, String name, String password) async {
     final j = await _json(http.post(_u('/api/auth/signup'),
-        headers: _h, body: jsonEncode({'email': email, 'name': name, 'password': password, 'device': device})));
+        headers: _h, body: jsonEncode({'email': email, 'name': name, 'password': password, 'device': 'phone'})));
     return SignInResult(j['token'] as String?, Account.fromJson((j['user'] as Map).cast<String, dynamic>()));
   }
 
-  Future<SignInResult> login(String email, String password, {String device = 'phone'}) async {
-    final j = await _json(http.post(_u('/api/auth/login'), headers: _h, body: jsonEncode({'email': email, 'password': password, 'device': device})));
+  Future<SignInResult> login(String email, String password) async {
+    final j = await _json(http.post(_u('/api/auth/login'), headers: _h, body: jsonEncode({'email': email, 'password': password, 'device': 'phone'})));
     return SignInResult(j['token'] as String?, Account.fromJson((j['user'] as Map).cast<String, dynamic>()));
   }
 
   /// For the "waiting for approval" screen: token once approved, else null.
-  Future<SignInResult?> checkApproved(String email, String password, {String device = 'phone'}) async {
-    final j = await _json(http.post(_u('/api/auth/status'), headers: _h, body: jsonEncode({'email': email, 'password': password, 'device': device})));
+  Future<SignInResult?> checkApproved(String email, String password) async {
+    final j = await _json(http.post(_u('/api/auth/status'), headers: _h, body: jsonEncode({'email': email, 'password': password, 'device': 'phone'})));
     if (j['token'] == null) return null;
     return SignInResult(j['token'] as String, Account.fromJson((j['user'] as Map).cast<String, dynamic>()));
-  }
-
-  Future<Account> me() async {
-    final j = await _json(http.get(_u('/api/auth/me'), headers: _h));
-    return Account.fromJson((j['user'] as Map).cast<String, dynamic>());
   }
 
   Future<void> logout() async {
@@ -195,11 +171,6 @@ class AuthApi {
   Future<IssuedPuckKey> issuePuckKey(int puck, {String label = ''}) async {
     final j = await _json(http.post(_u('/api/pucks/keys'), headers: _h, body: jsonEncode({'puck': puck, 'label': label})));
     return IssuedPuckKey('${j['key']}', PuckKeyInfo.fromJson(j));
-  }
-
-  Future<List<PuckKeyInfo>> myPucks() async {
-    final j = await _json(http.get(_u('/api/pucks/keys'), headers: _h));
-    return ((j['pucks'] as List?) ?? const []).map((e) => PuckKeyInfo.fromJson((e as Map).cast<String, dynamic>())).toList();
   }
 
   Future<void> revokePuckKey(int id) => _json(http.delete(_u('/api/pucks/keys/$id'), headers: _h));
