@@ -484,8 +484,24 @@ static void goToSleep(const char *why) {
 }
 
 // ---------- WiFi: setup AP, and the dock as a client ----------
+// Switching the radio off and straight back on in another mode (setup AP -> hotspot client, or the other
+// way) crashed the puck: the driver was still stopping ("netstack cb reg failed with 12308"), the new
+// mode came up without its network stack, and the first packet jumped to address 0 (seen 25 Oct, the
+// first time a puck went setup -> phone hotspot for real). So: after WIFI_OFF, wait for the driver to
+// finish, and don't start the next mode for a moment.
+uint32_t wifiOffAt = 0;
+static const uint32_t WIFI_SETTLE_MS = 600;
+static void radioOff() {
+  WiFi.mode(WIFI_OFF);
+  for (int i = 0; i < 20 && WiFi.getMode() != WIFI_OFF; i++) delay(10);
+  delay(150);
+  wifiOffAt = millis();
+}
+static bool radioSettled() { return millis() - wifiOffAt >= WIFI_SETTLE_MS; }
 static void enterSetup() {
-  WiFi.disconnect(true); WiFi.mode(WIFI_AP);
+  if (wmode == W_DOCK || wmode == W_JOINING) { webStop(); WiFi.disconnect(true); radioOff(); }
+  while (!radioSettled()) delay(10);
+  WiFi.mode(WIFI_AP);
   char ap[32]; snprintf(ap, sizeof ap, "wakeback-puck-%d", S.puck);
   WiFi.softAP(ap);
   WiFi.setSleep(false);
@@ -495,7 +511,7 @@ static void enterSetup() {
   Serial.printf("Setup WiFi \"%s\" is on: join it and open http://%s/\n", ap, WiFi.softAPIP().toString().c_str());
 }
 static void leaveSetup() {
-  dns.stop(); webStop(); WiFi.softAPdisconnect(true); WiFi.mode(WIFI_OFF);
+  dns.stop(); webStop(); WiFi.softAPdisconnect(true); radioOff();
   wmode = W_OFF; lastOffPadTry = millis();
   Serial.println("Setup mode off.");
 }
@@ -507,13 +523,13 @@ static void joinDock() {
 }
 static void wifiOff() {
   if (wmode == W_SETUP) { leaveSetup(); return; }
-  webStop(); WiFi.disconnect(true); WiFi.mode(WIFI_OFF);
+  webStop(); WiFi.disconnect(true); radioOff();
   wmode = W_OFF; dockOk = false;
 }
 static String dockUrl(const char *path) { return "http://" + WiFi.gatewayIP().toString() + ":" + String(DOCK_PORT) + path; }
 
 static bool hello() {
-  HTTPClient h; WiFiClient c; h.setTimeout(3000);
+  WiFiClient c; HTTPClient h; h.setTimeout(3000);
   if (!h.begin(c, dockUrl("/api/hello"))) return false;
   const int code = h.GET();
   bool ok = false;
@@ -528,7 +544,7 @@ static bool hello() {
 }
 
 static bool checkin() {
-  HTTPClient h; WiFiClient c; h.setTimeout(4000);
+  WiFiClient c; HTTPClient h; h.setTimeout(4000);
   if (!h.begin(c, dockUrl("/api/pucks/checkin"))) return false;
   h.addHeader("Content-Type", "application/json");
   if (S.key.length()) h.addHeader("X-Puck-Key", S.key);
@@ -608,7 +624,7 @@ static void uploadPending() {
 
 // firmware the dock is offering (roadmap stage 5): GET /api/firmware/latest -> {"version":"1.1.0","url":"/api/firmware/puck.bin"}
 static void checkDockFirmware() {
-  HTTPClient h; WiFiClient c; h.setTimeout(4000);
+  WiFiClient c; HTTPClient h; h.setTimeout(4000);
   if (!h.begin(c, dockUrl("/api/firmware/latest"))) return;
   if (h.GET() != 200) { h.end(); return; }
   const String b = h.getString(); h.end();
@@ -620,7 +636,7 @@ static void checkDockFirmware() {
   if (!url.startsWith("http")) url = dockUrl(url.c_str());
   Serial.printf("Dock has firmware %s (this is %s): updating from %s\n", ver.c_str(), FW, url.c_str());
   if (recording) stopRecording("firmware update");
-  HTTPClient g; WiFiClient gc; g.setTimeout(30000);
+  WiFiClient gc; HTTPClient g; g.setTimeout(30000);
   if (!g.begin(gc, url) || g.GET() != 200) { g.end(); return; }
   const int size = g.getSize();
   uploading = true; led();
@@ -649,7 +665,7 @@ static void wifiTick() {
   const bool wantDock = S.ssid.length() && !recording && (wantLiftCheckin ||
                         (onPad && m - lastOffPadTry > 30000) ||                              // on the pad: keep trying, half a minute apart
                         (pendingCount() > 0 && m - lastOffPadTry > (sailEnded && m - sailEnded < 15UL * 60 * 1000 ? 60000UL : OFFPAD_RETRY_MS)));   // tracks waiting: every minute for 15 min after a sail, then every 5
-  if (wmode == W_OFF) { if (wantDock) { joinDock(); lastOffPadTry = m; } return; }
+  if (wmode == W_OFF) { if (wantDock && radioSettled()) { joinDock(); lastOffPadTry = m; } return; }
   if (wmode == W_JOINING) {
     if (WiFi.status() == WL_CONNECTED) { wmode = W_DOCK; wSince = m; webStart(); Serial.printf("Joined %s, dock should be at %s\n", S.ssid.c_str(), dockUrl("").c_str()); }
     else if (m - wSince > 15000) { wifiOff(); if (!onPad) wantLiftCheckin = false; else { padSetup = true; enterSetup(); } }
