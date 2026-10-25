@@ -7,7 +7,7 @@
 <title>WakeBack Record</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <style>
 /* One-screen recorder: live numbers on top, map in the middle, controls pinned to the thumb */
 :root{
@@ -80,7 +80,7 @@ h2{font-family:var(--num);font-weight:600;font-size:22px;margin:0}
 .foot{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;font-size:13px;color:var(--muted)}
 .foot label{display:flex;align-items:center;gap:6px}
 .foot input[type=number]{width:62px;background:var(--deep);border:1px solid var(--line);border-radius:6px;padding:3px 6px}
-@media (prefers-reduced-motion:no-preference){ .big b.rec{animation:none} .gps.rec i{animation:blink 1.2s infinite} @keyframes blink{50%{opacity:.25}} }
+@media (prefers-reduced-motion:no-preference){ .gps.rec i{animation:blink 1.2s infinite} @keyframes blink{50%{opacity:.25}} }
 </style>
 </head>
 <body>
@@ -126,7 +126,7 @@ h2{font-family:var(--num);font-weight:600;font-size:22px;margin:0}
   </div>
 </div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
 'use strict';
 const MS2KN = 1.943844, M2NM = 1 / 1852;
@@ -272,7 +272,6 @@ function onFix(pos) {
 }
 
 // ---------- timing / display ----------
-let timer = null;
 function elapsed() { return rec ? rec.moving : 0; }
 function tick() {
   if (!rec) return;
@@ -338,7 +337,7 @@ function finish() {
 function saveDraft() { if (rec) store.set('wakeback-rec-draft', rec); }
 
 // ---------- saved sails ----------
-function summarise(r) { return { nm: r.dist * M2NM, ms: r.moving, max: r.max, avg: r.moving ? r.dist * M2NM / (r.moving / 3600000) : 0, pts: r.pts.length }; }
+function summarise(r) { return { nm: r.dist * M2NM, ms: r.moving, max: r.max, avg: r.moving ? r.dist * M2NM / (r.moving / 3600000) : 0 }; }
 function fileBase(r) { const d = new Date(r.start), p = n => String(n).padStart(2, '0'); return `phone_${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`; }
 function toGpx(r) {
   const esc = s => String(s).replace(/[<&>]/g, c => ({ '<': '&lt;', '&': '&amp;', '>': '&gt;' }[c]));
