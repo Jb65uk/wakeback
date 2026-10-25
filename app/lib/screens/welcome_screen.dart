@@ -82,7 +82,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
         setState(() => _err = e.message);
       }
     } catch (e) {
-      setState(() => _err = '$e');
+      if (mounted) setState(() => _err = friendly(e));
     }
     if (mounted) setState(() => _busy = false);
   }
@@ -97,10 +97,8 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
     try {
       await app.auth.forgotPassword(_email.text.trim());
       if (mounted) setState(() => _asked = true);
-    } on AuthException catch (e) {
-      if (mounted) setState(() => _err = e.message);
     } catch (e) {
-      if (mounted) setState(() => _err = '$e');
+      if (mounted) setState(() => _err = friendly(e));
     }
     if (mounted) setState(() => _busy = false);
   }
@@ -125,17 +123,24 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
         if (mounted) toast(context, 'Password changed. Signed in as ${r.user.name}');
         await _done();
       }
-    } on AuthException catch (e) {
-      if (mounted) setState(() => _err = e.message);
     } catch (e) {
-      if (mounted) setState(() => _err = '$e');
+      if (mounted) setState(() => _err = friendly(e));
     }
     if (mounted) setState(() => _busy = false);
   }
 
+  /// Ask every 20 s whether the admin has approved the account, for up to half an hour.
   void _startPolling() {
     _poll?.cancel();
-    _poll = Timer.periodic(const Duration(seconds: 20), (_) => _checkApproved(quiet: true));
+    var polls = 0;
+    _poll = Timer.periodic(const Duration(seconds: 20), (t) {
+      if (++polls > 90) {
+        t.cancel();
+        if (mounted) setState(() => _err = 'Still waiting — try again later');
+        return;
+      }
+      _checkApproved(quiet: true);
+    });
   }
 
   Future<void> _checkApproved({bool quiet = false}) async {
@@ -150,7 +155,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
         toast(context, 'Not approved yet');
       }
     } catch (e) {
-      if (!quiet && mounted) toast(context, '$e', error: true);
+      if (!quiet && mounted) toast(context, friendly(e), error: true);
     }
   }
 
@@ -212,7 +217,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
         const SizedBox(height: 24),
         OutlinedButton.icon(onPressed: _tryDemo, icon: const Icon(Icons.science_outlined), label: const Text('Try the demo')),
         const SizedBox(height: 6),
-        Text('Pretend pucks and a demo race, nothing saved. Leave it any time from the You tab.',
+        Text('Pretend pucks and a demo race, kept apart from your own sails. Leave it any time from the You tab.',
             textAlign: TextAlign.center, style: t.textTheme.bodySmall?.copyWith(color: t.colorScheme.onSurfaceVariant)),
         if (!widget.fromSetup) ...[
           const SizedBox(height: 24),
@@ -360,6 +365,10 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
         Text('Your account (${_email.text.trim()}) has been requested. Once it\'s approved you\'ll be signed in automatically; '
             'this screen checks every 20 seconds.',
             textAlign: TextAlign.center, style: t.textTheme.bodyMedium?.copyWith(color: t.colorScheme.onSurfaceVariant)),
+        if (_err != null) ...[
+          const SizedBox(height: 10),
+          Text(_err!, textAlign: TextAlign.center, style: TextStyle(color: t.colorScheme.error, fontWeight: FontWeight.w600)),
+        ],
         const SizedBox(height: 20),
         FilledButton.tonal(onPressed: () => _checkApproved(), child: const Text('Check now')),
         const SizedBox(height: 8),

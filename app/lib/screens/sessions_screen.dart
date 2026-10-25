@@ -11,6 +11,7 @@ import '../share_card.dart';
 import '../sync/server_sync.dart';
 import '../widgets/boats.dart';
 import '../widgets/common.dart';
+import '../widgets/format.dart';
 import 'sync_screen.dart';
 import 'update_card.dart';
 
@@ -41,7 +42,7 @@ class _SessionsScreenState extends State<SessionsScreen> with SingleTickerProvid
           Expanded(
             child: TabBar(
               controller: _tabs,
-              tabs: const [Tab(text: 'Sails'), Tab(text: 'Stats'), Tab(text: 'League')],
+              tabs: const [Tab(text: 'Sessions'), Tab(text: 'Stats'), Tab(text: 'League')],
             ),
           ),
           const _SyncCloud(),
@@ -59,29 +60,6 @@ class _SessionsScreenState extends State<SessionsScreen> with SingleTickerProvid
 }
 
 // ---------------------------------------------------------------- helpers
-
-const _months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const _days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-
-/// '2026-09-20' -> 'Sun 20 Sep 2026'
-String niceDate(String ymd) {
-  try {
-    final d = DateTime.parse(ymd);
-    return '${_days[d.weekday - 1]} ${d.day} ${_months[d.month - 1]} ${d.year}';
-  } catch (_) {
-    return ymd;
-  }
-}
-
-/// '2026-09' -> 'Sep 26'
-String niceMonth(String ym) {
-  try {
-    final p = ym.split('-');
-    return '${_months[int.parse(p[1]) - 1]} ${p[0].substring(2)}';
-  } catch (_) {
-    return ym;
-  }
-}
 
 String niceHours(num h) {
   if (h < 1) return '${(h * 60).round()} min';
@@ -118,7 +96,7 @@ String sailTimes(Iterable<Map> stats) {
 }
 
 /// Sync to the server, when there's one to talk to.
-ServerSync? serverOrNull() => app.signedIn && !app.demoMode && app.serverUrl.isNotEmpty ? ServerSync(app.serverUrl, app.store, token: app.token) : null;
+ServerSync? serverOrNull() => app.signedIn && !app.demoMode ? ServerSync(app.serverUrl, app.store, token: app.token) : null;
 
 /// The cloud by the tabs: how sync is doing at a glance. Tap for the Sync page.
 class _SyncCloud extends StatelessWidget {
@@ -291,7 +269,7 @@ class _SessionListState extends State<_SessionList> with WidgetsBindingObserver 
       }
       await _checkRecords();
     } catch (e) {
-      if (mounted) setState(() => _err = '$e');
+      if (mounted) setState(() => _err = friendly(e));
     }
     // a newer build on GitHub? (at most every 6 h; silent if offline)
     try {
@@ -327,9 +305,9 @@ class _SessionListState extends State<_SessionList> with WidgetsBindingObserver 
 
   Future<void> _share(Map<String, dynamic> s) async {
     try {
-      await shareSession(context, s);
+      await shareSession(s);
     } catch (e) {
-      if (mounted) toast(context, 'Couldn\'t make the card: $e', error: true);
+      if (mounted) toast(context, 'Couldn\'t make the card: ${friendly(e)}', error: true);
     }
   }
 
@@ -368,7 +346,7 @@ class _SessionListState extends State<_SessionList> with WidgetsBindingObserver 
         toast(context, failed > 0 ? 'Deleted from this phone; the server kept $failed track${failed > 1 ? 's' : ''} — try again after a Sync' : 'Session deleted', error: failed > 0);
       }
     } catch (e) {
-      if (mounted) toast(context, 'Couldn\'t delete: $e', error: true);
+      if (mounted) toast(context, 'Couldn\'t delete: ${friendly(e)}', error: true);
     }
     _busy.remove(id);
     await _load();
@@ -409,7 +387,7 @@ class _SessionListState extends State<_SessionList> with WidgetsBindingObserver 
         if (failed > 0 && mounted) toast(context, 'Changed here; the server didn\'t take it for $failed track${failed > 1 ? 's' : ''} — try again after a Sync', error: true);
       }
     } catch (e) {
-      if (mounted) toast(context, '$e', error: true);
+      if (mounted) toast(context, friendly(e), error: true);
     }
     _busy.remove(id);
     await _load();
@@ -436,7 +414,7 @@ class _SessionListState extends State<_SessionList> with WidgetsBindingObserver 
         var failed = 0;
         for (final f in mine) {
           try {
-            await sync.setSharing(id, f, vis);
+            await sync.setTrack(id, f, {'visibility': vis});
           } on SyncException catch (e) {
             // not on the server yet (sync will carry the setting up with the track) — anything else, say so
             if (!e.message.contains('404') && !e.message.toLowerCase().contains('not found')) failed++;
@@ -445,7 +423,7 @@ class _SessionListState extends State<_SessionList> with WidgetsBindingObserver 
         if (failed > 0 && mounted) toast(context, 'Changed here; the server didn\'t take it for $failed track${failed > 1 ? 's' : ''} — try again after a Sync', error: true);
       }
     } catch (e) {
-      if (mounted) toast(context, '$e', error: true);
+      if (mounted) toast(context, friendly(e), error: true);
     }
     _busy.remove(id);
     await _load();
@@ -671,7 +649,7 @@ class _StatsTabState extends State<_StatsTab> {
         src = sync == null ? null : 'this phone only (${err ?? 'server not reached'})';
         err = null;
       } catch (e) {
-        err = '$e';
+        err = friendly(e);
       }
     }
     List<SailBadge>? bd;
@@ -1083,7 +1061,7 @@ class _LeagueTabState extends State<_LeagueTab> {
         src = sync == null ? 'the tracks on this phone' : 'the tracks on this phone (${err ?? 'server not reached'})';
         err = null;
       } catch (e) {
-        err = '$e';
+        err = friendly(e);
       }
     }
     if (mounted && n == _req && period == _period && cls == _cls) {

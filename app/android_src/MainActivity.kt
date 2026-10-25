@@ -9,9 +9,9 @@
 // this app's sockets to that network so http://192.168.4.1 reaches the puck. `leave` unbinds and releases
 // it (the phone drops back off the puck WiFi on its own).
 //
-// Dart side: lib/puck/puck_wifi.dart (MethodChannel "wakeback/puck_wifi": join(ssid|prefix) / leave() / hotspotSettings()).
-// `join` with a `prefix` matches any "wakeback-puck-*": if several pucks are in setup mode the system dialog
-// lists them and the user picks one.
+// Dart side: lib/puck/puck_wifi.dart (MethodChannel "wakeback/puck_wifi": join(prefix) / leave() / hotspotSettings()).
+// `join` matches any "wakeback-puck-*": if several pucks are in setup mode the system dialog lists them and
+// the user picks one.
 package uk.bridgesolutions.wakeback
 
 import android.content.Context
@@ -38,7 +38,7 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "wakeback/puck_wifi").setMethodCallHandler { call, result ->
             when (call.method) {
                 "supported" -> result.success(Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
-                "join" -> join(call.argument<String>("ssid") ?: "", call.argument<String>("prefix") ?: "", result)
+                "join" -> join(call.argument<String>("prefix") ?: "", result)
                 "leave" -> { leave(); result.success(true) }
                 "hotspotSettings" -> result.success(openHotspotSettings())
                 else -> result.notImplemented()
@@ -46,17 +46,17 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun join(ssid: String, prefix: String, result: MethodChannel.Result) {
+    private fun join(prefix: String, result: MethodChannel.Result) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             result.error("unsupported", "Android 10 or newer is needed to join the puck from the app", null); return
         }
-        if (ssid.isEmpty() && prefix.isEmpty()) { result.error("bad_ssid", "No network name", null); return }
+        if (prefix.isEmpty()) { result.error("bad_ssid", "No network name", null); return }
         leave()
         val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val sb = WifiNetworkSpecifier.Builder()                           // open network: the puck's setup WiFi has no password
-        if (ssid.isNotEmpty()) sb.setSsid(ssid) else sb.setSsidPattern(PatternMatcher(prefix, PatternMatcher.PATTERN_PREFIX))
-        val spec = sb.build()
-        val name = if (ssid.isNotEmpty()) ssid else "$prefix…"
+        val spec = WifiNetworkSpecifier.Builder()                         // open network: the puck's setup WiFi has no password
+            .setSsidPattern(PatternMatcher(prefix, PatternMatcher.PATTERN_PREFIX))
+            .build()
+        val name = "$prefix…"
         val req = NetworkRequest.Builder()
             .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
             .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)

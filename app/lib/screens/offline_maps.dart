@@ -22,6 +22,13 @@ class _OfflineMapsCardState extends State<OfflineMapsCard> {
   void initState() {
     super.initState();
     _load();
+    app.addListener(_load); // a sync or a new sail may have brought a venue
+  }
+
+  @override
+  void dispose() {
+    app.removeListener(_load);
+    super.dispose();
   }
 
   static double _radius(Map<String, dynamic> v) => ((v['radius_m'] as num?)?.toDouble() ?? 1500.0).clamp(1500.0, 4000.0).toDouble();

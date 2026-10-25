@@ -15,7 +15,6 @@ typedef AssetLoader = Future<Uint8List?> Function(String name);
 
 class DockSettings {
   String wifi = 'wakeback'; // the phone hotspot name pucks join
-  String hostname = 'WakeBack phone';
 }
 
 class PocketDock {
@@ -34,10 +33,12 @@ class PocketDock {
   /// Demo mode on? (shown on the Dock page)
   bool Function() demoMode = () => false;
 
+  /// A puck (or the phone-upload page) just landed a track: lists can reload.
+  void Function()? onUpload;
+
   PocketDock(this.store, this.assets, this.settings);
 
   int get port => _server?.port ?? 0;
-  bool get running => _server != null;
   String get localUrl => 'http://127.0.0.1:$port';
 
   /// Pucks expect the dock on port 5000. [address] defaults to every interface so the hotspot can reach it.
@@ -238,37 +239,13 @@ class PocketDock {
       }
     }
     if (fileName == null || fileName.isEmpty || fileBytes == null) throw const DockError(400, 'no file');
-    return _json(req, await store.upload(fileName, fileBytes,
-        puck: fields['puck'] ?? '', sailor: fields['sailor'] ?? '', ownerName: fields['owner_name'] ?? '', ownerEmail: fields['owner_email'] ?? '', boat: fields['boat'] ?? ''));
+    final res = await store.upload(fileName, fileBytes,
+        puck: fields['puck'] ?? '', ownerName: fields['owner_name'] ?? '', ownerEmail: fields['owner_email'] ?? '', boat: fields['boat'] ?? '');
+    onUpload?.call();
+    return _json(req, res);
   }
 
   // ------------------------------------------------------------------ phone-specific bits
-
-  /// Addresses other devices can reach this phone on (hotspot first).
-  static Future<List<String>> lanAddresses() async {
-    try {
-      final ifs = await NetworkInterface.list(type: InternetAddressType.IPv4, includeLoopback: false);
-      int rank(NetworkInterface i) {
-        final n = i.name.toLowerCase();
-        if (n.contains('ap') || n.contains('swlan') || n.contains('softap')) return 0; // hotspot
-        if (n.startsWith('wlan')) return 1;
-        if (n.startsWith('eth')) return 2;
-        return 3; // mobile data etc.
-      }
-
-      ifs.sort((a, b) => rank(a).compareTo(rank(b)));
-      final out = <String>[];
-      for (final i in ifs) {
-        if (rank(i) == 3) continue;
-        for (final a in i.addresses) {
-          if (!a.isLoopback) out.add(a.address);
-        }
-      }
-      return out;
-    } catch (_) {
-      return [];
-    }
-  }
 
   Future<bool> _online() async {
     try {
@@ -286,16 +263,13 @@ class PocketDock {
       'networks': <Object>[],
       'can_manage_wifi': false,
       'demo': demoMode(),
-      'uplink_if': '',
       'dock_wifi': settings.wifi,
-      'pin_required': false,
-      'hostname': settings.hostname,
+      'hostname': 'WakeBack phone',
       'time_ms': DateTime.now().millisecondsSinceEpoch,
       'uptime_s': DateTime.now().difference(_boot).inSeconds,
       'disk_free': null, // Android doesn't tell us cheaply; the Dock page shows "n/a"
       'disk_total': null,
       'sessions': await store.dayCount(),
-      'nas': null,
       'phone': true,
     };
   }

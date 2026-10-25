@@ -11,6 +11,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../app_state.dart';
+import '../widgets/common.dart';
 import 'track_log.dart';
 
 enum RecState { idle, recording, paused }
@@ -22,13 +23,13 @@ class Recorder extends ChangeNotifier {
   RecState state = RecState.idle;
   TrackLog log = TrackLog();
   double? accuracy; // last fix's accuracy, metres (null = no fix yet)
-  DateTime? lastFixAt;
   String? problem; // why GPS isn't working, in words for the sailor
   bool recovered = false; // the current track came back from a draft after a restart
 
-  /// The last finished sail (so the screen can offer Replay / Share GPX).
+  /// The last finished sail (so the screen can offer Replay / Share GPX), and the boat it was saved to.
   Map<String, dynamic>? lastSaved;
   TrackLog? lastSavedLog;
+  String lastSavedBoat = '';
 
   StreamSubscription<Position>? _sub;
   IOSink? _draft;
@@ -94,7 +95,11 @@ class Recorder extends ChangeNotifier {
           )
         : LocationSettings(accuracy: LocationAccuracy.bestForNavigation, distanceFilter: 0);
     _sub = Geolocator.getPositionStream(locationSettings: settings).listen(_onPosition, onError: (Object e) {
-      problem = 'GPS stopped: $e';
+      // the stream is dead after an error: let go of it so Resume can start a fresh one
+      _sub?.cancel();
+      _sub = null;
+      accuracy = null;
+      problem = 'GPS stopped (${friendly(e)}). Pause and resume to start it again.';
       notifyListeners();
     });
     return true;
@@ -111,7 +116,6 @@ class Recorder extends ChangeNotifier {
     final speed = p.speed > 0 || p.speedAccuracy > 0 ? p.speed : null;
     final heading = p.headingAccuracy > 0 || p.heading > 0 ? p.heading : null;
     accuracy = p.accuracy;
-    lastFixAt = DateTime.now();
     final raw = RawFix(p.timestamp.toUtc().millisecondsSinceEpoch, p.latitude, p.longitude, p.accuracy, speedMs: speed, heading: heading);
     final r = log.add(raw, recording: state == RecState.recording);
     if (r == FixResult.recorded) _draft?.writeln(log.fixes.last.draftLine);
@@ -198,6 +202,7 @@ class Recorder extends ChangeNotifier {
       }
       lastSaved = res;
       lastSavedLog = done;
+      lastSavedBoat = boat;
     }
     try {
       await (await _draftFile()).delete();

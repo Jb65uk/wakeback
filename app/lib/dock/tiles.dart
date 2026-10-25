@@ -7,17 +7,17 @@ import 'dart:math' as math;
 import 'package:http/http.dart' as http;
 
 class TileLayer {
-  final String id, url, ext; // url with {z} {x} {y}
+  final String url; // with {z} {x} {y}
   final int maxZoom;
-  const TileLayer(this.id, this.url, this.ext, this.maxZoom);
+  const TileLayer(this.url, this.maxZoom);
   Uri at(int z, int x, int y) => Uri.parse(url.replaceAll('{z}', '$z').replaceAll('{x}', '$x').replaceAll('{y}', '$y'));
 }
 
 /// The same layers the viewer uses (viewer/index.html), by the short names in its in-app tile URLs.
 const tileLayers = {
-  'sat': TileLayer('sat', 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', 'jpg', 19),
-  'osm': TileLayer('osm', 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', 'png', 19),
-  'sea': TileLayer('sea', 'https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png', 'png', 18),
+  'sat': TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', 19),
+  'osm': TileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', 19),
+  'sea': TileLayer('https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png', 18),
 };
 
 const _ua = 'WakeBack/1.0 (sailing tracker; github.com/Jb65uk/wakeback)';

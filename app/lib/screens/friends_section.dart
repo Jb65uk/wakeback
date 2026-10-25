@@ -32,7 +32,7 @@ class _FriendsSectionState extends State<FriendsSection> {
       final l = await app.auth.friends();
       if (mounted) setState(() => _lists = l);
     } catch (e) {
-      if (mounted) setState(() => _error = '$e');
+      if (mounted) setState(() => _error = friendly(e));
     }
     if (mounted) setState(() => _loading = false);
   }
@@ -63,7 +63,7 @@ class _FriendsSectionState extends State<FriendsSection> {
       if (mounted) toast(context, st == 'accepted' ? 'You\'re now friends: they\'d already asked you' : 'Request sent. They accept it in their app.');
       await _load();
     } catch (e) {
-      if (mounted) toast(context, '$e', error: true);
+      if (mounted) toast(context, friendly(e), error: true);
     }
   }
 
@@ -73,7 +73,7 @@ class _FriendsSectionState extends State<FriendsSection> {
       if (mounted) toast(context, done);
       await _load();
     } catch (e) {
-      if (mounted) toast(context, '$e', error: true);
+      if (mounted) toast(context, friendly(e), error: true);
     }
   }
 

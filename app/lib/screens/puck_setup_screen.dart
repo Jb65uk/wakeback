@@ -7,11 +7,12 @@
 //   3. Turn the hotspot on. Done: the puck uploads to this phone after every sail, as you.
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../app_state.dart';
-import '../auth/auth_api.dart';
 import '../puck/puck_wifi.dart';
 import '../widgets/common.dart';
+import 'welcome_screen.dart';
 
 class PuckSetupScreen extends StatefulWidget {
   /// Setting an existing puck up again? Its number, so the form starts there.
@@ -34,6 +35,11 @@ class _PuckSetupScreenState extends State<PuckSetupScreen> {
   PuckStatus? _found;
   MyPuck? _result;
   bool _keyed = false;
+
+  /// A key the server issued this time round, and the puck number it's for: Try again reuses it rather
+  /// than asking for another (each new key revokes the last).
+  String _key = '';
+  int _keyId = 0, _keyFor = 0;
 
   static int _nextNumber() {
     final have = app.myPucks.map((p) => p.puck).toSet();
@@ -101,15 +107,24 @@ class _PuckSetupScreenState extends State<PuckSetupScreen> {
       if (withoutKey) {
         _say('Setting up without an account key: the puck will upload to this phone only. Set it up again later to give it one.');
       } else if (app.signedIn && !app.demoMode) {
-        _say('Asking your account for a key for puck $num…');
-        try {
-          final k = await app.auth.issuePuckKey(num);
-          key = k.key;
-          keyId = k.info.id;
-          _say('Got it. The puck will upload as ${app.account!.name}.');
-        } on AuthException catch (e) {
-          _keyFailed = true;
-          throw PuckException('Couldn\'t get a key from the server: ${e.message}\nCheck your signal and try again, or continue without a key (the puck still uploads to this phone, just not as you on the server).');
+        if (_key.isNotEmpty && _keyFor == num) {
+          key = _key;
+          keyId = _keyId;
+          _say('Using the key your account issued a moment ago for puck $num.');
+        } else {
+          _say('Asking your account for a key for puck $num…');
+          try {
+            final k = await app.auth.issuePuckKey(num);
+            if (!mounted) return;
+            key = _key = k.key;
+            keyId = _keyId = k.info.id;
+            _keyFor = num;
+            _say('Got it. The puck will upload as ${app.account!.name}.');
+          } catch (e) {
+            if (!mounted) return;
+            setState(() => _keyFailed = true);
+            throw PuckException('Couldn\'t get a key from the server: ${friendly(e)}\nCheck your signal and try again, or continue without a key (the puck still uploads to this phone, just not as you on the server).');
+          }
         }
       } else {
         _say(app.demoMode ? 'Demo mode: no account key.' : 'Not signed in: no account key. The puck will still upload to this phone.');
@@ -121,6 +136,7 @@ class _PuckSetupScreenState extends State<PuckSetupScreen> {
       } else {
         _say('Joining the puck\'s WiFi (tap Connect when your phone asks)…');
         await PuckWifi.join();
+        if (!mounted) return;
         _say('On the puck\'s WiFi.');
       }
       final api = PuckApi();
@@ -130,6 +146,7 @@ class _PuckSetupScreenState extends State<PuckSetupScreen> {
       } on PuckException catch (e) {
         throw PuckException('${e.message}\nIs the puck in setup mode? Hold its button for 6 s until it gives five quick blinks.');
       }
+      if (!mounted) return;
       if (!st.isPuck) throw const PuckException('That network isn\'t a WakeBack puck.');
       setState(() => _found = st);
       _say('Found puck ${st.puck}, firmware ${st.fw.isEmpty ? '?' : st.fw}${st.batteryPct >= 0 ? ', battery ${st.batteryPct}%' : ''}.');
@@ -137,6 +154,7 @@ class _PuckSetupScreenState extends State<PuckSetupScreen> {
       // 3. settings over
       _say('Sending the hotspot name, password${key.isEmpty ? '' : ', your key'} and number $num…');
       await api.settings(puck: num, ssid: ssid, pass: pass, key: key, autoRec: _autoRec);
+      if (!mounted) return;
       _say('Saved on the puck.');
 
       // 4. let it go and find the hotspot
@@ -150,18 +168,25 @@ class _PuckSetupScreenState extends State<PuckSetupScreen> {
 
       final mine = MyPuck(puck: num, keyId: keyId, setUpMs: DateTime.now().millisecondsSinceEpoch, fw: st.fw, hotspot: ssid);
       await app.putMyPuck(mine);
-      if (widget.puck != null && widget.puck != num) await app.removeMyPuck(widget.puck!);
+      if (widget.puck != null && widget.puck != num) {
+        // renumbered: the old number's key would otherwise stay live on the server
+        final old = app.myPucks.where((p) => p.puck == widget.puck).firstOrNull;
+        await app.removeMyPuck(widget.puck!);
+        if (old != null && old.keyId > 0 && app.signedIn) {
+          try {
+            await app.auth.revokePuckKey(old.keyId);
+          } catch (_) {}
+        }
+      }
+      if (!mounted) return;
       setState(() {
         _result = mine;
         _keyed = key.isNotEmpty;
         _stage = _Stage.done;
       });
-    } on PuckException catch (e) {
-      await PuckWifi.leave();
-      if (mounted) setState(() => _error = e.message);
     } catch (e) {
       await PuckWifi.leave();
-      if (mounted) setState(() => _error = 'Something went wrong: $e');
+      if (mounted) setState(() => _error = friendly(e));
     }
   }
 
@@ -255,8 +280,22 @@ class _PuckSetupScreenState extends State<PuckSetupScreen> {
             ),
             if (app.signedIn && !app.demoMode)
               Hint('Signed in as ${app.account!.name}: the puck gets a key tied to your account, so its sails are yours on every device and in the league.')
-            else
-              const Hint('Not signed in: the puck will upload to this phone only. Sign in first (You → Log in) if you want its sails on your account.'),
+            else if (app.demoMode)
+              const Hint('Demo mode: the puck gets no account key.')
+            else ...[
+              const Hint('Not signed in: the puck will upload to this phone only. Log in first if you want its sails on your account.'),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: () async {
+                    final ok = await Navigator.push<bool>(context, MaterialPageRoute(builder: (_) => const WelcomeScreen(fromSetup: true)));
+                    if (ok == true && mounted) setState(() {});
+                  },
+                  icon: const Icon(Icons.login, size: 18),
+                  label: const Text('Log in'),
+                ),
+              ),
+            ],
           ]),
         ),
       ),
@@ -384,9 +423,18 @@ class _PuckSetupScreenState extends State<PuckSetupScreen> {
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text('Turn your hotspot on', style: t.textTheme.titleSmall),
             const SizedBox(height: 4),
-            Hint('Name "${r.hotspot}", the password you just entered, 2.4 GHz. Turn off "switch hotspot off automatically" so it\'s still up when '
+            Hint('Make the phone\'s hotspot match exactly, on 2.4 GHz. Turn off "switch hotspot off automatically" so it\'s still up when '
                 'you come ashore. Keep WakeBack open while the puck uploads (it only listens while it\'s on screen).'),
-            const SizedBox(height: 10),
+            const SizedBox(height: 8),
+            Row(children: [
+              Expanded(child: Text('Name: ${r.hotspot}', style: t.textTheme.bodyMedium)),
+              IconButton(tooltip: 'Copy', icon: const Icon(Icons.copy, size: 18), onPressed: () => _copy(context, r.hotspot)),
+            ]),
+            Row(children: [
+              Expanded(child: Text('Password: ${app.hotspotPass}', style: t.textTheme.bodyMedium)),
+              IconButton(tooltip: 'Copy', icon: const Icon(Icons.copy, size: 18), onPressed: () => _copy(context, app.hotspotPass)),
+            ]),
+            const SizedBox(height: 6),
             Wrap(spacing: 8, runSpacing: 4, children: [
               OutlinedButton.icon(
                 onPressed: () async {
@@ -399,10 +447,15 @@ class _PuckSetupScreenState extends State<PuckSetupScreen> {
             ]),
             const SizedBox(height: 10),
             const Hint('Then: the puck records on its own when the boat moves off, and after a sail it tries the hotspot every minute for 15 '
-                'minutes, then whenever it\'s on the pad. The Dock page (You → Advanced → See your pucks) shows it checking in.'),
+                'minutes, then whenever it\'s on the pad. You → Pucks → See them check in shows it arriving.'),
           ]),
         ),
       ),
     ];
+  }
+
+  Future<void> _copy(BuildContext context, String text) async {
+    await Clipboard.setData(ClipboardData(text: text));
+    if (context.mounted) toast(context, 'Copied');
   }
 }

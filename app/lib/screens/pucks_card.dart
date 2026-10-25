@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../auth/auth_api.dart';
 import '../widgets/common.dart';
+import '../widgets/format.dart';
 import 'puck_setup_screen.dart';
 import 'web_page.dart';
 
@@ -21,8 +22,8 @@ class PucksCard extends StatelessWidget {
           title: const Text('Your pucks'),
           subtitle: Text(pucks.isEmpty
               ? 'Set a puck up from here: it then records every sail by itself and uploads to this phone.'
-              : 'Upload to this phone over hotspot "${app.hotspotName}" whenever WakeBack is open.'),
-          isThreeLine: pucks.isEmpty,
+              : 'Uploads land here whenever WakeBack is open on screen with hotspot "${app.hotspotName}" on.'),
+          isThreeLine: true,
         ),
         for (final p in pucks)
           ListTile(
@@ -32,7 +33,9 @@ class PucksCard extends StatelessWidget {
             subtitle: Text([
               if (p.fw.isNotEmpty) 'firmware ${p.fw}',
               p.keyId > 0 ? 'uploads as you' : 'no account key',
-              if (p.setUpMs > 0) 'set up ${_when(p.setUpMs)}',
+              if (p.setUpMs > 0) 'set up ${dayMonth(p.setUpMs)}',
+              // the hotspot name changed since: the puck is still looking for the old one
+              if (p.hotspot.isNotEmpty && p.hotspot != app.hotspotName) 'set up for "${p.hotspot}" — Set up again',
             ].join(' · ')),
             trailing: PopupMenuButton<String>(
               onSelected: (v) => v == 'again' ? _setUp(context, p.puck) : _forget(context, p),
@@ -58,11 +61,6 @@ class PucksCard extends StatelessWidget {
     );
   }
 
-  static String _when(int ms) {
-    final d = DateTime.fromMillisecondsSinceEpoch(ms);
-    return '${d.day} ${const ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.month - 1]}';
-  }
-
   Future<void> _setUp(BuildContext context, int? puck) async {
     await Navigator.push<bool>(context, MaterialPageRoute(builder: (_) => PuckSetupScreen(puck: puck)));
   }
@@ -75,7 +73,9 @@ class PucksCard extends StatelessWidget {
       'Forget puck ${p.puck}?',
       keyed
           ? 'Its key is revoked on the server, so it can\'t upload as you any more (sold it, or lost it?). Its sails already uploaded stay. Setting it up again gives it a new key.'
-          : 'It\'s taken off this list. The puck itself keeps its settings until you set it up again.',
+          : p.keyId > 0
+              ? 'It\'s taken off this list. Its key can\'t be revoked while you\'re signed out — it will keep uploading as you until you sign in and set it up again (that replaces its key).'
+              : 'It\'s taken off this list. The puck itself keeps its settings until you set it up again.',
       ok: 'Forget',
       danger: true,
     )) {
@@ -89,6 +89,9 @@ class PucksCard extends StatelessWidget {
           if (context.mounted) toast(context, 'Couldn\'t reach the server to revoke its key: ${e.message}', error: true);
           return;
         }
+      } catch (e) {
+        if (context.mounted) toast(context, 'Couldn\'t reach the server to revoke its key: ${friendly(e)}', error: true);
+        return;
       }
     }
     await app.removeMyPuck(p.puck);

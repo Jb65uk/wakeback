@@ -1,5 +1,6 @@
 // App updates from the GitHub releases page: every push builds an APK there (app-N). The app checks the
 // public releases feed, and if the build number is newer than its own, offers to download and install it.
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -48,10 +49,23 @@ class Updates {
     }
   }
 
-  /// The newest build on GitHub, or null if it's not newer than this one (or GitHub can't be reached).
+  static const _offline = 'Couldn\'t reach GitHub — try on WiFi with internet, or mobile data.';
+
+  /// The newest build on GitHub, or null if it's not newer than this one. Throws a plain Exception, in
+  /// words for the sailor, when GitHub can't be reached or says no.
   Future<AppUpdate?> check() async {
     await _info();
-    final r = await http.get(Uri.parse(kReleasesApi), headers: {'Accept': 'application/vnd.github+json', 'User-Agent': 'WakeBack-app'}).timeout(const Duration(seconds: 15));
+    http.Response r;
+    try {
+      r = await http.get(Uri.parse(kReleasesApi), headers: {'Accept': 'application/vnd.github+json', 'User-Agent': 'WakeBack-app'}).timeout(const Duration(seconds: 15));
+    } on TimeoutException {
+      throw Exception(_offline);
+    } on SocketException {
+      throw Exception(_offline);
+    } on http.ClientException {
+      throw Exception(_offline);
+    }
+    if (r.statusCode == 403) throw Exception('GitHub is rate-limiting update checks; try again later.');
     if (r.statusCode != 200) throw Exception('GitHub said HTTP ${r.statusCode}');
     final j = (jsonDecode(utf8.decode(r.bodyBytes)) as Map).cast<String, dynamic>();
     final tag = '${j['tag_name'] ?? ''}';
@@ -76,7 +90,16 @@ class Updates {
     final dir = await getTemporaryDirectory();
     final f = File('${dir.path}/WakeBack-${u.build}.apk');
     final req = http.Request('GET', Uri.parse(u.apkUrl))..headers['User-Agent'] = 'WakeBack-app';
-    final res = await http.Client().send(req).timeout(const Duration(seconds: 30));
+    http.StreamedResponse res;
+    try {
+      res = await http.Client().send(req).timeout(const Duration(seconds: 30));
+    } on TimeoutException {
+      throw Exception(_offline);
+    } on SocketException {
+      throw Exception(_offline);
+    } on http.ClientException {
+      throw Exception(_offline);
+    }
     if (res.statusCode != 200) throw Exception('Download failed (HTTP ${res.statusCode})');
     final total = res.contentLength ?? 0;
     var got = 0;
