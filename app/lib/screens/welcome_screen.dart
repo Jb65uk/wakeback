@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../auth/auth_api.dart';
 import '../widgets/common.dart';
+import 'guide_screen.dart';
 
 class WelcomeScreen extends StatefulWidget {
   /// true when opened from Setup (there's something to go back to)
@@ -223,6 +224,11 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
           const SizedBox(height: 24),
           TextButton(onPressed: _done, child: Text('Use without an account (just this phone and your pucks)', style: t.textTheme.bodySmall, textAlign: TextAlign.center)),
         ],
+        TextButton.icon(
+          onPressed: () => Navigator.push(context, MaterialPageRoute<void>(builder: (_) => const GuideScreen())),
+          icon: const Icon(Icons.menu_book_outlined, size: 18),
+          label: const Text('How it works'),
+        ),
       ]);
 
   Widget _form(ThemeData t) {
