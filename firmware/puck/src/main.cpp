@@ -484,18 +484,6 @@ static void goToSleep(const char *why) {
 }
 
 // ---------- WiFi: setup AP, and the dock as a client ----------
-static void enterSetup() {
-  if (wmode == W_DOCK || wmode == W_JOINING) { webStop(); WiFi.disconnect(true); radioOff(); }
-  while (!radioSettled()) delay(10);
-  WiFi.mode(WIFI_AP);
-  char ap[32]; snprintf(ap, sizeof ap, "wakeback-puck-%d", S.puck);
-  WiFi.softAP(ap);
-  WiFi.setSleep(false);
-  dns.start(53, "*", WiFi.softAPIP());
-  webStart();
-  wmode = W_SETUP; wSince = millis(); setupLastSeen = millis(); dockOk = false;
-  Serial.printf("Setup WiFi \"%s\" is on: join it and open http://%s/\n", ap, WiFi.softAPIP().toString().c_str());
-}
 // Switching the radio off and straight back on in another mode (setup AP -> hotspot client, or the other
 // way) crashed the puck: the driver was still stopping ("netstack cb reg failed with 12308"), the new
 // mode came up without its network stack, and the first packet jumped to address 0 (seen 25 Oct, the
@@ -510,6 +498,18 @@ static void radioOff() {
   wifiOffAt = millis();
 }
 static bool radioSettled() { return millis() - wifiOffAt >= WIFI_SETTLE_MS; }
+static void enterSetup() {
+  if (wmode == W_DOCK || wmode == W_JOINING) { webStop(); WiFi.disconnect(true); radioOff(); }
+  while (!radioSettled()) delay(10);
+  WiFi.mode(WIFI_AP);
+  char ap[32]; snprintf(ap, sizeof ap, "wakeback-puck-%d", S.puck);
+  WiFi.softAP(ap);
+  WiFi.setSleep(false);
+  dns.start(53, "*", WiFi.softAPIP());
+  webStart();
+  wmode = W_SETUP; wSince = millis(); setupLastSeen = millis(); dockOk = false;
+  Serial.printf("Setup WiFi \"%s\" is on: join it and open http://%s/\n", ap, WiFi.softAPIP().toString().c_str());
+}
 static void leaveSetup() {
   dns.stop(); webStop(); WiFi.softAPdisconnect(true); radioOff();
   wmode = W_OFF; lastOffPadTry = millis();
