@@ -33,6 +33,8 @@
 #include <esp_ota_ops.h>
 #include <driver/rtc_io.h>
 #include "page.h"
+#include "ble.h"
+#include "track.h"
 
 #ifndef WB_FW_VERSION
 #define WB_FW_VERSION "dev"
@@ -68,7 +70,7 @@ static const uint32_t CHECKIN_MS = 30000;
 static const uint32_t OFFPAD_RETRY_MS = 5UL * 60 * 1000, OFFPAD_TRY_FOR_MS = 25000;   // off the pad with tracks waiting: short tries
 static const uint32_t FW_CHECK_MS = 60UL * 60 * 1000;
 static const uint32_t FLASH_RESERVE = 96 * 1024;             // stop writing when this little is left
-static const int      REC_HZ = 5;                            // points a second while moving (1 while still): plenty for a dinghy, about 4.5 h of sailing in 4.5 MB
+static const int      REC_HZ = 5;                            // points a second while moving (1 while still): plenty for a dinghy; in the compact format about 18 h of sailing fits in 4.5 MB
 
 static const char *TRK_DIR = "/trk";
 static const int DOCK_PORT = 5000;
@@ -196,8 +198,10 @@ uint32_t recStarted = 0, recLines = 0, lastPointMs = 0, lastFlush = 0;
 bool haveRest = false; int32_t restLat = 0, restLon = 0; uint32_t stillSince = 0, movingSince = 0;
 int32_t moveLat = 0, moveLon = 0; uint32_t lastMoveMs = 0;
 // the minute before the boat moved off, so the start isn't lost
-static const size_t PRE_BYTES = 40 * 1024;
-char *pre = nullptr; size_t preHead = 0, preLen = 0;
+// The minute before the boat moved off: a ring of the latest points, encoded into the file when a track starts
+static const int PRE_POINTS = 400;                   // 80 s at 5 Hz
+TrackPoint *pre = nullptr; int preHead = 0, preLen = 0;
+TrackWriter trk;                                     // the open track's encoder
 
 // ---------- small helpers ----------
 static int64_t daysFromCivil(int y, unsigned m, unsigned d) {   // Howard Hinnant's algorithm
@@ -417,23 +421,19 @@ static void learnMounting() {
 }
 
 // ---------- recording ----------
-static void preAdd(const char *line, int n) {       // ring buffer of the latest points
+static void preAdd(const TrackPoint &p) {
   if (!pre) return;
-  for (int i = 0; i < n; i++) { pre[preHead] = line[i]; preHead = (preHead + 1) % PRE_BYTES; if (preLen < PRE_BYTES) preLen++; }
+  pre[preHead] = p; preHead = (preHead + 1) % PRE_POINTS; if (preLen < PRE_POINTS) preLen++;
 }
-static void preDrain(File &f) {                      // write out the ring from the first whole line
-  if (!pre || !preLen) return;
-  size_t start = (preHead + PRE_BYTES - preLen) % PRE_BYTES;
-  if (preLen == PRE_BYTES) {                         // the oldest line is probably cut: skip to the next newline
-    while (preLen && pre[start] != '\n') { start = (start + 1) % PRE_BYTES; preLen--; }
-    if (preLen) { start = (start + 1) % PRE_BYTES; preLen--; }
-  }
-  while (preLen) {
-    const size_t chunk = min(preLen, PRE_BYTES - start);
-    f.write((const uint8_t *)pre + start, chunk);
-    start = (start + chunk) % PRE_BYTES; preLen -= chunk;
+static size_t preDrain(File &f) {                    // encode the ring into the new file, oldest first
+  size_t wrote = 0;
+  if (pre) {
+    int i = (preHead + PRE_POINTS - preLen) % PRE_POINTS;
+    uint8_t b[25];
+    for (int k = 0; k < preLen; k++) { const int n = trk.encode(pre[i], b); f.write(b, n); wrote += n; i = (i + 1) % PRE_POINTS; }
   }
   preLen = 0; preHead = 0;
+  return wrote;
 }
 
 static void startRecording(bool manual) {
@@ -444,13 +444,16 @@ static void startRecording(bool manual) {
   if (t) {
     int y; unsigned mo, d; civilFromDays((int64_t)(t / 1000 / 86400), y, mo, d);
     const uint32_t s = (uint32_t)((t / 1000) % 86400);
-    snprintf(name, sizeof name, "%s/puck%d_%04d%02u%02u_%02lu%02lu%02lu.csv", TRK_DIR, S.puck, y, mo, d,
+    snprintf(name, sizeof name, "%s/puck%d_%04d%02u%02u_%02lu%02lu%02lu.wbt", TRK_DIR, S.puck, y, mo, d,
              (unsigned long)(s / 3600), (unsigned long)(s / 60 % 60), (unsigned long)(s % 60));
-  } else snprintf(name, sizeof name, "%s/puck%d_notime_%lu.csv", TRK_DIR, S.puck, (unsigned long)(millis() / 1000));
+  } else snprintf(name, sizeof name, "%s/puck%d_notime_%lu.wbt", TRK_DIR, S.puck, (unsigned long)(millis() / 1000));
   rec = LittleFS.open(name, FILE_WRITE);
   if (!rec) { Serial.println("Couldn't create the track file."); return; }
-  rec.print("t_ms,lat,lon,sog_kn,hdg,heel,pitch\n");
-  if (!manual) preDrain(rec); else { preLen = 0; preHead = 0; }
+  uint8_t h[8]; wbtHeader(h, S.puck); rec.write(h, 8);
+  trk.reset();
+  size_t preBytes = 0;
+  if (!manual) preBytes = preDrain(rec); else { preLen = 0; preHead = 0; }
+  fsUnmeasured += 8 + preBytes;
   recName = String(name).substring(strlen(TRK_DIR) + 1);
   recording = true; recStarted = millis(); recLines = 0; lastFlush = millis();
   countTracks();
@@ -477,17 +480,16 @@ static void onFix() {
   const uint32_t gap = moving ? 1000 / REC_HZ : 1000;
   if (gps.fix >= 2 && t && (m - lastPointMs >= gap - 5)) {
     lastPointMs = m;
-    char line[112];
-    const int n = snprintf(line, sizeof line, "%llu,%.7f,%.7f,%.2f,%.0f,%.1f,%.1f\n",
-                           (unsigned long long)t, gps.lat / 1e7, gps.lon / 1e7, gps.sogKn, gps.cogDeg, imu.heel, imu.pitch);
+    const TrackPoint pt = {t, gps.lat, gps.lon, gps.sogKn, gps.cogDeg, imu.heel, imu.pitch};
     if (recording) {
-      if (rec.write((const uint8_t *)line, n) != (size_t)n) { Serial.println("!! Flash full, recording stopped."); flashFull = true; stopRecording("flash full"); }
+      uint8_t b[25]; const int n = trk.encode(pt, b);
+      if (rec.write(b, n) != (size_t)n) { Serial.println("!! Flash full, recording stopped."); flashFull = true; stopRecording("flash full"); }
       else {
         recLines++; fsUnmeasured += n;
         // the free-space figure is measured every 10 s by everySecond (walking the flash is slow); between times, estimate from what's been written
         if (m - lastFlush > 5000) { rec.flush(); lastFlush = m; if (fsFree < fsUnmeasured + FLASH_RESERVE) { flashFull = true; stopRecording("flash full"); } }
       }
-    } else preAdd(line, n);
+    } else preAdd(pt);
   }
 
   // movement from rest
@@ -548,6 +550,7 @@ static void goToSleep(const char *why) {
   Serial.printf("Sleeping (%s). Press the button or put it on the pad to wake it.\n", why);
   Serial.flush();
   WiFi.mode(WIFI_OFF);
+  bleStop();
   blinkN(3);
   if (gpsOk) gnss.powerOffWithInterrupt(0, VAL_RXM_PMREQ_WAKEUPSOURCE_UARTRX);
   if (imuOk) { bno.enableReport(SH2_GAME_ROTATION_VECTOR, 0); bno.enableReport(SH2_ROTATION_VECTOR, 0); }
@@ -669,27 +672,37 @@ static bool checkin() {
 }
 
 // multipart POST of one track straight from flash; true when the dock said ok
+static String csvName(const String &name) { return name.endsWith(".wbt") ? name.substring(0, name.length() - 4) + ".csv" : name; }
+
 static bool uploadFile(const String &name) {
+  const bool wbt = name.endsWith(".wbt");
   File f = LittleFS.open(trackPath(name), FILE_READ);
   if (!f) return false;
+  const size_t bodyLen = wbt ? wbtCsvLength(trackPath(name)) : f.size();   // the dock gets CSV either way
+  if (!bodyLen) { f.close(); return false; }
   WiFiClient c; c.setTimeout(10);
   if (!c.connect(WiFi.gatewayIP(), DOCK_PORT)) { f.close(); return false; }
   const char *BOUNDARY = "----WakeBackPuck";
   char puckField[16]; snprintf(puckField, sizeof puckField, "puck%d", S.puck);
   String head = String("--") + BOUNDARY + "\r\nContent-Disposition: form-data; name=\"puck\"\r\n\r\n" + puckField + "\r\n--" + BOUNDARY +
-                "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"" + name + "\"\r\nContent-Type: text/csv\r\n\r\n";
+                "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"" + csvName(name) + "\"\r\nContent-Type: text/csv\r\n\r\n";
   String tail = String("\r\n--") + BOUNDARY + "--\r\n";
-  const size_t len = head.length() + f.size() + tail.length();
+  const size_t len = head.length() + bodyLen + tail.length();
   c.printf("POST /api/upload HTTP/1.1\r\nHost: %s:%d\r\nConnection: close\r\nContent-Type: multipart/form-data; boundary=%s\r\n",
            WiFi.gatewayIP().toString().c_str(), DOCK_PORT, BOUNDARY);
   if (S.key.length()) c.printf("X-Puck-Key: %s\r\n", S.key.c_str());
   c.printf("Content-Length: %u\r\n\r\n", (unsigned)len);
   c.print(head);
-  uint8_t buf[1024]; size_t n;
   // the button and the LED keep working while a big track streams out, so a 2 s hold still sends it to sleep
   // (GPS isn't polled here: the fix handler could open or close a track file while this one is being read)
-  while ((n = f.read(buf, sizeof buf)) > 0) { if (c.write(buf, n) != n) { f.close(); c.stop(); return false; } pollButton(); led(); }
-  f.close();
+  if (wbt) {
+    f.close();
+    if (!wbtStreamCsv(trackPath(name), c, [] { pollButton(); led(); })) { c.stop(); return false; }
+  } else {
+    uint8_t buf[1024]; size_t n;
+    while ((n = f.read(buf, sizeof buf)) > 0) { if (c.write(buf, n) != n) { f.close(); c.stop(); return false; } pollButton(); led(); }
+    f.close();
+  }
   c.print(tail);
   const uint32_t t0 = millis(); String status, body; bool inBody = false;
   while (c.connected() || c.available()) {
@@ -837,7 +850,7 @@ static String statusJson() {
   bool first = true;
   forEachTrack([&](const String &name, size_t size) {
     if (!first) j += ','; first = false;
-    j += "{\"name\":\"" + jsonStr(name) + "\",\"kb\":" + String((unsigned)(size / 1024)) + ",\"open\":" + B(recording && name == recName) + "}";
+    j += "{\"name\":\"" + jsonStr(csvName(name)) + "\",\"kb\":" + String((unsigned)(size / 1024)) + ",\"open\":" + B(recording && name == recName) + "}";
   });
   j += "]}";
   return j;
@@ -852,25 +865,74 @@ static bool captive() {       // phones probing for internet: send them to the p
   return false;
 }
 
+// ---------- shared by the web page and Bluetooth ----------
+static String urlDecode(const String &v) {
+  String out; out.reserve(v.length());
+  for (size_t i = 0; i < v.length(); i++) {
+    const char c = v[i];
+    if (c == '+') out += ' ';
+    else if (c == '%' && i + 2 < v.length()) { out += (char)strtol(v.substring(i + 1, i + 3).c_str(), nullptr, 16); i += 2; }
+    else out += c;
+  }
+  return out;
+}
+static String urlEncode(const String &v) {
+  String out; out.reserve(v.length() * 3);
+  for (size_t i = 0; i < v.length(); i++) {
+    const char c = v[i];
+    if (isalnum((unsigned char)c) || c == '-' || c == '_' || c == '.' || c == '~') out += c;
+    else { char b[4]; snprintf(b, sizeof b, "%%%02X", (unsigned char)c); out += b; }
+  }
+  return out;
+}
+// "puck=3&ssid=James%20Phone&pass=…&key=…&autorec=1": the settings the app or the page sends
+static String applySettings(const String &form) {
+  int start = 0; const int oldPuck = S.puck;
+  while (start <= (int)form.length()) {
+    int amp = form.indexOf('&', start); if (amp < 0) amp = form.length();
+    const String kv = form.substring(start, amp); start = amp + 1;
+    const int eq = kv.indexOf('='); if (eq < 0) continue;
+    const String k = kv.substring(0, eq), v = urlDecode(kv.substring(eq + 1));
+    if (k == "puck") { const int n = v.toInt(); if (n >= 1 && n <= 99) S.puck = n; }
+    else if (k == "ssid") { String t = v; t.trim(); if (t.length() && t.length() < 33) S.ssid = t; }
+    else if (k == "pass") { if (v.length()) S.pass = v.substring(0, 63); }
+    else if (k == "key") S.key = v.substring(0, 64);
+    else if (k == "autorec") S.autoRec = v == "1";
+    else if (k == "autooff") S.autoOff = v == "1";
+  }
+  S.configured = true;                        // someone has been here: no more setup WiFi at power-up
+  saveSettings();
+  if (S.puck != oldPuck && bleServer) bleSetName(S.puck);
+  dockRefused = false; lastOffPadTry = 0;     // new WiFi or key: have another go at the dock straight away
+  return "Saved.";
+}
+// told which way up it is: the learner still corrects it later if gravity says otherwise for half a minute
+static bool setOrientation(int o) {
+  if (o != 1 && o != 2) return false;
+  S.orientation = o; saveSettings(); return true;
+}
+// the app is here and listening: go and find the hotspot now, whatever the retry timers say
+static void wantDockNow() { if (wmode == W_SETUP) leaveSetup(); lastOffPadTry = 0; wantLiftCheckin = true; dockRefused = false; lastActive = millis(); }
+// firmware over Bluetooth, in pieces
+static bool otaBegin(size_t bytes) { if (recording) stopRecording("firmware update"); uploading = true; led(); return Update.begin(bytes); }
+static bool otaWrite(const uint8_t *data, size_t len) { return Update.write((uint8_t *)data, len) == len; }
+static bool otaEnd() { uploading = false; return Update.end(true); }
+static void bleNote(const char *what) { Serial.printf("BLE: %s\n", what); }
+
 static void startWeb() {
   web.on("/", HTTP_GET, [] { if (captive()) return; web.send_P(200, "text/html", PAGE_HTML); });
   web.on("/api/status", HTTP_GET, [] { setupLastSeen = millis(); lastActive = millis(); sendJson(statusJson()); });
   web.on("/api/settings", HTTP_POST, [] {
-    if (web.hasArg("puck")) { const int n = web.arg("puck").toInt(); if (n >= 1 && n <= 99) S.puck = n; }
-    if (web.hasArg("ssid")) { String s = web.arg("ssid"); s.trim(); if (s.length() && s.length() < 33) S.ssid = s; }
-    if (web.hasArg("pass") && web.arg("pass").length()) S.pass = web.arg("pass").substring(0, 63);
-    if (web.hasArg("key")) S.key = web.arg("key").substring(0, 64);
-    if (web.hasArg("autorec")) S.autoRec = web.arg("autorec") == "1";
-    if (web.hasArg("autooff")) S.autoOff = web.arg("autooff") == "1";
-    S.configured = true;                        // someone has been here: no more setup WiFi at power-up
-    saveSettings(); okMsg("Saved.");
+    String form;
+    for (int i = 0; i < web.args(); i++) { if (i) form += '&'; form += web.argName(i) + "=" + urlEncode(web.arg(i)); }
+    okMsg(applySettings(form).c_str());
   });
   web.on("/api/cal/level", HTTP_POST, [] { calLevel(); okMsg("Level set: heel and pitch read 0 here."); });
   web.on("/api/cal/flip", HTTP_POST, [] { calFlipHeel(); okMsg(S.flipHeel ? "Heel sign flipped." : "Heel sign back to normal."); });
   web.on("/api/cal/orient", HTTP_POST, [] {
-    // told which way up it is: the learner still corrects it later if gravity says otherwise for half a minute
-    const int o = web.arg("o").toInt(); if (o != 1 && o != 2) { web.send(400, "text/plain", "o must be 1 (deck) or 2 (thwart)"); return; }
-    S.orientation = o; saveSettings(); okMsg(o == 1 ? "Mounted on deck." : "Mounted under the thwart.");
+    const int o = web.arg("o").toInt();
+    if (!setOrientation(o)) { web.send(400, "text/plain", "o must be 1 (deck) or 2 (thwart)"); return; }
+    okMsg(o == 1 ? "Mounted on deck." : "Mounted under the thwart.");
   });
   web.on("/api/cal/twist", HTTP_POST, [] { S.twist = wrap180(web.arg("deg").toFloat()); S.twistLearned = true; saveSettings(); okMsg("Twist set."); });
   web.on("/api/cal/reset", HTTP_POST, [] { S.zeroHeel = S.zeroPitch = S.twist = 0; S.twistLearned = false; S.flipHeel = false; S.orientation = 0; saveSettings(); okMsg("Calibration cleared."); });
@@ -880,6 +942,7 @@ static void startWeb() {
   });
   web.on("/api/tracks/delete", HTTP_POST, [] {
     String n = web.arg("name"); if (n.indexOf('/') >= 0 || n.indexOf("..") >= 0 || !n.length()) { web.send(400, "text/plain", "bad name"); return; }
+    if (n.endsWith(".csv") && !LittleFS.exists(trackPath(n))) n = n.substring(0, n.length() - 4) + ".wbt";
     if (recording && n == recName) stopRecording("deleted from the page");
     LittleFS.remove(trackPath(n)); countTracks(); measureFs(); flashFull = fsFree < FLASH_RESERVE; okMsg("Deleted.");
   });
@@ -912,9 +975,17 @@ static void startWeb() {
     const String u = web.uri();
     if (u.startsWith("/tracks/")) {
       String n = u.substring(8); if (n.indexOf("..") >= 0) { web.send(400, "text/plain", "bad name"); return; }
+      if (n.endsWith(".csv") && !LittleFS.exists(trackPath(n))) n = n.substring(0, n.length() - 4) + ".wbt";   // the page shows .csv names
       File f = LittleFS.open(trackPath(n), FILE_READ);
       if (!f) { web.send(404, "text/plain", "no such track"); return; }
-      web.sendHeader("Content-Disposition", "attachment; filename=\"" + n + "\"");
+      web.sendHeader("Content-Disposition", "attachment; filename=\"" + csvName(n) + "\"");
+      if (n.endsWith(".wbt")) {
+        const size_t len = wbtCsvLength(trackPath(n)); f.close();
+        web.setContentLength(len); web.send(200, "text/csv", "");
+        WiFiClient cl = web.client();
+        wbtStreamCsv(trackPath(n), cl, [] {});
+        return;
+      }
       web.streamFile(f, "text/csv"); f.close(); return;
     }
     web.send(404, "text/plain", "not found");
@@ -984,6 +1055,7 @@ static void everySecond() {
   learnMounting();
   static int tick = 0; if (++tick % 10 == 0) { measureFs(); countTracks(); }
   if (flashFull && fsFree > FLASH_RESERVE * 2) flashFull = false;
+  if (bleConnected) lastActive = millis();      // the app is talking to us: not idle
   if (S.autoOff && !onPad && !recording && wmode != W_SETUP && millis() - lastActive > AUTO_OFF_MS) goToSleep("still for 30 minutes");
   // new firmware that has run a couple of minutes with the sensors alive counts as good even with no dock about
   if (appPendingVerify && millis() > 120000 && (gpsOk || imuOk)) { esp_ota_mark_app_valid_cancel_rollback(); appPendingVerify = false; }
@@ -1035,7 +1107,7 @@ static void command(String c) {
     case 'l': forEachTrack([](const String &n, size_t size) { Serial.printf("  %s  %u KB\n", n.c_str(), (unsigned)(size / 1024)); }); if (!nTracks) Serial.println("  no tracks"); break;
     case 'e': Serial.println("To erase every track type the whole word: erase"); break;
     case 'w': wmode == W_SETUP ? leaveSetup() : enterSetup(); break;
-    case 'u': if (wmode == W_SETUP) leaveSetup(); lastOffPadTry = 0; wantLiftCheckin = true;
+    case 'u': wantDockNow();
               Serial.println(recording ? "Recording: the puck won't talk to the dock until that stops (r, or the button)." : "Looking for the dock…"); break;
     case 'x': goToSleep("x typed"); break;
     default: Serial.println("Unknown command. Type h.");
@@ -1062,7 +1134,7 @@ void setup() {
   while (!woken && !Serial && millis() - t < 2500) delay(10);
 
   loadSettings();
-  pre = (char *)malloc(PRE_BYTES);
+  pre = (TrackPoint *)malloc(sizeof(TrackPoint) * PRE_POINTS);
   Serial.printf("\nWakeBack puck %d, firmware %s%s\n", S.puck, FW, woken ? " (woken)" : "");
   fsOk = LittleFS.begin(true);
   if (fsOk && !LittleFS.exists(TRK_DIR)) LittleFS.mkdir(TRK_DIR);
@@ -1078,6 +1150,7 @@ void setup() {
 
   WiFi.persistent(false);
   startWeb();                                   // routes only; the server itself starts with the WiFi
+  bleStart(S.puck);                             // Bluetooth is how the app talks to the puck; WiFi only carries the tracks
   leds(false);
   lastActive = millis();
   battMv = readMilliVolts(PIN_BATT); onPad = readMilliVolts(PIN_PAD) > 4000;

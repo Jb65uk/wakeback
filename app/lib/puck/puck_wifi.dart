@@ -69,18 +69,24 @@ class PuckException implements Exception {
   String toString() => message;
 }
 
-/// What a puck says about itself on /api/status (the bits the app shows; shape from firmware/puck statusJson()).
+/// What a puck says about itself on /api/status, or to "status" over Bluetooth (the bits the app shows;
+/// shape from firmware/puck statusJson()).
 class PuckStatus {
   final int puck;
-  final String fw;
+  final String fw, ssid;
   final int batteryPct, tracks;
-  final bool autoRec;
+  final bool autoRec, onPad, charging, batteryFull, recording;
   final Map<String, dynamic> raw;
 
-  PuckStatus._(this.raw)
+  PuckStatus.fromMap(this.raw)
       : puck = _i(raw['puck']) ?? 0,
         fw = '${raw['fw'] ?? ''}',
+        ssid = '${_m(raw['wifi'])['ssid'] ?? ''}',
         batteryPct = _i(_m(raw['batt'])['pct']) ?? -1,
+        onPad = _m(raw['batt'])['on_pad'] == true,
+        charging = _m(raw['batt'])['charging'] == 'charging',
+        batteryFull = _m(raw['batt'])['charging'] == 'full',
+        recording = _m(raw['rec'])['on'] == true,
         autoRec = raw['autorec'] != false,
         tracks = raw['tracks'] is List ? (raw['tracks'] as List).length : 0;
 
@@ -107,7 +113,7 @@ class PuckApi {
     }
     if (r.statusCode != 200) throw PuckException('The puck answered HTTP ${r.statusCode}');
     try {
-      return PuckStatus._((jsonDecode(utf8.decode(r.bodyBytes)) as Map).cast<String, dynamic>());
+      return PuckStatus.fromMap((jsonDecode(utf8.decode(r.bodyBytes)) as Map).cast<String, dynamic>());
     } catch (_) {
       throw const PuckException('That isn\'t a WakeBack puck (unexpected reply).');
     }

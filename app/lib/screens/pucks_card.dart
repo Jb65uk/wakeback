@@ -5,6 +5,7 @@ import '../app_state.dart';
 import '../auth/auth_api.dart';
 import '../widgets/common.dart';
 import '../widgets/format.dart';
+import '../widgets/puck_picker.dart';
 import 'puck_screen.dart';
 import 'puck_setup_screen.dart';
 import 'web_page.dart';
@@ -56,6 +57,11 @@ class PucksCard extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(14, 4, 14, 12),
           child: Wrap(spacing: 8, runSpacing: 4, children: [
             FilledButton.icon(onPressed: () => _setUp(context, null), icon: const Icon(Icons.add, size: 18), label: Text(pucks.isEmpty ? 'Set up a puck' : 'Set up another')),
+            OutlinedButton.icon(
+              onPressed: () => _findNearby(context),
+              icon: const Icon(Icons.bluetooth_searching, size: 18),
+              label: const Text('Find pucks nearby'),
+            ),
             if (pucks.isNotEmpty)
               OutlinedButton.icon(
                 onPressed: () => Navigator.push(context, MaterialPageRoute<void>(builder: (_) => ServerViewerPage(url: '${app.dock.localUrl}/dock', title: 'Pucks'))),
@@ -70,6 +76,15 @@ class PucksCard extends StatelessWidget {
 
   Future<void> _setUp(BuildContext context, int? puck) async {
     await Navigator.push<bool>(context, MaterialPageRoute(builder: (_) => PuckSetupScreen(puck: puck)));
+  }
+
+  /// Listen over Bluetooth for pucks that are awake nearby; one that isn't in the list yet can be set up
+  /// from here, with its number filled in.
+  Future<void> _findNearby(BuildContext context) async {
+    final have = app.myPucks.map((p) => p.puck).toSet();
+    final seen = await pickPuckNearby(context, exclude: have, title: 'Pucks nearby (tap one to set it up)');
+    if (seen == null || !context.mounted) return;
+    await Navigator.push<bool>(context, MaterialPageRoute(builder: (_) => PuckSetupScreen(nearby: seen)));
   }
 
   /// Forget it here and, if it had one, revoke its key on the server so it can't upload as you any more.

@@ -68,7 +68,7 @@ details summary{cursor:pointer;color:var(--mute);font-size:15px;text-transform:u
 
 <div class="card"><h2>Tracks on the puck</h2>
 <div id="tracks" class="msg">–</div>
-<p class="msg">They upload to the dock or your phone's WakeBack app by themselves and are deleted from the puck once the dock has them. Download here if you want one now. About 4.5 hours of sailing fits.</p>
+<p class="msg">They upload to the dock or your phone's WakeBack app by themselves and are deleted from the puck once the dock has them. Download here if you want one now. About 18 hours of sailing fits.</p>
 </div>
 
 <div class="card"><h2>Firmware</h2>
