@@ -18,14 +18,12 @@ wakeback/
 ├── tools/gen_fake_data.py    makes demo sessions in the exact puck CSV format (data/sessions is generated, not in git)
 ├── tools/fake_puck_upload.py pretends to be a puck landing on the dock (the other tools share its upload())
 ├── tools/fake_pucks.py       a dock full of pretend pucks checking in (for the Dock page)
-├── tools/pull_track.py       copies a recorded track off the puck over USB
 ├── tools/test_server.py      end-to-end checks of the server on a throwaway copy
 ├── tools/test_race_suggest.mjs  checks the viewer's race suggestions against made-up fleets
 ├── data/sessions/<date>_<venue>/  one folder per session (sailing date + venue), one file per boat
 ├── BUILD.md              build one puck on a breadboard: shopping list, wiring in stages, first track
 ├── hardware/carrier/     60 mm carrier PCB: Gerbers for JLCPCB, previews, assembly notes, generator
 ├── hardware/case/        3D-printed puck case: base, screw lid (O-ring), GPS shelf, deck cradle. STLs + generator
-├── firmware/bench_test/  PlatformIO bench test: checks GPS, IMU, battery, Qi, records a test track
 └── firmware/puck/        the puck firmware: setup WiFi page, auto-record, upload, sleep
 ```
 

@@ -1,6 +1,6 @@
 // WakeBack puck firmware
 // ----------------------
-// The puck records a sail by itself (10 Hz GPS, heel and pitch from the IMU) into flash, then hands the tracks
+// The puck records a sail by itself (GPS at 5 Hz while moving, heel and pitch from the IMU) into flash, then hands the tracks
 // to a dock: the club's dock Pi or the WakeBack app on a phone, over WiFi, exactly as docs/PHONE_DOCK.md says.
 // It also puts up its own WiFi with a setup page (http://192.168.4.1/) for calibration, settings, tracks and
 // firmware updates.
@@ -14,16 +14,9 @@
 //   Push button     D2 (GPIO3) -> switch -> GND
 //   Ring LED        D9 (GPIO8) -> 100R -> ring LED+ ; ring LED- -> GND   (only if the button has one)
 //
-// The button:  tap = start/stop recording by hand.
-//              hold 2 s = three blinks, let go -> the puck sleeps.
-//              keep holding to 6 s = five quick blinks -> setup WiFi "wakeback-puck-N" for 10 minutes.
-//              press when asleep = wakes (a knock shorter than 0.3 s doesn't). Putting it on the pad wakes it too.
+// The button and the LED patterns are in README.md (the one place they're written down).
 //
-// Status LED (ring LED copies it; on the pad the ring breathes while charging, solid when full):
-//   slow blink = no GPS fix     1 blink/s = fix, waiting     double blink = recording
-//   fast blink = setup mode     steady on = talking to the dock    5 quick + pause = flash full
-//
-// Serial monitor at 115200: type h for the few commands that are handy on the bench.
+// Serial monitor at 115200: type h for the few commands that are handy on the bench (q pauses the status line).
 
 #include <Arduino.h>
 #include <Wire.h>
@@ -45,6 +38,11 @@
 #define WB_FW_VERSION "dev"
 #endif
 static const char *FW = WB_FW_VERSION;
+
+// Arduino-ESP32 confirms a freshly flashed image as good before setup() runs unless this says otherwise. We want
+// the probation to really happen (a build that boots but can't talk to the dock should roll back), so hold it off:
+// the image is confirmed in wifiTick after a good check-in, or in everySecond after two minutes with the sensors alive.
+extern "C" bool verifyRollbackLater() { return true; }
 
 // ---------- pins ----------
 static const int PIN_GPS_RX = 44, PIN_GPS_TX = 43;
@@ -70,6 +68,7 @@ static const uint32_t CHECKIN_MS = 30000;
 static const uint32_t OFFPAD_RETRY_MS = 5UL * 60 * 1000, OFFPAD_TRY_FOR_MS = 25000;   // off the pad with tracks waiting: short tries
 static const uint32_t FW_CHECK_MS = 60UL * 60 * 1000;
 static const uint32_t FLASH_RESERVE = 96 * 1024;             // stop writing when this little is left
+static const int      REC_HZ = 5;                            // points a second while moving (1 while still): plenty for a dinghy, about 4.5 h of sailing in 4.5 MB
 
 static const char *TRK_DIR = "/trk";
 static const int DOCK_PORT = 5000;
@@ -89,7 +88,7 @@ struct {
   int32_t lat = 0, lon = 0;          // degrees * 1e7
   float sogKn = 0, cogDeg = 0, hAccM = 0;
   uint64_t tMs = 0;                  // UTC epoch ms from the GPS, 0 until it has date and time
-  uint32_t pvtThisSecond = 0, lastPvtMs = 0;
+  uint32_t pvtThisSecond = 0;
   float rateHz = 0;
   bool fresh = false;                // a new fix arrived since last looked
 } gps;
@@ -107,26 +106,38 @@ struct Settings {
   int puck = 1;
   String ssid = "wakeback", pass = "", key = "";
   float zeroHeel = 0, zeroPitch = 0, twist = 0;
-  bool autoTwist = true, twistLearned = false, flipHeel = false, flipPitch = false;
+  bool twistLearned = false, flipHeel = false;
   int orientation = 0;               // 0 unknown, 1 deck (IMU up), 2 under the thwart (IMU down)
   bool autoRec = true, autoOff = true;
-  int rate = 5;                      // points a second while moving: 5 is plenty for a dinghy and gives ~9 h of storage
+  bool configured = false;           // someone has set it up (page or app): only then does the setup WiFi stay down at power-up
 } S;
+
+static const int NVS_SCHEMA = 1;     // bump when the meaning of a stored key changes
 
 static void loadSettings() {
   prefs.begin("puck", false);
+  // The bench firmware used the same NVS namespace with its own calibration keys (and an older puck firmware
+  // kept a few more). The first boot of this firmware clears just those, so a stale zero or flip from the
+  // breadboard days can't skew the heel. The WiFi settings and the puck number are kept.
+  if (!prefs.isKey("wbv")) {
+    static const char *const old[] = {"zh", "zp", "zr", "flip", "flipp", "twist", "twl", "orient", "swap", "atw"};
+    for (const char *k : old) if (prefs.isKey(k)) prefs.remove(k);
+    prefs.putInt("wbv", NVS_SCHEMA);
+  }
+  // "configured" used to be guessed from the ssid key being there; a puck set up before this flag existed stays set up
+  if (!prefs.isKey("cfg") && prefs.isKey("ssid")) prefs.putBool("cfg", true);
+  S.configured = prefs.getBool("cfg", false);
   S.puck = prefs.getInt("puck", 1);
   S.ssid = prefs.getString("ssid", "wakeback");
   S.pass = prefs.getString("pass", "");
   S.key = prefs.getString("key", "");
   S.zeroHeel = prefs.getFloat("zh", 0); S.zeroPitch = prefs.getFloat("zp", 0);
   S.twist = prefs.getFloat("twist", 0);
-  S.autoTwist = prefs.getBool("atw", true); S.twistLearned = prefs.getBool("twl", false);
-  S.flipHeel = prefs.getBool("flip", false); S.flipPitch = prefs.getBool("flipp", false);
+  S.twistLearned = prefs.getBool("twl", false);
+  S.flipHeel = prefs.getBool("flip", false);
   S.orientation = prefs.getInt("orient", 0);
   S.autoRec = prefs.getBool("arec", true); S.autoOff = prefs.getBool("auto", true);
-  S.rate = prefs.getInt("rate", 5);
-  if (S.rate != 10 && S.rate != 5 && S.rate != 2) S.rate = 5;
+  if (prefs.isKey("rate")) prefs.remove("rate");       // the rate setting is gone: 5 Hz moving, 1 Hz still, always
 }
 
 static void saveSettings() {
@@ -134,11 +145,11 @@ static void saveSettings() {
   prefs.putString("ssid", S.ssid); prefs.putString("pass", S.pass); prefs.putString("key", S.key);
   prefs.putFloat("zh", S.zeroHeel); prefs.putFloat("zp", S.zeroPitch);
   prefs.putFloat("twist", S.twist);
-  prefs.putBool("atw", S.autoTwist); prefs.putBool("twl", S.twistLearned);
-  prefs.putBool("flip", S.flipHeel); prefs.putBool("flipp", S.flipPitch);
+  prefs.putBool("twl", S.twistLearned);
+  prefs.putBool("flip", S.flipHeel);
   prefs.putInt("orient", S.orientation);
   prefs.putBool("arec", S.autoRec); prefs.putBool("auto", S.autoOff);
-  prefs.putInt("rate", S.rate);
+  if (S.configured) prefs.putBool("cfg", true);
 }
 
 // ---------- state ----------
@@ -152,9 +163,19 @@ WifiMode wmode = W_OFF;
 uint32_t wSince = 0, lastCheckin = 0, lastHello = 0, lastFwCheck = 0, lastOffPadTry = 0, setupLastSeen = 0, sailEnded = 0;
 bool dockOk = false, wantLiftCheckin = false, uploading = false, webOn = false;
 bool usbPlugged = false, usbSetupDone = false;   // on a USB lead the setup WiFi comes up by itself
-bool padSetup = false;                           // on the pad with no dock about: setup WiFi up, with a look for the dock every couple of minutes
-static void webStart(); static void webStop();
+bool dockRefused = false;                        // the dock answered 401/403: the key is wrong, retrying is pointless until it's set up again
+uint32_t lastJoinOk = 0;                         // when a join + hello last worked, so a pad retry can be keen only while the dock is really about
+static void webStart(); static void webStop(); static void pollButton();
 bool appPendingVerify = false;
+
+// how often to try the dock, by situation
+static const uint32_t PAD_RETRY_MS = 30000;              // on the pad, dock seen recently: half a minute
+static const uint32_t PAD_RETRY_SLOW_MS = 2UL * 60 * 1000;   // on the pad, dock not seen for a while: two minutes
+static const uint32_t PAD_RECENT_MS = 10UL * 60 * 1000;  // "seen recently" = a join worked in the last ten minutes
+static const uint32_t AFTER_SAIL_RETRY_MS = 60000, AFTER_SAIL_FOR_MS = 15UL * 60 * 1000;   // tracks waiting: every minute for 15 min after a sail, then OFFPAD_RETRY_MS
+static const uint32_t JOIN_TIMEOUT_MS = 15000;           // give the hotspot this long to let us on
+static const uint32_t HELLO_EVERY_MS = 5000, PAD_HELLO_FOR_MS = 30000;   // once joined, ask for the dock every 5 s, for this long on the pad (OFFPAD_TRY_FOR_MS off it)
+static const uint32_t REFUSED_PAD_MS = 2UL * 60 * 1000, REFUSED_OFFPAD_MS = 10UL * 60 * 1000;   // after a 401/403, leave it alone this long
 
 // the clock: epoch ms = millis() + clockOffset. GPS beats the dock.
 int64_t clockOffset = 0; bool clockFromGps = false, clockSet = false;
@@ -165,11 +186,11 @@ static void setClock(uint64_t epochMs, bool fromGps) {
 }
 
 // recording
-bool recording = false, manualRec = false;
+bool recording = false;
 File rec; String recName;
 uint32_t recStarted = 0, recLines = 0, lastPointMs = 0, lastFlush = 0;
 // where the boat was last at rest, to spot it moving off; and where it last was, to spot it stopping
-bool haveRest = false; int32_t restLat = 0, restLon = 0; uint32_t stillSince = 0;
+bool haveRest = false; int32_t restLat = 0, restLon = 0; uint32_t stillSince = 0, movingSince = 0;
 int32_t moveLat = 0, moveLon = 0; uint32_t lastMoveMs = 0;
 // the minute before the boat moved off, so the start isn't lost
 static const size_t PRE_BYTES = 40 * 1024;
@@ -219,18 +240,28 @@ static String jsonStr(const String &s) {     // escape for a JSON string
   return o;
 }
 // LittleFS has to walk the whole partition to count what's used (slow), so the figure is refreshed every 10 s, not on every ask
-static size_t fsFree = 0, fsTotal = 0;
-static void measureFs() { if (fsOk) { fsTotal = LittleFS.totalBytes(); fsFree = fsTotal - LittleFS.usedBytes(); } }
-static size_t freeBytes() { return fsFree; }
+static size_t fsFree = 0, fsTotal = 0, fsUnmeasured = 0;   // fsUnmeasured: track bytes written since the last measure
+static void measureFs() { if (fsOk) { fsTotal = LittleFS.totalBytes(); fsFree = fsTotal - LittleFS.usedBytes(); fsUnmeasured = 0; } }
 static String baseName(File &f) { String n = f.name(); if (n.startsWith("/")) n = n.substring(n.lastIndexOf('/') + 1); return n; }
-static int nTracks = 0;                      // counted once a second and after changes, not every loop
-static int countTracks() {
-  int n = 0; File d = LittleFS.open(TRK_DIR);
-  if (d) for (File f = d.openNextFile(); f; f = d.openNextFile()) if (!f.isDirectory()) n++;
-  nTracks = n; return n;
+static String trackPath(const String &name) { return String(TRK_DIR) + "/" + name; }
+// every track file in turn (not folders), by bare name and size; the callback mustn't delete while we walk the folder
+template <typename F> static void forEachTrack(F fn) {
+  File d = LittleFS.open(TRK_DIR);
+  if (!d) return;
+  for (File f = d.openNextFile(); f; f = d.openNextFile()) if (!f.isDirectory()) fn(baseName(f), (size_t)f.size());
+  d.close();
 }
-static int trackCount() { return nTracks; }
+static int nTracks = 0;                      // counted once a second and after changes, not every loop
+static int countTracks() { int n = 0; forEachTrack([&](const String &, size_t) { n++; }); nTracks = n; return n; }
 static int pendingCount() { return nTracks - (recording ? 1 : 0); }
+// the names, one per line, so a caller can delete as it goes (deleting while walking the folder isn't safe)
+static String trackNames() { String names; forEachTrack([&](const String &n, size_t) { names += n + "\n"; }); return names; }
+
+// words for the status line, the check-in and the page, so they can't drift apart
+static const char *B(bool b) { return b ? "true" : "false"; }
+static const char *orientName() { return S.orientation == 1 ? "deck" : S.orientation == 2 ? "thwart" : "unknown"; }
+static const char *chargeName() { return !onPad ? "not" : battFull ? "full" : "charging"; }
+static const char *wifiName() { return wmode == W_SETUP ? "setup" : wmode == W_DOCK ? "dock" : wmode == W_JOINING ? "joining" : "off"; }
 
 // ---------- GPS ----------
 static bool startGps() {
@@ -264,14 +295,14 @@ static void pollGps() {
     gps.tMs = (uint64_t)((days * 86400 + gnss.getHour() * 3600 + gnss.getMinute() * 60 + gnss.getSecond()) * 1000LL + gnss.getMillisecond());
     setClock(gps.tMs, true);
   }
-  gps.pvtThisSecond++; gps.lastPvtMs = millis(); gps.fresh = true;
-  if (gps.sogKn > STILL_KN) lastActive = millis();
+  gps.pvtThisSecond++; gps.fresh = true;
+  // the auto-off clock is kept going by onFix, once the speed has held: one jittery reading indoors must not keep the puck awake
 }
 
 // ---------- IMU ----------
 static bool enableImuReports() {
   bool ok = bno.enableReport(SH2_GAME_ROTATION_VECTOR, 20000);        // 50 Hz, gyro + accel: heel and pitch
-  if (S.autoTwist) bno.enableReport(SH2_ROTATION_VECTOR, 100000);     // 10 Hz, with the magnetometer: heading, for the twist
+  bno.enableReport(SH2_ROTATION_VECTOR, 100000);                      // 10 Hz, with the magnetometer: heading, so the twist can be learnt
   return ok;
 }
 static bool startImu() {
@@ -298,7 +329,6 @@ static void boatAngles() {
   float heel = atan2f(-upStb, upZ) * RAD_TO_DEG;        // + = heeled to starboard
   float pitch = atan2f(-upBow, upZ) * RAD_TO_DEG;       // + = bow up
   if (S.flipHeel) heel = -heel;
-  if (S.flipPitch) pitch = -pitch;
   imu.heel = wrap180(heel - S.zeroHeel);
   imu.pitch = wrap180(pitch - S.zeroPitch);
 }
@@ -326,6 +356,14 @@ static void pollImu() {
   boatAngles();
 }
 
+// the page and the serial monitor both calibrate, through these
+static void calLevel() {          // the current heel and pitch (before zeroing) become the new zero
+  S.zeroHeel = wrap180(S.zeroHeel + imu.heel); S.zeroPitch = wrap180(S.zeroPitch + imu.pitch); saveSettings();
+}
+static void calFlipHeel() {       // starboard reads as port: flip the sign (and the zero with it)
+  S.flipHeel = !S.flipHeel; S.zeroHeel = -S.zeroHeel; saveSettings();
+}
+
 // which way up (at rest) and the mounting twist (while sailing straight): learnt in the background, once a second
 static void learnMounting() {
   const bool still = gps.fix >= 2 ? gps.sogKn < STILL_KN : true;
@@ -343,7 +381,7 @@ static void learnMounting() {
   // only a boat really under way counts: 2 kn or more for 15 s running, with a clean fix (GPS jitter on the bench can spike to 4 kn)
   const bool underWay = gps.fix >= 3 && gps.sogKn > 2.0f && gps.hAccM < 3;
   goingFor = underWay ? goingFor + 1 : 0;
-  if (S.autoTwist && !isnan(imu.headingX) && imu.magStatus >= 2 && goingFor >= 15) {
+  if (!isnan(imu.headingX) && imu.magStatus >= 2 && goingFor >= 15) {
     const float turn = fabsf(wrap180(gps.cogDeg - lastCog));
     if (turn < 3) {                                           // sailing straight: the puck's X is twist degrees clockwise of the course
       const float err = wrap180((imu.headingX - gps.cogDeg) - S.twist);
@@ -379,7 +417,7 @@ static void preDrain(File &f) {                      // write out the ring from 
 
 static void startRecording(bool manual) {
   if (!fsOk || recording) return;
-  if (freeBytes() < FLASH_RESERVE) { flashFull = true; return; }
+  if (fsFree < FLASH_RESERVE) { flashFull = true; return; }
   const uint64_t t = nowMs() ? nowMs() : gps.tMs;
   char name[48];
   if (t) {
@@ -393,7 +431,7 @@ static void startRecording(bool manual) {
   rec.print("t_ms,lat,lon,sog_kn,hdg,heel,pitch\n");
   if (!manual) preDrain(rec); else { preLen = 0; preHead = 0; }
   recName = String(name).substring(strlen(TRK_DIR) + 1);
-  recording = true; manualRec = manual; recStarted = millis(); recLines = 0; lastFlush = millis();
+  recording = true; recStarted = millis(); recLines = 0; lastFlush = millis();
   countTracks();
   moveLat = gps.lat; moveLon = gps.lon; lastMoveMs = millis();
   Serial.printf("Recording %s (%s).\n", recName.c_str(), manual ? "button" : "the boat moved off");
@@ -401,10 +439,10 @@ static void startRecording(bool manual) {
 
 static void stopRecording(const char *why) {
   if (!recording) return;
-  rec.close(); recording = false; manualRec = false;
+  rec.close(); recording = false;
   Serial.printf("Stopped (%s): %lu points in %s.\n", why, (unsigned long)recLines, recName.c_str());
   // a track with nothing in it is no use to anyone
-  if (recLines < 10) { LittleFS.remove(String(TRK_DIR) + "/" + recName); Serial.println("Too short, binned."); }
+  if (recLines < 10) { LittleFS.remove(trackPath(recName)); Serial.println("Too short, binned."); }
   countTracks();
   haveRest = false; stillSince = 0;
   sailEnded = millis(); lastOffPadTry = 0;      // go looking for the phone straight away, and keenly for a while
@@ -415,7 +453,7 @@ static void onFix() {
   const uint32_t m = millis();
   const uint64_t t = clockSet ? nowMs() : gps.tMs;
   const bool moving = gps.sogKn > STILL_KN;
-  const uint32_t gap = moving ? 1000 / S.rate : 1000;
+  const uint32_t gap = moving ? 1000 / REC_HZ : 1000;
   if (gps.fix >= 2 && t && (m - lastPointMs >= gap - 5)) {
     lastPointMs = m;
     char line[112];
@@ -424,27 +462,30 @@ static void onFix() {
     if (recording) {
       if (rec.write((const uint8_t *)line, n) != (size_t)n) { Serial.println("!! Flash full, recording stopped."); flashFull = true; stopRecording("flash full"); }
       else {
-        recLines++;
-        if (m - lastFlush > 5000) { rec.flush(); lastFlush = m; measureFs(); if (freeBytes() < FLASH_RESERVE) { flashFull = true; stopRecording("flash full"); } }
+        recLines++; fsUnmeasured += n;
+        // the free-space figure is measured every 10 s by everySecond (walking the flash is slow); between times, estimate from what's been written
+        if (m - lastFlush > 5000) { rec.flush(); lastFlush = m; if (fsFree < fsUnmeasured + FLASH_RESERVE) { flashFull = true; stopRecording("flash full"); } }
       }
     } else preAdd(line, n);
   }
 
   // movement from rest
   if (gps.fix < 3 || gps.hAccM > 15) return;
+  if (!moving) { if (!stillSince) stillSince = m; movingSince = 0; }
+  else { stillSince = 0; if (!movingSince) movingSince = m; }
+  // a speed that's held, not one jittery reading (on the bench 25 Oct it started recording on 0.5-2 kn of indoor
+  // GPS noise and then wouldn't talk to the dock). The same rule keeps the auto-off clock honest.
+  const bool underWay = movingSince && m - movingSince > START_MOVING_MS;
+  if (underWay) lastActive = m;
   if (!recording) {
-    static uint32_t movingSince = 0;
-    if (!moving) { if (!stillSince) stillSince = m; movingSince = 0; }
-    else { stillSince = 0; if (!movingSince) movingSince = m; }
     if (stillSince && m - stillSince > STILL_FOR_MS) { haveRest = true; restLat = gps.lat; restLon = gps.lon; }
-    // start: far enough from rest to beat the fix accuracy, and a speed that's held, not one jittery reading
-    // (on the bench 25 Oct it started on 0.5-2 kn of indoor GPS noise and then wouldn't talk to the dock)
+    // start: far enough from rest to beat the fix accuracy, and under way
     const bool farEnough = distM(restLat, restLon, gps.lat, gps.lon) > fmaxf(START_M, 4 * gps.hAccM);
-    const bool underWay = movingSince && m - movingSince > START_MOVING_MS;
     if (S.autoRec && !onPad && !flashFull && haveRest && farEnough && underWay) startRecording(false);
   } else {
     if (distM(moveLat, moveLon, gps.lat, gps.lon) > MOVE_M) { moveLat = gps.lat; moveLon = gps.lon; lastMoveMs = m; }
-    if (!manualRec && m - lastMoveMs > STOP_AFTER_MS) stopRecording("still for 10 minutes");
+    // a track started by the button ends the same way as an automatic one: ten minutes without going anywhere
+    if (m - lastMoveMs > STOP_AFTER_MS) stopRecording("still for 10 minutes");
   }
 }
 
@@ -473,8 +514,10 @@ static void armWakeAndSleep() {
   rtc_gpio_pulldown_dis((gpio_num_t)PIN_BTN);
   esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
   esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_BTN, 0);                        // the button
+  // ...or being put on the pad. Not armed while the pad's 5 V is already there: "any high" would wake it at
+  // once, so a puck sent to sleep on the pad stays asleep until the button is pressed.
   rtc_gpio_pulldown_en((gpio_num_t)PIN_PAD);
-  esp_sleep_enable_ext1_wakeup(1ULL << PIN_PAD, ESP_EXT1_WAKEUP_ANY_HIGH);     // or being put on the pad
+  if (readMilliVolts(PIN_PAD) < 4000) esp_sleep_enable_ext1_wakeup(1ULL << PIN_PAD, ESP_EXT1_WAKEUP_ANY_HIGH);
   esp_deep_sleep_start();
 }
 
@@ -537,111 +580,148 @@ static void wifiOff() {
 }
 static String dockUrl(const char *path) { return "http://" + WiFi.gatewayIP().toString() + ":" + String(DOCK_PORT) + path; }
 
-static bool hello() {
-  WiFiClient c; HTTPClient h; h.setTimeout(3000);
-  if (!h.begin(c, dockUrl("/api/hello"))) return false;
-  const int code = h.GET();
-  bool ok = false;
-  if (code == 200) {
-    const String b = h.getString();
-    ok = b.indexOf("\"wakeback\"") >= 0;
-    const int i = b.indexOf("\"time_ms\"");
-    if (ok && i >= 0) { const uint64_t t = strtoull(b.c_str() + b.indexOf(':', i) + 1, nullptr, 10); if (t > 1600000000000ULL) setClock(t, false); }
-  }
+// one HTTP exchange with the dock: GET when body is null, else a JSON POST. Returns the status code (0 = no connection)
+// and leaves the body in reply. The key goes with every request; the dock ignores it where it doesn't apply.
+static int dockRequest(const char *path, const char *body, uint32_t timeoutMs, String &reply) {
+  WiFiClient c; HTTPClient h; h.setTimeout(timeoutMs);
+  reply = "";
+  if (!h.begin(c, dockUrl(path))) return 0;
+  if (S.key.length()) h.addHeader("X-Puck-Key", S.key);
+  int code;
+  if (body) { h.addHeader("Content-Type", "application/json"); code = h.POST((uint8_t *)body, strlen(body)); }
+  else code = h.GET();
+  if (code > 0) reply = h.getString();
   h.end();
-  return ok;
+  return code;
+}
+// the value of a top-level JSON field as text, "" when absent (enough for the dock's small flat replies)
+static String jsonField(const String &reply, const char *key) {
+  const int i = reply.indexOf(String("\"") + key + "\"");
+  if (i < 0) return "";
+  int p = reply.indexOf(':', i); if (p < 0) return "";
+  p++;
+  while (p < (int)reply.length() && reply[p] == ' ') p++;
+  if (p < (int)reply.length() && reply[p] == '"') { const int e = reply.indexOf('"', p + 1); return e > p ? reply.substring(p + 1, e) : ""; }
+  int e = p; while (e < (int)reply.length() && reply[e] != ',' && reply[e] != '}' && reply[e] != ' ') e++;
+  return reply.substring(p, e);
+}
+static bool replyOk(const String &reply) { return jsonField(reply, "ok") == "true"; }
+// the dock sends its clock with hello and check-in: use it unless the GPS already has the time
+static void takeDockTime(const String &reply) {
+  const uint64_t t = strtoull(jsonField(reply, "time_ms").c_str(), nullptr, 10);
+  if (t > 1600000000000ULL) setClock(t, false);
+}
+
+static bool hello() {
+  String reply;
+  if (dockRequest("/api/hello", nullptr, 3000, reply) != 200) return false;
+  if (reply.indexOf("\"wakeback\"") < 0) return false;
+  takeDockTime(reply);
+  return true;
+}
+
+// the dock answered 401 or 403: the key doesn't match. Retrying every half minute just burns the battery, so stand off.
+static void dockRefusedKey(const char *what) {
+  dockRefused = true; lastOffPadTry = millis();
+  Serial.printf("The dock refused the key (%s). Set the puck up again from the app. Trying again in %lu min.\n", what,
+                (unsigned long)((onPad ? REFUSED_PAD_MS : REFUSED_OFFPAD_MS) / 60000));
 }
 
 static bool checkin() {
-  WiFiClient c; HTTPClient h; h.setTimeout(4000);
-  if (!h.begin(c, dockUrl("/api/pucks/checkin"))) return false;
-  h.addHeader("Content-Type", "application/json");
-  if (S.key.length()) h.addHeader("X-Puck-Key", S.key);
   char body[400];
   snprintf(body, sizeof body,
            "{\"puck\":%d,\"battery_mv\":%d,\"charging\":\"%s\",\"on_pad\":%s,\"free_kb\":%u,\"total_kb\":%u,\"fw\":\"%s\","
            "\"pending\":%d,\"rssi\":%d,\"recording\":%s,\"orientation\":\"%s\",\"twist\":%.0f,\"mag\":%d,\"gps_fix\":%d,\"ip\":\"%s\"}",
-           S.puck, (int)battMv, !onPad ? "not" : battFull ? "full" : "charging", onPad ? "true" : "false",
-           (unsigned)(freeBytes() / 1024), (unsigned)(fsTotal / 1024), FW, pendingCount(), WiFi.RSSI(),
-           recording ? "true" : "false", S.orientation == 1 ? "deck" : S.orientation == 2 ? "thwart" : "unknown",
+           S.puck, (int)battMv, chargeName(), B(onPad),
+           (unsigned)(fsFree / 1024), (unsigned)(fsTotal / 1024), FW, pendingCount(), WiFi.RSSI(),
+           B(recording), orientName(),
            S.twist, imu.magStatus, gps.fix, WiFi.localIP().toString().c_str());
-  const int code = h.POST((uint8_t *)body, strlen(body));
-  bool ok = false;
-  if (code == 200) {
-    const String b = h.getString();
-    ok = b.indexOf("\"ok\":true") >= 0 || b.indexOf("\"ok\": true") >= 0;
-    const int i = b.indexOf("\"time_ms\"");
-    if (i >= 0) { const uint64_t t = strtoull(b.c_str() + b.indexOf(':', i) + 1, nullptr, 10); if (t > 1600000000000ULL) setClock(t, false); }
-  }
-  h.end();
-  return ok;
+  String reply;
+  const int code = dockRequest("/api/pucks/checkin", body, 4000, reply);
+  if (code == 401 || code == 403) { dockRefusedKey("check-in"); return false; }
+  if (code != 200) return false;
+  takeDockTime(reply);
+  dockRefused = false;
+  return replyOk(reply);
 }
 
 // multipart POST of one track straight from flash; true when the dock said ok
 static bool uploadFile(const String &name) {
-  File f = LittleFS.open(String(TRK_DIR) + "/" + name, FILE_READ);
+  File f = LittleFS.open(trackPath(name), FILE_READ);
   if (!f) return false;
   WiFiClient c; c.setTimeout(10);
   if (!c.connect(WiFi.gatewayIP(), DOCK_PORT)) { f.close(); return false; }
-  const char *B = "----WakeBackPuck";
+  const char *BOUNDARY = "----WakeBackPuck";
   char puckField[16]; snprintf(puckField, sizeof puckField, "puck%d", S.puck);
-  String head = String("--") + B + "\r\nContent-Disposition: form-data; name=\"puck\"\r\n\r\n" + puckField + "\r\n--" + B +
+  String head = String("--") + BOUNDARY + "\r\nContent-Disposition: form-data; name=\"puck\"\r\n\r\n" + puckField + "\r\n--" + BOUNDARY +
                 "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"" + name + "\"\r\nContent-Type: text/csv\r\n\r\n";
-  String tail = String("\r\n--") + B + "--\r\n";
+  String tail = String("\r\n--") + BOUNDARY + "--\r\n";
   const size_t len = head.length() + f.size() + tail.length();
   c.printf("POST /api/upload HTTP/1.1\r\nHost: %s:%d\r\nConnection: close\r\nContent-Type: multipart/form-data; boundary=%s\r\n",
-           WiFi.gatewayIP().toString().c_str(), DOCK_PORT, B);
+           WiFi.gatewayIP().toString().c_str(), DOCK_PORT, BOUNDARY);
   if (S.key.length()) c.printf("X-Puck-Key: %s\r\n", S.key.c_str());
   c.printf("Content-Length: %u\r\n\r\n", (unsigned)len);
   c.print(head);
   uint8_t buf[1024]; size_t n;
-  while ((n = f.read(buf, sizeof buf)) > 0) { if (c.write(buf, n) != n) { f.close(); c.stop(); return false; } led(); }
+  // the button and the LED keep working while a big track streams out, so a 2 s hold still sends it to sleep
+  // (GPS isn't polled here: the fix handler could open or close a track file while this one is being read)
+  while ((n = f.read(buf, sizeof buf)) > 0) { if (c.write(buf, n) != n) { f.close(); c.stop(); return false; } pollButton(); led(); }
   f.close();
   c.print(tail);
   const uint32_t t0 = millis(); String status, body; bool inBody = false;
   while (c.connected() || c.available()) {
     if (millis() - t0 > 20000) break;
-    if (!c.available()) { delay(5); continue; }
+    if (!c.available()) { pollButton(); led(); delay(5); continue; }
     String line = c.readStringUntil('\n');
     if (!status.length()) status = line;
     else if (!inBody && line.length() <= 1) inBody = true;
     else if (inBody) body += line;
   }
   c.stop();
-  return status.indexOf(" 200") > 0 && (body.indexOf("\"ok\":true") >= 0 || body.indexOf("\"ok\": true") >= 0);
+  if (status.indexOf(" 401") > 0 || status.indexOf(" 403") > 0) dockRefusedKey("upload");
+  return status.indexOf(" 200") > 0 && replyOk(body);
 }
 
 static void uploadPending() {
-  File d = LittleFS.open(TRK_DIR);
-  if (!d) return;
-  String names;                                   // one per line, gathered first: deleting while walking the folder isn't safe
-  for (File f = d.openNextFile(); f; f = d.openNextFile()) if (!f.isDirectory()) names += baseName(f) + "\n";
-  d.close();
+  const String names = trackNames();
   uploading = true;
   int sent = 0;
   for (int s = 0; s < (int)names.length();) {
     const int e = names.indexOf('\n', s); const String name = names.substring(s, e); s = e + 1;
     if (recording && name == recName) continue;
     Serial.printf("Uploading %s… ", name.c_str());
-    if (uploadFile(name)) { LittleFS.remove(String(TRK_DIR) + "/" + name); Serial.println("done, deleted from the puck."); sent++; flashFull = false; }
-    else { Serial.println("the dock didn't take it, will try later."); break; }
+    if (uploadFile(name)) { LittleFS.remove(trackPath(name)); Serial.println("done, deleted from the puck."); sent++; flashFull = false; }
+    else { if (!dockRefused) Serial.println("the dock didn't take it, will try later."); break; }
     if (webOn) web.handleClient();
   }
   uploading = false; countTracks(); measureFs();
   if (sent) lastCheckin = 0;        // tell the dock the new numbers straight away
 }
 
+// "1.0.12" -> 1*1000000 + 0*1000 + 12, so versions compare as numbers; anything unparseable is 0
+static long versionNum(const String &v) {
+  long n = 0; int part = 0, val = 0;
+  for (size_t i = 0; i <= v.length(); i++) {
+    const char c = i < v.length() ? v[i] : '.';
+    if (c >= '0' && c <= '9') val = val * 10 + (c - '0');
+    else if (c == '.') { if (part < 3) n = n * 1000 + val; part++; val = 0; }
+    else break;
+  }
+  while (part < 3) { n *= 1000; part++; }
+  return n;
+}
+
 // firmware the dock is offering (roadmap stage 5): GET /api/firmware/latest -> {"version":"1.1.0","url":"/api/firmware/puck.bin"}
 static void checkDockFirmware() {
-  WiFiClient c; HTTPClient h; h.setTimeout(4000);
-  if (!h.begin(c, dockUrl("/api/firmware/latest"))) return;
-  if (h.GET() != 200) { h.end(); return; }
-  const String b = h.getString(); h.end();
-  int i = b.indexOf("\"version\""); if (i < 0) return;
-  int q = b.indexOf('"', b.indexOf(':', i) + 1); String ver = b.substring(q + 1, b.indexOf('"', q + 1));
-  i = b.indexOf("\"url\""); if (i < 0) return;
-  q = b.indexOf('"', b.indexOf(':', i) + 1); String url = b.substring(q + 1, b.indexOf('"', q + 1));
-  if (!ver.length() || ver == FW || !url.length()) return;
+  // a puck flashed from VS Code says "1.0.0" or "dev": the dock mustn't overwrite the build someone is working on
+  const String me = FW;
+  if (me == "1.0.0" || me.indexOf("dev") >= 0) return;
+  String reply;
+  if (dockRequest("/api/firmware/latest", nullptr, 4000, reply) != 200) return;
+  const String ver = jsonField(reply, "version");
+  String url = jsonField(reply, "url");
+  // only a newer release goes on: a dock that's behind must never downgrade a puck
+  if (!ver.length() || !url.length() || versionNum(ver) <= versionNum(me)) return;
   if (!url.startsWith("http")) url = dockUrl(url.c_str());
   Serial.printf("Dock has firmware %s (this is %s): updating from %s\n", ver.c_str(), FW, url.c_str());
   if (recording) stopRecording("firmware update");
@@ -662,29 +742,29 @@ static void wifiTick() {
   const uint32_t m = millis();
   if (wmode == W_SETUP) {
     dns.processNextRequest();
-    if (padSetup) {
-      if (!onPad) { padSetup = false; leaveSetup(); }                                      // lifted off: back to normal
-      else if (m - wSince > 120000 && m - setupLastSeen > 15000) { padSetup = false; leaveSetup(); lastOffPadTry = 0; }   // nobody on the page: look for the dock again
-      return;
-    }
-    if (m - setupLastSeen > SETUP_IDLE_MS && !usbPlugged) leaveSetup();     // on USB it stays up: that's the bench
+    // nobody has looked at the page for a while: back to normal. That includes a puck charging off a laptop's USB;
+    // on the bench the serial 'w' command brings it back.
+    if (m - setupLastSeen > SETUP_IDLE_MS) leaveSetup();
     return;
   }
   // a reason to talk to the dock?
-  const bool wantDock = S.ssid.length() && !recording && (wantLiftCheckin ||
-                        (onPad && m - lastOffPadTry > 30000) ||                              // on the pad: keep trying, half a minute apart
-                        (pendingCount() > 0 && m - lastOffPadTry > (sailEnded && m - sailEnded < 15UL * 60 * 1000 ? 60000UL : OFFPAD_RETRY_MS)));   // tracks waiting: every minute for 15 min after a sail, then every 5
+  uint32_t retry;
+  if (dockRefused) retry = onPad ? REFUSED_PAD_MS : REFUSED_OFFPAD_MS;                   // wrong key: stand well off
+  else if (onPad) retry = (lastJoinOk && m - lastJoinOk < PAD_RECENT_MS) ? PAD_RETRY_MS : PAD_RETRY_SLOW_MS;   // on the pad: keen while the dock's about, otherwise gently (radio off between tries)
+  else retry = (sailEnded && m - sailEnded < AFTER_SAIL_FOR_MS) ? AFTER_SAIL_RETRY_MS : OFFPAD_RETRY_MS;       // tracks waiting after a sail: look for the phone keenly for a while
+  const bool wantDock = S.ssid.length() && !recording &&
+                        ((wantLiftCheckin && !dockRefused) || ((onPad || pendingCount() > 0) && m - lastOffPadTry > retry));
   if (wmode == W_OFF) { if (wantDock && radioSettled()) { joinDock(); lastOffPadTry = m; } return; }
   if (wmode == W_JOINING) {
     if (WiFi.status() == WL_CONNECTED) { wmode = W_DOCK; wSince = m; webStart(); Serial.printf("Joined %s, dock should be at %s\n", S.ssid.c_str(), dockUrl("").c_str()); }
-    else if (m - wSince > 15000) { wifiOff(); if (!onPad) wantLiftCheckin = false; else { padSetup = true; enterSetup(); } }
+    else if (m - wSince > JOIN_TIMEOUT_MS) { wifiOff(); wantLiftCheckin = false; }      // no hotspot about: radio off, try again later
     return;
   }
   // W_DOCK
   if (WiFi.status() != WL_CONNECTED) { wifiOff(); return; }
   if (!dockOk) {
-    if (m - lastHello > 5000) { lastHello = m; dockOk = hello(); if (dockOk) { lastCheckin = 0; Serial.println("Dock found."); } }
-    if (!dockOk && m - wSince > (onPad ? 30000UL : OFFPAD_TRY_FOR_MS)) { wifiOff(); wantLiftCheckin = false; if (onPad) { padSetup = true; enterSetup(); } }
+    if (m - lastHello > HELLO_EVERY_MS) { lastHello = m; dockOk = hello(); if (dockOk) { lastCheckin = 0; lastJoinOk = m; Serial.println("Dock found."); } }
+    if (!dockOk && m - wSince > (onPad ? PAD_HELLO_FOR_MS : OFFPAD_TRY_FOR_MS)) { wifiOff(); wantLiftCheckin = false; }
     return;
   }
   if (m - lastCheckin > CHECKIN_MS || lastCheckin == 0) {
@@ -696,6 +776,8 @@ static void wifiTick() {
       if (m - lastFwCheck > FW_CHECK_MS || lastFwCheck == 0) { lastFwCheck = m; checkDockFirmware(); }
     } else dockOk = false;
   }
+  // the key was refused: radio off, and leave the dock alone for a while (dockRefusedKey set lastOffPadTry)
+  if (dockRefused) { wifiOff(); wantLiftCheckin = false; return; }
   // off the pad with nothing left to say: let the radio go
   if (!onPad && !wantLiftCheckin && pendingCount() == 0) wifiOff();
 }
@@ -707,34 +789,31 @@ static void okMsg(const char *msg) { sendJson(String("{\"ok\":true,\"msg\":\"") 
 static String statusJson() {
   String j; j.reserve(1800);
   char b[700];
-  snprintf(b, sizeof b, "{\"fw\":\"%s\",\"puck\":%d,\"uptime_s\":%lu,\"time_ms\":%llu,\"autorec\":%s,\"autooff\":%s,\"rate\":%d,\"autotwist\":%s,",
-           FW, S.puck, (unsigned long)(millis() / 1000), (unsigned long long)nowMs(), S.autoRec ? "true" : "false", S.autoOff ? "true" : "false", S.rate, S.autoTwist ? "true" : "false");
+  snprintf(b, sizeof b, "{\"fw\":\"%s\",\"puck\":%d,\"uptime_s\":%lu,\"time_ms\":%llu,\"autorec\":%s,\"autooff\":%s,",
+           FW, S.puck, (unsigned long)(millis() / 1000), (unsigned long long)nowMs(), B(S.autoRec), B(S.autoOff));
   j += b;
   snprintf(b, sizeof b, "\"gps\":{\"ok\":%s,\"fix\":%d,\"sats\":%d,\"lat\":%.7f,\"lon\":%.7f,\"sog\":%.2f,\"cog\":%.1f,\"hacc\":%.1f,\"hz\":%.0f},",
-           gpsOk ? "true" : "false", gps.fix, gps.sats, gps.lat / 1e7, gps.lon / 1e7, gps.sogKn, gps.cogDeg, gps.hAccM, gps.rateHz);
+           B(gpsOk), gps.fix, gps.sats, gps.lat / 1e7, gps.lon / 1e7, gps.sogKn, gps.cogDeg, gps.hAccM, gps.rateHz);
   j += b;
-  snprintf(b, sizeof b, "\"imu\":{\"ok\":%s,\"heel\":%.1f,\"pitch\":%.1f,\"heading\":%.0f,\"twist\":%.1f,\"twist_learned\":%s,\"orientation\":\"%s\",\"mag\":%d,\"zero_heel\":%.1f,\"zero_pitch\":%.1f,\"flip\":%s,\"flip_pitch\":%s},",
-           imuOk ? "true" : "false", imu.heel, imu.pitch, isnan(imu.headingX) ? -1.0f : fmodf(imu.headingX - S.twist + 720, 360), S.twist, S.twistLearned ? "true" : "false",
-           S.orientation == 1 ? "deck" : S.orientation == 2 ? "thwart" : "unknown", imu.magStatus, S.zeroHeel, S.zeroPitch, S.flipHeel ? "true" : "false", S.flipPitch ? "true" : "false");
+  snprintf(b, sizeof b, "\"imu\":{\"ok\":%s,\"heel\":%.1f,\"pitch\":%.1f,\"heading\":%.0f,\"twist\":%.1f,\"twist_learned\":%s,\"orientation\":\"%s\",\"mag\":%d,\"zero_heel\":%.1f,\"zero_pitch\":%.1f,\"flip\":%s},",
+           B(imuOk), imu.heel, imu.pitch, isnan(imu.headingX) ? -1.0f : fmodf(imu.headingX - S.twist + 720, 360), S.twist, B(S.twistLearned),
+           orientName(), imu.magStatus, S.zeroHeel, S.zeroPitch, B(S.flipHeel));
   j += b;
   snprintf(b, sizeof b, "\"batt\":{\"mv\":%d,\"pct\":%d,\"on_pad\":%s,\"charging\":\"%s\"},\"rec\":{\"on\":%s,\"secs\":%lu,\"lines\":%lu,\"file\":\"%s\"},",
-           (int)battMv, batteryPct(battMv), onPad ? "true" : "false", !onPad ? "not" : battFull ? "full" : "charging",
-           recording ? "true" : "false", (unsigned long)(recording ? (millis() - recStarted) / 1000 : 0), (unsigned long)recLines, recording ? recName.c_str() : "");
+           (int)battMv, batteryPct(battMv), B(onPad), chargeName(),
+           B(recording), (unsigned long)(recording ? (millis() - recStarted) / 1000 : 0), (unsigned long)recLines, recording ? recName.c_str() : "");
   j += b;
   snprintf(b, sizeof b, "\"store\":{\"free_kb\":%u,\"total_kb\":%u,\"files\":%d,\"full\":%s},",
-           (unsigned)(freeBytes() / 1024), (unsigned)(fsTotal / 1024), trackCount(), flashFull ? "true" : "false");
+           (unsigned)(fsFree / 1024), (unsigned)(fsTotal / 1024), nTracks, B(flashFull));
   j += b;
-  const char *mode = wmode == W_SETUP ? "setup" : wmode == W_DOCK ? "dock" : wmode == W_JOINING ? "joining" : "off";
-  j += "\"wifi\":{\"mode\":\"" + String(mode) + "\",\"ssid\":\"" + jsonStr(S.ssid) + "\",\"ip\":\"" +
-       (wmode == W_DOCK ? WiFi.localIP().toString() : WiFi.softAPIP().toString()) + "\",\"dock_ok\":" + (dockOk ? "true" : "false") + "},";
+  j += "\"wifi\":{\"mode\":\"" + String(wifiName()) + "\",\"ssid\":\"" + jsonStr(S.ssid) + "\",\"ip\":\"" +
+       (wmode == W_DOCK ? WiFi.localIP().toString() : WiFi.softAPIP().toString()) + "\",\"dock_ok\":" + B(dockOk) + ",\"dock_refused\":" + B(dockRefused) + "},";
   j += "\"tracks\":[";
-  File d = LittleFS.open(TRK_DIR); bool first = true;
-  if (d) for (File f = d.openNextFile(); f; f = d.openNextFile()) {
-    if (f.isDirectory()) continue;
-    const String name = baseName(f);
+  bool first = true;
+  forEachTrack([&](const String &name, size_t size) {
     if (!first) j += ','; first = false;
-    j += "{\"name\":\"" + jsonStr(name) + "\",\"kb\":" + String((unsigned)(f.size() / 1024)) + ",\"open\":" + ((recording && name == recName) ? "true" : "false") + "}";
-  }
+    j += "{\"name\":\"" + jsonStr(name) + "\",\"kb\":" + String((unsigned)(size / 1024)) + ",\"open\":" + B(recording && name == recName) + "}";
+  });
   j += "]}";
   return j;
 }
@@ -758,18 +837,18 @@ static void startWeb() {
     if (web.hasArg("key")) S.key = web.arg("key").substring(0, 64);
     if (web.hasArg("autorec")) S.autoRec = web.arg("autorec") == "1";
     if (web.hasArg("autooff")) S.autoOff = web.arg("autooff") == "1";
-    if (web.hasArg("autotwist")) { S.autoTwist = web.arg("autotwist") == "1"; if (imuOk) enableImuReports(); }
-    if (web.hasArg("rate")) { const int r = web.arg("rate").toInt(); if (r == 10 || r == 5 || r == 2) S.rate = r; }
+    S.configured = true;                        // someone has been here: no more setup WiFi at power-up
     saveSettings(); okMsg("Saved.");
   });
-  web.on("/api/cal/level", HTTP_POST, [] {
-    // the current heel and pitch (before zeroing) become the new zero
-    S.zeroHeel = wrap180(S.zeroHeel + imu.heel); S.zeroPitch = wrap180(S.zeroPitch + imu.pitch); saveSettings(); okMsg("Level set: heel and pitch read 0 here.");
+  web.on("/api/cal/level", HTTP_POST, [] { calLevel(); okMsg("Level set: heel and pitch read 0 here."); });
+  web.on("/api/cal/flip", HTTP_POST, [] { calFlipHeel(); okMsg(S.flipHeel ? "Heel sign flipped." : "Heel sign back to normal."); });
+  web.on("/api/cal/orient", HTTP_POST, [] {
+    // told which way up it is: the learner still corrects it later if gravity says otherwise for half a minute
+    const int o = web.arg("o").toInt(); if (o != 1 && o != 2) { web.send(400, "text/plain", "o must be 1 (deck) or 2 (thwart)"); return; }
+    S.orientation = o; saveSettings(); okMsg(o == 1 ? "Mounted on deck." : "Mounted under the thwart.");
   });
-  web.on("/api/cal/flip", HTTP_POST, [] { S.flipHeel = !S.flipHeel; S.zeroHeel = -S.zeroHeel; saveSettings(); okMsg(S.flipHeel ? "Heel sign flipped." : "Heel sign back to normal."); });
-  web.on("/api/cal/flippitch", HTTP_POST, [] { S.flipPitch = !S.flipPitch; S.zeroPitch = -S.zeroPitch; saveSettings(); okMsg(S.flipPitch ? "Pitch sign flipped." : "Pitch sign back to normal."); });
   web.on("/api/cal/twist", HTTP_POST, [] { S.twist = wrap180(web.arg("deg").toFloat()); S.twistLearned = true; saveSettings(); okMsg("Twist set."); });
-  web.on("/api/cal/reset", HTTP_POST, [] { S.zeroHeel = S.zeroPitch = S.twist = 0; S.twistLearned = false; S.flipHeel = false; S.flipPitch = false; S.orientation = 0; saveSettings(); okMsg("Calibration cleared."); });
+  web.on("/api/cal/reset", HTTP_POST, [] { S.zeroHeel = S.zeroPitch = S.twist = 0; S.twistLearned = false; S.flipHeel = false; S.orientation = 0; saveSettings(); okMsg("Calibration cleared."); });
   web.on("/api/rec", HTTP_POST, [] {
     if (web.arg("op") == "start") { startRecording(true); okMsg(recording ? "Recording." : flashFull ? "Flash is full." : "Couldn't start."); }
     else { stopRecording("page"); okMsg("Stopped."); }
@@ -777,7 +856,7 @@ static void startWeb() {
   web.on("/api/tracks/delete", HTTP_POST, [] {
     String n = web.arg("name"); if (n.indexOf('/') >= 0 || n.indexOf("..") >= 0 || !n.length()) { web.send(400, "text/plain", "bad name"); return; }
     if (recording && n == recName) stopRecording("deleted from the page");
-    LittleFS.remove(String(TRK_DIR) + "/" + n); countTracks(); measureFs(); flashFull = freeBytes() < FLASH_RESERVE; okMsg("Deleted.");
+    LittleFS.remove(trackPath(n)); countTracks(); measureFs(); flashFull = fsFree < FLASH_RESERVE; okMsg("Deleted.");
   });
   web.on("/api/setup/done", HTTP_POST, [] { okMsg("Leaving setup mode."); delay(300); usbSetupDone = true; if (wmode == W_SETUP) leaveSetup(); });
   web.on("/api/reboot", HTTP_POST, [] { okMsg("Restarting."); delay(300); if (recording) stopRecording("restart"); ESP.restart(); });
@@ -808,7 +887,7 @@ static void startWeb() {
     const String u = web.uri();
     if (u.startsWith("/tracks/")) {
       String n = u.substring(8); if (n.indexOf("..") >= 0) { web.send(400, "text/plain", "bad name"); return; }
-      File f = LittleFS.open(String(TRK_DIR) + "/" + n, FILE_READ);
+      File f = LittleFS.open(trackPath(n), FILE_READ);
       if (!f) { web.send(404, "text/plain", "no such track"); return; }
       web.sendHeader("Content-Disposition", "attachment; filename=\"" + n + "\"");
       web.streamFile(f, "text/csv"); f.close(); return;
@@ -821,10 +900,12 @@ static void webStop() { if (webOn) { web.stop(); webOn = false; } }
 
 // ---------- button ----------
 static void pollButton() {
-  static bool down = false; static int holdStage = 0;
+  static bool down = false, seenUp = false; static int holdStage = 0;
   static uint32_t tDown = 0, tChange = 0;
   const bool pressed = digitalRead(PIN_BTN) == LOW;
   const uint32_t m = millis();
+  // the press that woke the puck is still going when this first runs: it mustn't count as a tap (or a 2 s hold!)
+  if (!seenUp) { if (pressed) return; seenUp = true; }
   if (pressed != down && m - tChange > 30) {
     down = pressed; tChange = m; lastActive = m;
     if (down) { tDown = m; holdStage = 0; }
@@ -875,7 +956,7 @@ static void everySecond() {
 
   learnMounting();
   static int tick = 0; if (++tick % 10 == 0) { measureFs(); countTracks(); }
-  if (flashFull && freeBytes() > FLASH_RESERVE * 2) flashFull = false;
+  if (flashFull && fsFree > FLASH_RESERVE * 2) flashFull = false;
   if (S.autoOff && !onPad && !recording && wmode != W_SETUP && millis() - lastActive > AUTO_OFF_MS) goToSleep("still for 30 minutes");
   // new firmware that has run a couple of minutes with the sensors alive counts as good even with no dock about
   if (appPendingVerify && millis() > 120000 && (gpsOk || imuOk)) { esp_ota_mark_app_valid_cancel_rollback(); appPendingVerify = false; }
@@ -886,40 +967,49 @@ static void printStatus() {
   const char *fixTxt[] = {"no fix", "DR", "2D", "3D", "3D+DR", "time"};
   Serial.printf("GPS %s", gpsOk ? (gps.fix < 6 ? fixTxt[gps.fix] : "?") : "NONE");
   if (gpsOk) Serial.printf(" %u sats %.0f Hz +/-%.1f m | %.2f kn %03.0f", gps.sats, gps.rateHz, gps.hAccM, gps.sogKn, gps.cogDeg);
-  if (imuOk) Serial.printf(" | heel %+5.1f pitch %+5.1f twist %.0f %s mag %d", imu.heel, imu.pitch, S.twist, S.orientation == 2 ? "thwart" : S.orientation == 1 ? "deck" : "?", imu.magStatus);
-  Serial.printf(" | batt %.2f V %d%% %s", battMv / 1000, batteryPct(battMv), !onPad ? "off pad" : battFull ? "full" : "charging");
-  Serial.printf(" | wifi %s%s", wmode == W_SETUP ? "setup" : wmode == W_DOCK ? "dock" : wmode == W_JOINING ? "joining" : "off", dockOk ? " ok" : "");
+  if (imuOk) Serial.printf(" | heel %+5.1f pitch %+5.1f twist %.0f %s mag %d", imu.heel, imu.pitch, S.twist, orientName(), imu.magStatus);
+  Serial.printf(" | batt %.2f V %d%% %s", battMv / 1000, batteryPct(battMv), !onPad ? "off pad" : chargeName());
+  Serial.printf(" | wifi %s%s", wifiName(), dockOk ? " ok" : "");
   if (recording) Serial.printf(" | REC %lus %lu pts", (unsigned long)((millis() - recStarted) / 1000), (unsigned long)recLines);
-  Serial.printf(" | %d track(s), %.1f MB free\n", trackCount(), freeBytes() / 1048576.0);
+  Serial.printf(" | %d track(s), %.1f MB free\n", nTracks, fsFree / 1048576.0);
 }
+static bool statusPaused = false;     // 'q' stops the 5 s status line so other output can be read
 static void help() {
-  Serial.printf("\nWakeBack puck %d, firmware %s\n  h help  s status  i start-up report  r start/stop recording  l list tracks  e erase all tracks\n"
-                "  w setup WiFi on/off  u talk to the dock now  p<N> puck number  z level now  f flip heel  x sleep\n\n", S.puck, FW);
+  Serial.printf("\nWakeBack puck %d, firmware %s\n  h help  s status  q pause/resume the status line  i start-up report  r start/stop recording\n"
+                "  l list tracks  erase (the whole word) erase all tracks  w setup WiFi on/off  u talk to the dock now  x sleep\n"
+                "  Puck number, level, heel sign and the rest are on the setup page (w, then http://192.168.4.1/).\n\n", S.puck, FW);
 }
 static void report() {
-  Serial.printf("GPS: %s", gpsOk ? "found" : "NOT FOUND\n");
+  // what to check when a part is missing: the same hints the old bench sketch gave
+  Serial.printf("GPS: %s", gpsOk ? "found" : "NOT FOUND. Check VCC/GND, and that GPS TX goes to D7 and GPS RX to D6.\n");
   if (gpsOk) Serial.printf(" at %lu baud, 10 Hz, sea mode\n", (unsigned long)gpsBaud);
-  Serial.printf("IMU: %s\n", imuOk ? "found (BNO085)" : "NOT FOUND");
-  Serial.printf("Storage: %s %.1f MB free, %d track(s)\n", fsOk ? "ok," : "NOT WORKING", freeBytes() / 1048576.0, trackCount());
-  Serial.printf("Dock WiFi: \"%s\"%s. Auto-record %s, %d Hz. Twist %.0f%s, mounted %s.\n", S.ssid.c_str(), S.pass.length() ? "" : " (no password)",
-                S.autoRec ? "on" : "off", S.rate, S.twist, S.twistLearned ? "" : " (not learnt yet)", S.orientation == 2 ? "under the thwart" : S.orientation == 1 ? "on deck" : "not known yet");
+  Serial.printf("IMU: %s\n", imuOk ? "found (BNO085)" : "NOT FOUND. Check VIN/GND, SDA to D4, SCL to D5.");
+  Serial.printf("Storage: %s %.1f MB free, %d track(s)\n", fsOk ? "ok," : "NOT WORKING", fsFree / 1048576.0, nTracks);
+  Serial.printf("Dock WiFi: \"%s\"%s. Auto-record %s. Twist %.0f%s, mounted %s.\n", S.ssid.c_str(), S.pass.length() ? "" : " (no password)",
+                S.autoRec ? "on" : "off", S.twist, S.twistLearned ? "" : " (not learnt yet)", S.orientation == 2 ? "under the thwart" : S.orientation == 1 ? "on deck" : "not known yet");
 }
 static void command(String c) {
   c.trim(); if (!c.length()) return;
   lastActive = millis();
+  if (c.equalsIgnoreCase("erase")) {
+    if (recording) stopRecording("erase");
+    const String names = trackNames();
+    for (int s = 0; s < (int)names.length();) { const int e = names.indexOf('\n', s); LittleFS.remove(trackPath(names.substring(s, e))); s = e + 1; }
+    countTracks(); measureFs(); flashFull = false; Serial.println("All tracks erased.");
+    return;
+  }
+  if (c.length() > 1) { Serial.println("Unknown command. Type h."); return; }
   switch (tolower(c[0])) {
     case 'h': help(); break;
     case 's': printStatus(); break;
+    case 'q': statusPaused = !statusPaused; Serial.println(statusPaused ? "Status line paused (q again to resume)." : "Status line back on."); break;
     case 'i': report(); break;
     case 'r': recording ? stopRecording("serial") : startRecording(true); break;
-    case 'l': { File d = LittleFS.open(TRK_DIR); if (d) for (File f = d.openNextFile(); f; f = d.openNextFile()) Serial.printf("  %s  %u KB\n", f.name(), (unsigned)(f.size() / 1024)); } break;
-    case 'e': { if (recording) stopRecording("erase"); File d = LittleFS.open(TRK_DIR); if (d) { String names; for (File f = d.openNextFile(); f; f = d.openNextFile()) names += String(f.name()) + "\n"; int s = 0; while (s < (int)names.length()) { int e = names.indexOf('\n', s); String n = names.substring(s, e); if (!n.startsWith("/")) n = String(TRK_DIR) + "/" + n; LittleFS.remove(n); s = e + 1; } } countTracks(); flashFull = false; Serial.println("All tracks erased."); } break;
+    case 'l': forEachTrack([](const String &n, size_t size) { Serial.printf("  %s  %u KB\n", n.c_str(), (unsigned)(size / 1024)); }); if (!nTracks) Serial.println("  no tracks"); break;
+    case 'e': Serial.println("To erase every track type the whole word: erase"); break;
     case 'w': wmode == W_SETUP ? leaveSetup() : enterSetup(); break;
     case 'u': if (wmode == W_SETUP) leaveSetup(); lastOffPadTry = 0; wantLiftCheckin = true;
               Serial.println(recording ? "Recording: the puck won't talk to the dock until that stops (r, or the button)." : "Looking for the dock…"); break;
-    case 'p': { const int n = c.substring(1).toInt(); if (n >= 1 && n <= 99) { S.puck = n; saveSettings(); Serial.printf("This is now puck %d.\n", n); } else Serial.println("Use p then a number, e.g. p3"); } break;
-    case 'z': S.zeroHeel = wrap180(S.zeroHeel + imu.heel); S.zeroPitch = wrap180(S.zeroPitch + imu.pitch); saveSettings(); Serial.println("Level set."); break;
-    case 'f': S.flipHeel = !S.flipHeel; S.zeroHeel = -S.zeroHeel; saveSettings(); Serial.println(S.flipHeel ? "Heel flipped." : "Heel normal."); break;
     case 'x': goToSleep("x typed"); break;
     default: Serial.println("Unknown command. Type h.");
   }
@@ -940,6 +1030,7 @@ void setup() {
   leds(true);
   analogReadResolution(12);
   Serial.begin(115200);
+  Serial.setTxTimeoutMs(0);                     // a USB host that's attached but not reading must never stall the loop
   const uint32_t t = millis();
   while (!woken && !Serial && millis() - t < 2500) delay(10);
 
@@ -951,7 +1042,7 @@ void setup() {
   gpsOk = startGps();
   imuOk = startImu();
   measureFs(); countTracks();
-  flashFull = fsOk && freeBytes() < FLASH_RESERVE;
+  flashFull = fsOk && fsFree < FLASH_RESERVE;
 
   // after an over-the-air update the new image runs once on probation; it's confirmed after a good check-in (or 2 min alive)
   const esp_partition_t *run = esp_ota_get_running_partition();
@@ -964,7 +1055,7 @@ void setup() {
   lastActive = millis();
   battMv = readMilliVolts(PIN_BATT); onPad = readMilliVolts(PIN_PAD) > 4000;
   report();
-  if (!prefs.isKey("ssid") && !woken) { Serial.println("First power-up: setup WiFi is on so you can set it up from your phone."); enterSetup(); }
+  if (!S.configured && !woken) { Serial.println("Not set up yet: setup WiFi is on so you can set it up from your phone."); enterSetup(); }
   help();
 }
 
@@ -983,6 +1074,6 @@ void loop() {
   led();
   const uint32_t m = millis();
   if (m - lastSec >= 1000) { lastSec = m; everySecond(); }
-  if (m - lastStatus >= 5000 && Serial) { lastStatus = m; printStatus(); }
+  if (m - lastStatus >= 5000 && Serial && !statusPaused) { lastStatus = m; printStatus(); }
   delay(2);
 }

@@ -13,13 +13,6 @@
         "WAKEBACK_DEBUG": "1",
         "WAKEBACK_DEMO_WIFI": "1"
       }
-    },
-    {
-      "name": "Regenerate fake data",
-      "type": "debugpy",
-      "request": "launch",
-      "program": "${workspaceFolder}/tools/gen_fake_data.py",
-      "console": "integratedTerminal"
     }
   ]
 }

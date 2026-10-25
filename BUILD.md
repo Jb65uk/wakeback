@@ -37,21 +37,24 @@ Tools: soldering iron (IMU headers, two wires on the XIAO's battery pads, TP4056
 ## Software
 
 1. Install the **PlatformIO** extension in VS Code.
-2. Open the folder `firmware/bench_test` (just that folder) in VS Code.
+2. Open the folder `firmware/puck` (just that folder) in VS Code. This is the real firmware; it's what you flash at every stage.
 3. Plug the XIAO in with a USB-C data cable. Click **Upload** (→ on the blue bar). First time takes a few minutes while it downloads the tools.
 4. Click the **Serial Monitor** (plug icon). Type `h` and Enter for the commands.
 
-Every second it prints a status line like:
+Every 5 seconds it prints a status line like (`q` pauses it):
 
 ```
-GPS 3D fix, 14 sats, 10 Hz, +/-1.8 m | 3.21 kn 045 deg | heel +12.3 pitch  -1.0 | batt 3.98 V 78% | off the pad
+GPS 3D 14 sats 10 Hz +/-1.8 m | 3.21 kn 045 | heel +12.3 pitch  -1.0 twist 0 deck mag 2 | batt 3.98 V 78% off pad | wifi off | 0 track(s), 4.4 MB free
 ```
+
+On a USB lead the puck also puts up its setup WiFi `wakeback-puck-1` by itself: join it on your phone and open
+http://192.168.4.1/ for the live readings, level calibration and settings (see `firmware/puck/README.md`).
 
 ## Stage 1: the XIAO on its own
 
-Push the XIAO into the breadboard across the middle gap, USB end at the edge. Upload the bench test.
+Push the XIAO into the breadboard across the middle gap, USB end at the edge. Upload the firmware.
 
-**Check:** the monitor says `GPS: NOT FOUND` and `IMU: NOT FOUND` (nothing's connected yet) and the LED blinks slowly. Storage says ok with about 6 MB free.
+**Check:** the start-up report (type `i`) says `GPS: NOT FOUND` and `IMU: NOT FOUND` (nothing's connected yet) and the LED blinks slowly. Storage says ok with about 4.4 MB free.
 
 ## Stage 2: GPS
 
@@ -67,7 +70,7 @@ Wire colours vary between sellers: go by the labels on the board. TX goes to the
 
 Press the XIAO's reset button (or re-open the monitor). Put the GPS on a window sill or outside, antenna (the square ceramic side) facing the sky.
 
-**Check:** `GPS: found at 38400 baud, set to 10 Hz`. Within a minute or two outside: `3D fix`, 10+ sats, `10 Hz`, accuracy under 3 m. Indoors it may never get a fix; that's normal.
+**Check:** `GPS: found at 38400 baud, 10 Hz, sea mode`. Within a minute or two outside: `3D fix`, 10+ sats, `10 Hz`, accuracy under 3 m. Indoors it may never get a fix; that's normal.
 
 If it says NOT FOUND: swap D6/D7, check 3V3 and GND.
 
@@ -82,11 +85,11 @@ Solder the header pins onto the BNO085 first.
 | SDA | **D4** |
 | SCL | **D5** |
 
-Reset. **Check:** `IMU: found`. Put the breadboard flat and type `z` (zero). Heel and pitch read about 0.
+Reset. **Check:** `IMU: found`. Put the breadboard flat, open the setup page on your phone and tap **Boat is level**. Heel and pitch read about 0.
 
 Now decide which way the puck will sit on the boat, and tip the board the way the boat heels **to starboard**: heel should go **positive**.
-- If tipping sideways changes *pitch* instead: type `a` (swap axes), sit it level, `z` again.
-- If heel goes negative: type `f` (flip).
+- If heel goes negative: **Advanced → Heel sign is backwards** on the page.
+- Which way up it sits (on deck or under the thwart) and the twist from the bow are learnt by themselves once it's on the boat.
 
 These settings are remembered.
 
@@ -102,7 +105,7 @@ D2 → one switch pin; the other switch pin → GND. If it has a ring LED: D9 �
 
 **Check:** tap it: recording starts (double blink), tap again: stops. Hold it 2 s: three quick blinks and the monitor says `Sleeping`, then the USB serial port vanishes (the XIAO is in deep sleep). Press it: it wakes and the monitor comes back. A very short knock on the button doesn't wake it. The ring LED copies the status LED; on the Qi pad it breathes while charging and goes solid when full.
 
-Left still for 30 minutes (off the pad, not recording) it sleeps by itself; `o` turns that off for bench work. While it's asleep the GPS is in backup mode and the IMU idle, but on this board nothing is actually powered down, so it draws a few milliamps asleep: days, not weeks. Fine for a puck that lives on its pad.
+Left still for 30 minutes (off the pad, not recording) it sleeps by itself; untick *Switch itself off* on the setup page for bench work. While it's asleep the GPS is in backup mode and the IMU idle, but on this board nothing is actually powered down, so it draws a few milliamps asleep: a flat battery after a few days off the pad rather than weeks. Fine for a puck that lives on its pad.
 
 **Flashing a sleeping puck:** the USB port isn't there while it sleeps. Press the button first, then upload.
 
@@ -131,22 +134,15 @@ If the pad doesn't start: centre the coil, and try another pad. Some are fussy w
 
 ## Stage 7: first real track
 
-1. In the monitor type `p1` (this is puck 1), then `r` to start recording.
-2. Unplug USB, put the breadboard in a food box, and go for a walk, a bike ride, or better, a sail. It records whenever it has a fix.
-3. Back home: plug in, **close the serial monitor**, then in a terminal in the project folder:
+1. Tap the button (or type `r`) to start recording.
+2. Unplug USB, put the breadboard in a food box, and go for a walk, a bike ride, or better, a sail. It records whenever it has a fix, and stops by itself after 10 minutes still (or tap again).
+3. Back home: hold the button 6 s for the setup WiFi (or plug in USB), join `wakeback-puck-1` on your phone, and **download** the track from the Tracks card on http://192.168.4.1/. Drop it on the viewer. Once the dock or the app is set up this step goes away: the puck uploads by itself.
 
-```
-pip install pyserial
-python tools/pull_track.py
-```
+About 4.5 hours of sailing fits in the 4.4 MB track store (5 points a second while moving, about 54 bytes a point).
 
-It saves `puck1_HHMMSS.csv`. Drop it on the viewer (or add `--upload` with the dock server running and it lands in the right session).
+## Stage 8: on the boat
 
-About 3 hours fits on the 8 MB XIAO (about 1.9 MB an hour as text). The real firmware stores it more compactly.
-
-## Stage 8: the real firmware
-
-Once the carrier board is in its case, flash `firmware/puck` instead of the bench test. It records by itself when the boat moves off, uploads to the dock or your phone over WiFi, and has a setup page on its own WiFi for calibration, the dock WiFi password and firmware updates. See `firmware/puck/README.md`.
+It's been running the real firmware all along. Once the carrier board is in its case, set it up from the WakeBack app (or the setup page): the dock / phone hotspot WiFi name and password, and the puck number. From then on it records by itself when the boat moves off and uploads to the dock or your phone over WiFi. See `firmware/puck/README.md`.
 
 ## What's not on the breadboard (yet)
 

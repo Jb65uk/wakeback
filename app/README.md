@@ -28,6 +28,8 @@ app/
   test/fixtures/              two small tracks whose numbers were taken from server/stats.py
 ```
 
+**First:** run `setup.ps1` (or let the GitHub build do it) before building, because it copies the viewer pages from `..\viewer` into `assets/web/`; they aren't in git.
+
 ## 1. Install Flutter (once, ~15 min)
 
 1. Download the Flutter SDK zip for Windows (docs.flutter.dev → Get started → Windows → Android),
