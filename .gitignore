@@ -1,4 +1,9 @@
 data/sessions/*/meta.json
+# demo data: python tools/gen_fake_data.py (or the "Generate fake data" task) makes it
+data/sessions/
+# the viewer pages are copied in from viewer/ by app/setup.ps1 and the APK build (Leaflet stays tracked)
+app/assets/web/index.html
+app/assets/web/dock.html
 
 # Flutter app build output (setup.ps1 / the GitHub build make these)
 app/android/
