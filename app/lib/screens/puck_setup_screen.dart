@@ -27,7 +27,7 @@ class _PuckSetupScreenState extends State<PuckSetupScreen> {
   late final TextEditingController _ssid = TextEditingController(text: app.hotspotName);
   late final TextEditingController _pass = TextEditingController(text: app.hotspotPass);
   late final TextEditingController _num = TextEditingController(text: '${widget.puck ?? _nextNumber()}');
-  bool _autoRec = true, _showPass = false, _canJoin = false, _manual = false;
+  bool _autoRec = true, _showPass = false, _canJoin = false, _manual = false, _noKey = false, _keyFailed = false;
   _Stage _stage = _Stage.form;
   final _log = <String>[];
   String? _error;
@@ -75,7 +75,7 @@ class _PuckSetupScreenState extends State<PuckSetupScreen> {
   }
 
   /// The whole thing, start to finish. Each step reports in the log; an error stops it with the reason.
-  Future<void> _go({required bool manual}) async {
+  Future<void> _go({required bool manual, bool withoutKey = false}) async {
     final problem = _formProblem();
     if (problem != null) {
       toast(context, problem, error: true);
@@ -91,12 +91,16 @@ class _PuckSetupScreenState extends State<PuckSetupScreen> {
       _log.clear();
       _error = null;
       _found = null;
+      _noKey = withoutKey;
+      _keyFailed = false;
     });
     try {
       // 1. a key from your account, while the phone still has the internet (once it's on the puck's WiFi it hasn't)
       String key = '';
       int keyId = 0;
-      if (app.signedIn && !app.demoMode) {
+      if (withoutKey) {
+        _say('Setting up without an account key: the puck will upload to this phone only. Set it up again later to give it one.');
+      } else if (app.signedIn && !app.demoMode) {
         _say('Asking your account for a key for puck $num…');
         try {
           final k = await app.auth.issuePuckKey(num);
@@ -104,7 +108,8 @@ class _PuckSetupScreenState extends State<PuckSetupScreen> {
           keyId = k.info.id;
           _say('Got it. The puck will upload as ${app.account!.name}.');
         } on AuthException catch (e) {
-          throw PuckException('Couldn\'t get a key from the server: ${e.message}\nCheck your signal, or set the puck up without one (it still uploads to this phone).');
+          _keyFailed = true;
+          throw PuckException('Couldn\'t get a key from the server: ${e.message}\nCheck your signal and try again, or continue without a key (the puck still uploads to this phone, just not as you on the server).');
         }
       } else {
         _say(app.demoMode ? 'Demo mode: no account key.' : 'Not signed in: no account key. The puck will still upload to this phone.');
@@ -321,8 +326,14 @@ class _PuckSetupScreenState extends State<PuckSetupScreen> {
                 child: Text(_error!, style: t.textTheme.bodyMedium),
               ),
               const SizedBox(height: 10),
-              Wrap(spacing: 8, children: [
+              Wrap(spacing: 8, runSpacing: 4, children: [
                 FilledButton.icon(onPressed: () => _go(manual: _manual), icon: const Icon(Icons.refresh), label: const Text('Try again')),
+                if (_keyFailed)
+                  OutlinedButton.icon(
+                    onPressed: () => _go(manual: _manual, withoutKey: true),
+                    icon: const Icon(Icons.key_off, size: 18),
+                    label: const Text('Continue without a key'),
+                  ),
                 OutlinedButton(onPressed: () => setState(() => _stage = _Stage.form), child: const Text('Back')),
               ]),
             ],
@@ -355,6 +366,10 @@ class _PuckSetupScreenState extends State<PuckSetupScreen> {
                   : 'It will join hotspot "${r.hotspot}" and upload to this phone.',
               style: t.textTheme.bodyMedium,
             ),
+            if (!_keyed && _noKey) ...[
+              const SizedBox(height: 6),
+              const Hint('No account key this time. When you\'re back in signal, "Set up again" from Your pucks gives it one.'),
+            ],
             if (_found != null && _found!.tracks > 0) ...[
               const SizedBox(height: 6),
               Hint('It has ${_found!.tracks} track${_found!.tracks == 1 ? '' : 's'} waiting: they\'ll come over as soon as it finds the hotspot.'),

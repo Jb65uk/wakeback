@@ -63,6 +63,7 @@ static const uint32_t PAD_HOLD_NO_IMU_MS = 10UL * 60 * 1000; // ...or this long 
 static const float    PAD_TILT_DEG = 8.0f;                   // tilted this much from how it lay on the pad = picked up
 static const uint32_t STILL_FOR_MS = 20000;                  // still this long = "at rest", the start point is remembered
 static const float    START_M = 30;                          // moved this far from rest = sailing, start recording
+static const uint32_t START_MOVING_MS = 5000;                // ...and been above STILL_KN for this long: indoor GPS wander moves 30 m but never holds a speed
 static const float    MOVE_M = 20;                           // while recording, must move this far every...
 static const uint32_t STOP_AFTER_MS = 10UL * 60 * 1000;      // ...10 minutes, or the sail is over
 static const uint32_t CHECKIN_MS = 30000;
@@ -432,10 +433,15 @@ static void onFix() {
   // movement from rest
   if (gps.fix < 3 || gps.hAccM > 15) return;
   if (!recording) {
-    if (!moving) { if (!stillSince) stillSince = m; }
-    else stillSince = 0;
+    static uint32_t movingSince = 0;
+    if (!moving) { if (!stillSince) stillSince = m; movingSince = 0; }
+    else { stillSince = 0; if (!movingSince) movingSince = m; }
     if (stillSince && m - stillSince > STILL_FOR_MS) { haveRest = true; restLat = gps.lat; restLon = gps.lon; }
-    if (S.autoRec && !onPad && !flashFull && haveRest && distM(restLat, restLon, gps.lat, gps.lon) > START_M) startRecording(false);
+    // start: far enough from rest to beat the fix accuracy, and a speed that's held, not one jittery reading
+    // (on the bench 25 Oct it started on 0.5-2 kn of indoor GPS noise and then wouldn't talk to the dock)
+    const bool farEnough = distM(restLat, restLon, gps.lat, gps.lon) > fmaxf(START_M, 4 * gps.hAccM);
+    const bool underWay = movingSince && m - movingSince > START_MOVING_MS;
+    if (S.autoRec && !onPad && !flashFull && haveRest && farEnough && underWay) startRecording(false);
   } else {
     if (distM(moveLat, moveLon, gps.lat, gps.lon) > MOVE_M) { moveLat = gps.lat; moveLon = gps.lon; lastMoveMs = m; }
     if (!manualRec && m - lastMoveMs > STOP_AFTER_MS) stopRecording("still for 10 minutes");
@@ -909,7 +915,8 @@ static void command(String c) {
     case 'l': { File d = LittleFS.open(TRK_DIR); if (d) for (File f = d.openNextFile(); f; f = d.openNextFile()) Serial.printf("  %s  %u KB\n", f.name(), (unsigned)(f.size() / 1024)); } break;
     case 'e': { if (recording) stopRecording("erase"); File d = LittleFS.open(TRK_DIR); if (d) { String names; for (File f = d.openNextFile(); f; f = d.openNextFile()) names += String(f.name()) + "\n"; int s = 0; while (s < (int)names.length()) { int e = names.indexOf('\n', s); String n = names.substring(s, e); if (!n.startsWith("/")) n = String(TRK_DIR) + "/" + n; LittleFS.remove(n); s = e + 1; } } countTracks(); flashFull = false; Serial.println("All tracks erased."); } break;
     case 'w': wmode == W_SETUP ? leaveSetup() : enterSetup(); break;
-    case 'u': if (wmode == W_SETUP) leaveSetup(); lastOffPadTry = 0; wantLiftCheckin = true; Serial.println("Looking for the dock…"); break;
+    case 'u': if (wmode == W_SETUP) leaveSetup(); lastOffPadTry = 0; wantLiftCheckin = true;
+              Serial.println(recording ? "Recording: the puck won't talk to the dock until that stops (r, or the button)." : "Looking for the dock…"); break;
     case 'p': { const int n = c.substring(1).toInt(); if (n >= 1 && n <= 99) { S.puck = n; saveSettings(); Serial.printf("This is now puck %d.\n", n); } else Serial.println("Use p then a number, e.g. p3"); } break;
     case 'z': S.zeroHeel = wrap180(S.zeroHeel + imu.heel); S.zeroPitch = wrap180(S.zeroPitch + imu.pitch); saveSettings(); Serial.println("Level set."); break;
     case 'f': S.flipHeel = !S.flipHeel; S.zeroHeel = -S.zeroHeel; saveSettings(); Serial.println(S.flipHeel ? "Heel flipped." : "Heel normal."); break;
