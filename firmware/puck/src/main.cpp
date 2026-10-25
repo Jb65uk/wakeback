@@ -1,6 +1,6 @@
 // WakeBack puck firmware
 // ----------------------
-// The puck records a sail by itself (10 Hz GPS, heel and pitch from the IMU) into flash, then hands the tracks
+// The puck records a sail by itself (GPS at 5 Hz while moving, heel and pitch from the IMU) into flash, then hands the tracks
 // to a dock: the club's dock Pi or the WakeBack app on a phone, over WiFi, exactly as docs/PHONE_DOCK.md says.
 // It also puts up its own WiFi with a setup page (http://192.168.4.1/) for calibration, settings, tracks and
 // firmware updates.
@@ -14,7 +14,7 @@
 //   Push button     D2 (GPIO3) -> switch -> GND
 //   Ring LED        D9 (GPIO8) -> 100R -> ring LED+ ; ring LED- -> GND   (only if the button has one)
 //
-// The button:  tap = start/stop recording by hand.
+// The button and the LED are described in README.md (the one place); briefly: tap = start/stop recording by hand.
 //              hold 2 s = three blinks, let go -> the puck sleeps.
 //              keep holding to 6 s = five quick blinks -> setup WiFi "wakeback-puck-N" for 10 minutes.
 //              press when asleep = wakes (a knock shorter than 0.3 s doesn't). Putting it on the pad wakes it too.
@@ -23,7 +23,7 @@
 //   slow blink = no GPS fix     1 blink/s = fix, waiting     double blink = recording
 //   fast blink = setup mode     steady on = talking to the dock    5 quick + pause = flash full
 //
-// Serial monitor at 115200: type h for the few commands that are handy on the bench.
+// Serial monitor at 115200: type h for the few commands that are handy on the bench (q pauses the status line).
 
 #include <Arduino.h>
 #include <Wire.h>

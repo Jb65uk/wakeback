@@ -7,6 +7,10 @@ app/.dart_tool/
 app/pubspec.lock
 app/WakeBack.apk
 app/.flutter-plugins*
+# PlatformIO build output and the bins/manifest CI makes
+.pio/
+firmware/*/puck*.bin
+firmware/*/firmware.json
 # local stuff
 __pycache__/
 data/pucks.json

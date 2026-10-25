@@ -6,7 +6,7 @@ A 60 mm round, 2-layer board that the off-the-shelf modules wire onto:
   bottom: TP4056 charger and Qi receiver modules (stuck down, short wires), battery below that
   lid:    BE-880 GPS, 4 wires to the GPS pads
 
-Pins match firmware/bench_test: D0 battery sense, D1 pad sense, D3 LED, D4/D5 I2C, D6/D7 GPS, D8 IMU INT.
+Pins match firmware/puck: D0 battery sense, D1 pad sense, D3 LED, D4/D5 I2C, D6/D7 GPS, D8 IMU INT.
 Run: python gen_carrier.py   (needs: pip install shapely matplotlib gerbonara)
 """
 import math, os, zipfile, datetime
