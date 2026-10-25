@@ -20,6 +20,7 @@ Prices checked 26 Sept 2026, including VAT. Stock moves, so check before orderin
 | Qi charging pad | any phone pad | about £10 | Or one you already have |
 | Breadboard, jumper wires, 4 × 100 kΩ, 1 × 330 Ω, 1 LED | any starter kit | about £10 | Skip what you already have |
 | JST-PH 2-pin sockets / pigtails | Amazon UK | about £5 | So the battery plugs in rather than being soldered |
+| **12 mm waterproof push button**, momentary, anti-vandal, IP67, flat head, with a 3 V ring LED (Daier GQ12H2-10EM-S or any "12mm metal momentary push button ring LED 3V") | Amazon UK / AliExpress / eBay | about £2–4 | The on/off button in the side of the case. 4 solder pins: two for the switch, two for the LED. The 2-pin version without the LED works too. Add a 100 Ω resistor for the ring LED |
 
 For the **carrier board** instead of a breadboard, add: a JST-PH 2-pin through-hole socket (B2B-PH-K-S), and two 7-pin 2.54 mm female headers for the XIAO. The resistors and LED can be fitted by JLCPCB when you order (about £8–10 extra); to solder them yourself, add 100 kΩ ×4 and 300–330 Ω ×1 in **1206** size and an **0805** LED.
 
@@ -95,6 +96,16 @@ D3 → 330 Ω → LED long leg; LED short leg → GND.
 
 **Check:** slow blink with no GPS fix, one blink a second with a fix, double blink when recording.
 
+## Stage 4b: the push button
+
+D2 → one switch pin; the other switch pin → GND. If it has a ring LED: D9 → 100 Ω → LED+ (the pin marked + or with the longer lead); LED− → GND. The two switch pins are the ones marked NO (or C and NO); don't use NC if it has one.
+
+**Check:** tap it: recording starts (double blink), tap again: stops. Hold it 2 s: three quick blinks and the monitor says `Sleeping`, then the USB serial port vanishes (the XIAO is in deep sleep). Press it: it wakes and the monitor comes back. A very short knock on the button doesn't wake it. The ring LED copies the status LED; on the Qi pad it breathes while charging and goes solid when full.
+
+Left still for 30 minutes (off the pad, not recording) it sleeps by itself; `o` turns that off for bench work. While it's asleep the GPS is in backup mode and the IMU idle, but on this board nothing is actually powered down, so it draws a few milliamps asleep: days, not weeks. Fine for a puck that lives on its pad.
+
+**Flashing a sleeping puck:** the USB port isn't there while it sleeps. Press the button first, then upload.
+
 ## Stage 5: battery and charger
 
 **Unplug the USB first.**
@@ -133,7 +144,10 @@ It saves `puck1_HHMMSS.csv`. Drop it on the viewer (or add `--upload` with the d
 
 About 3 hours fits on the 8 MB XIAO (about 1.9 MB an hour as text). The real firmware stores it more compactly.
 
+## Stage 8: the real firmware
+
+Once the carrier board is in its case, flash `firmware/puck` instead of the bench test. It records by itself when the boat moves off, uploads to the dock or your phone over WiFi, and has a setup page on its own WiFi for calibration, the dock WiFi password and firmware updates. See `firmware/puck/README.md`.
+
 ## What's not on the breadboard (yet)
 
-- The AO3401 GPS power switch (only matters for sleeping for weeks).
-- Wake-on-movement, auto start/stop, dock check-ins and uploads. That's the real firmware, next.
+- The AO3401 GPS power switch (only matters for sleeping for weeks; the button sleep above is "a few mA").

@@ -61,6 +61,7 @@ class AppState extends ChangeNotifier {
     final s = DockStore(Directory('${_docs.path}/${demo ? 'wakeback-demo' : 'wakeback'}'));
     await s.init();
     s.fleet = fleet;
+    s.myPucks = myPucks.map((p) => p.puck).toSet();
     s
       ..ownerName = profileName
       ..ownerEmail = profileEmail
@@ -257,6 +258,36 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  // ------------------------------------------------------------------ your pucks (set up from this app)
+
+  /// Pucks you've set up from this phone: number, when, firmware seen, and the server key id (0 = none, set up
+  /// without an account). The key itself was handed to the puck and isn't kept here.
+  List<MyPuck> get myPucks {
+    final l = _p.getStringList('myPucks') ?? const [];
+    final out = <MyPuck>[];
+    for (final s in l) {
+      try {
+        out.add(MyPuck.fromJson((jsonDecode(s) as Map).cast<String, dynamic>()));
+      } catch (_) {}
+    }
+    out.sort((a, b) => a.puck.compareTo(b.puck));
+    return out;
+  }
+
+  Future<void> putMyPuck(MyPuck p) async {
+    final l = myPucks.where((x) => x.puck != p.puck).toList()..add(p);
+    await _p.setStringList('myPucks', l.map((x) => jsonEncode(x.toJson())).toList());
+    store.myPucks = l.map((x) => x.puck).toSet();
+    if (fleet < p.puck) fleet = p.puck; // so it gets a row on the Dock page before it's ever seen
+    notifyListeners();
+  }
+
+  Future<void> removeMyPuck(int puck) async {
+    await _p.setStringList('myPucks', myPucks.where((x) => x.puck != puck).map((x) => jsonEncode(x.toJson())).toList());
+    store.myPucks = myPucks.map((x) => x.puck).toSet();
+    notifyListeners();
+  }
+
   // ------------------------------------------------------------------ boats
   /// The boats you sail ("Solo 5843", "Laser"), first is the one you usually sail.
   List<String> get boats => _p.getStringList('boats') ?? const [];
@@ -347,3 +378,13 @@ class AppState extends ChangeNotifier {
 }
 
 AppState get app => AppState.instance;
+
+/// A puck set up from this phone (see AppState.myPucks).
+class MyPuck {
+  final int puck, keyId, setUpMs;
+  final String fw, hotspot;
+  const MyPuck({required this.puck, this.keyId = 0, required this.setUpMs, this.fw = '', this.hotspot = ''});
+  static MyPuck fromJson(Map<String, dynamic> j) => MyPuck(
+      puck: (j['puck'] as num).toInt(), keyId: (j['keyId'] as num?)?.toInt() ?? 0, setUpMs: (j['setUpMs'] as num?)?.toInt() ?? 0, fw: '${j['fw'] ?? ''}', hotspot: '${j['hotspot'] ?? ''}');
+  Map<String, dynamic> toJson() => {'puck': puck, 'keyId': keyId, 'setUpMs': setUpMs, 'fw': fw, 'hotspot': hotspot};
+}

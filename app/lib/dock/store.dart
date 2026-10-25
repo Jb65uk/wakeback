@@ -257,6 +257,9 @@ class DockStore {
   /// How many pucks the club has, so ones never seen still get a row (WAKEBACK_FLEET).
   int fleet = 0;
 
+  /// Pucks set up from this phone (they carry a key for the owner's account): the Dock page says they're yours.
+  Set<int> myPucks = const <int>{};
+
   Future<void> init() async {
     await sessionsDir.create(recursive: true);
     await locked(migrateDateFolders);
@@ -1078,6 +1081,7 @@ class DockStore {
         'fw': r['fw'],
         'pending': r['pending'],
         'rssi': r['rssi'],
+        'owner': myPucks.contains(int.parse(key.substring(4))) && ownerName.isNotEmpty ? ownerName : null,
         'last_upload': luOut,
       });
     }

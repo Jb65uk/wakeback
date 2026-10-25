@@ -1,0 +1,87 @@
+# Builds the puck firmware in the cloud and publishes it as a release.
+# Runs on every push that touches firmware/puck, or by hand: Actions tab -> Build puck firmware -> Run workflow.
+#   puck.bin       the firmware on its own: for the puck's setup page (Firmware -> Update) and for the dock to push
+#   puck-full.bin  everything (bootloader + partitions + firmware) to flash a brand-new XIAO at address 0x0
+name: Build puck firmware
+
+on:
+  push:
+    paths: ['firmware/puck/**', '.github/workflows/build-firmware.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: firmware/puck
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ runner.os }}-${{ hashFiles('firmware/puck/platformio.ini') }}
+
+      - name: Install PlatformIO
+        run: pip install platformio esptool
+
+      - name: Version from the tag of this build
+        run: |
+          V="1.0.${{ github.run_number }}"
+          sed -i "s/-DWB_FW_VERSION=.*/-DWB_FW_VERSION=\\\\\"$V\\\\\"/" platformio.ini
+          echo "FW_VERSION=$V" >> "$GITHUB_ENV"
+          grep WB_FW_VERSION platformio.ini
+
+      - name: Build
+        shell: bash
+        run: pio run 2>&1 | tee build.log
+
+      - name: Build errors as annotations (readable without the log)
+        if: failure()
+        run: grep -nE "error|Error|undefined reference|not declared|failed" build.log | head -40 | sed 's/^/::error::/'; true
+
+      - name: Size
+        run: grep -E "^(RAM|Flash):" build.log | sed 's/^/::notice::/'
+
+      - name: Package
+        env:
+          MSG: ${{ github.event.head_commit.message }}
+        run: |
+          B=.pio/build/xiao_esp32s3
+          cp $B/firmware.bin puck.bin
+          BOOT0=$(find ~/.platformio/packages -name boot_app0.bin | head -1)
+          ls -l $B/bootloader.bin $B/partitions.bin "$BOOT0" $B/firmware.bin
+          esptool.py --chip esp32s3 merge_bin -o puck-full.bin --flash_mode dio --flash_freq 80m --flash_size 8MB \
+            0x0 $B/bootloader.bin 0x8000 $B/partitions.bin 0xe000 "$BOOT0" 0x10000 $B/firmware.bin
+          ls -l puck.bin puck-full.bin | sed 's/^/::notice::/'
+          echo "{\"version\":\"$FW_VERSION\",\"file\":\"puck.bin\",\"notes\":$(jq -Rs . <<< "$MSG")}" > firmware.json
+          cat firmware.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: puck-firmware
+          path: |
+            firmware/puck/puck.bin
+            firmware/puck/puck-full.bin
+            firmware/puck/firmware.json
+
+      - name: Release
+        if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: puck-${{ github.run_number }}
+          name: Puck firmware ${{ env.FW_VERSION }}
+          body: ${{ github.event.head_commit.message }}
+          files: |
+            firmware/puck/puck.bin
+            firmware/puck/puck-full.bin
+            firmware/puck/firmware.json

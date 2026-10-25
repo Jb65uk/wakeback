@@ -9,6 +9,13 @@
 //   LED             D3 (GPIO4) -> 330R -> LED -> GND
 //   Battery sense   TP4056 OUT+ -> 100k -> A0 (GPIO1) -> 100k -> GND
 //   Pad sense       Qi 5V       -> 100k -> A1 (GPIO2) -> 100k -> GND
+//   Push button     D2 (GPIO3) -> switch -> GND   (12 mm waterproof anti-vandal momentary in the side wall)
+//   Ring LED        D9 (GPIO8) -> 100R -> ring LED+ ; ring LED- -> GND   (only if the button has one)
+//
+// The button:  tap = start/stop recording.  Hold 2 s = three quick blinks, then the puck sleeps.
+//              Press when it's asleep = wakes up (a knock shorter than 0.3 s doesn't).
+//              Left still for 30 minutes off the pad and not recording = sleeps by itself (o turns that off).
+// The ring LED copies the status LED, and on the pad it breathes while charging and is solid when full.
 
 #include <Arduino.h>
 #include <Wire.h>
@@ -16,6 +23,8 @@
 #include <Preferences.h>
 #include <SparkFun_u-blox_GNSS_v3.h>
 #include <Adafruit_BNO08x.h>
+#include <esp_sleep.h>
+#include <driver/rtc_io.h>
 
 // ---------- pins ----------
 static const int PIN_GPS_RX = 44;   // D7: data from the GPS
@@ -25,6 +34,12 @@ static const int PIN_SCL = 6;       // D5
 static const int PIN_LED = 4;       // D3
 static const int PIN_BATT = 1;      // A0, through a 100k/100k divider
 static const int PIN_PAD = 2;       // A1, through a 100k/100k divider from the Qi receiver's 5 V
+static const int PIN_BTN = 3;       // D2, push button to GND (internal pull-up; an RTC pin, so it can wake the puck)
+static const int PIN_RING = 8;      // D9, the button's ring LED through 100R
+
+static const uint32_t HOLD_MS = 2000;        // hold this long to switch off
+static const uint32_t WAKE_HOLD_MS = 300;    // must still be pressed this long after waking, or it's a knock
+static const uint32_t AUTO_OFF_MS = 30UL * 60 * 1000;
 
 static const char *TRACK = "/track.csv";
 
@@ -51,6 +66,11 @@ float heel = 0, pitchDeg = 0;       // after zeroing and mounting corrections
 int puckNum = 1;
 float zeroRoll = 0, zeroPitch = 0;
 bool swapAxes = false, flipHeel = false;
+bool autoOff = true;
+
+// button and sleep
+bool onPad = false, battFull = false;
+uint32_t lastActive = 0;            // last movement, button press or command: the auto-off clock
 
 // recording
 bool recording = false, quiet = false;
@@ -88,6 +108,7 @@ static void savePrefs() {
   prefs.putFloat("zp", zeroPitch);
   prefs.putBool("swap", swapAxes);
   prefs.putBool("flip", flipHeel);
+  prefs.putBool("auto", autoOff);
 }
 
 // ---------- GPS ----------
@@ -202,10 +223,73 @@ static void dumpTrack() {
   quiet = wasQuiet;
 }
 
+// ---------- button, LEDs and sleep ----------
+static void leds(bool on) { digitalWrite(PIN_LED, on); analogWrite(PIN_RING, on ? 255 : 0); }   // the ring is always driven by PWM (breathing on the pad)
+
+static void blinkN(int n, uint32_t ms = 80) {
+  for (int i = 0; i < n; i++) { leds(true); delay(ms); leds(false); delay(ms); }
+}
+
+static void armWakeAndSleep() {
+  rtc_gpio_pullup_en((gpio_num_t)PIN_BTN);                                         // keep the button pulled up while asleep
+  rtc_gpio_pulldown_dis((gpio_num_t)PIN_BTN);
+  esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
+  esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_BTN, 0);                           // wake when the button is pressed (low)
+  esp_deep_sleep_start();
+}
+
+static void goToSleep(const char *why) {
+  if (recording) stopRecording();
+  Serial.printf("Sleeping (%s). Press the button to wake it.\n", why);
+  Serial.flush();
+  blinkN(3);
+  if (gpsOk) gnss.powerOffWithInterrupt(0, VAL_RXM_PMREQ_WAKEUPSOURCE_UARTRX);   // GPS to backup mode; our first bytes wake it
+  if (imuOk) bno.enableReport(SH2_GAME_ROTATION_VECTOR, 0);                       // IMU idle
+  delay(50);
+  analogWrite(PIN_RING, 0); pinMode(PIN_RING, INPUT);                              // ring LED off, pin floating
+  armWakeAndSleep();
+}
+
+// returns true once per short press (tap); switches off on a 2 s hold
+static bool pollButton() {
+  static bool down = false, held = false;
+  static uint32_t tDown = 0, tChange = 0;
+  const bool pressed = digitalRead(PIN_BTN) == LOW;
+  const uint32_t m = millis();
+  if (pressed != down && m - tChange > 30) {         // debounced edge
+    down = pressed; tChange = m; lastActive = m;
+    if (down) { tDown = m; held = false; }
+    else if (!held) return true;                      // released before the hold time: a tap
+  }
+  if (down && !held && m - tDown >= HOLD_MS) { held = true; goToSleep("button held"); }
+  return false;
+}
+
+// status LED and ring LED: slow blink = no fix, steady blink = fix, double blink = recording.
+// On the pad the ring breathes while charging and is solid when full.
+static void led() {
+  const uint32_t m = millis();
+  bool on;
+  if (recording) { const uint32_t p = m % 1000; on = p < 80 || (p > 200 && p < 280); }
+  else if (gps.fix >= 3) on = m % 1000 < 100;
+  else on = m % 2000 < 60;
+  digitalWrite(PIN_LED, on);
+  if (!onPad) analogWrite(PIN_RING, on ? 255 : 0);
+  else if (battFull) analogWrite(PIN_RING, 255);
+  else { const float ph = (m % 3000) / 3000.0f * 6.2832f; analogWrite(PIN_RING, (int)(8 + 120 * (1 - cosf(ph)))); }
+}
+
+static void checkPower() {                                 // once a second
+  const float batt = readMilliVolts(PIN_BATT), pad = readMilliVolts(PIN_PAD);
+  onPad = pad > 4000;
+  battFull = onPad && batt >= 4150;
+  if (gps.sogKn > 0.5f) lastActive = millis();
+  if (autoOff && !onPad && !recording && millis() - lastActive > AUTO_OFF_MS) goToSleep("still for 30 minutes");
+}
+
 // ---------- status ----------
 static void printStatus() {
-  const float batt = readMilliVolts(PIN_BATT), pad = readMilliVolts(PIN_PAD);
-  const bool onPad = pad > 4000;
+  const float batt = readMilliVolts(PIN_BATT);
   const char *chg = !onPad ? "off the pad" : batt >= 4150 ? "on the pad, full" : "on the pad, charging";
   const char *fixTxt[] = {"no fix", "dead reckoning", "2D fix", "3D fix", "GNSS+DR", "time only"};
   Serial.printf("GPS %s", gpsOk ? (gps.fix < 6 ? fixTxt[gps.fix] : "?") : "NOT FOUND");
@@ -232,7 +316,10 @@ static void help() {
     "  f      flip heel sign (heel should be + when tipped to starboard)\n"
     "  a      swap the heel and pitch axes (if tipping sideways shows as pitch)\n"
     "  p<N>   set the puck number, e.g. p3\n"
-    "  i      what was found at start-up\n\n", puckNum);
+    "  o      auto-off after 30 minutes still: on/off (now %s)\n"
+    "  x      sleep now (press the button to wake it)\n"
+    "  i      what was found at start-up\n"
+    "Button: tap = start/stop recording, hold 2 s = sleep, press = wake.\n\n", puckNum, autoOff ? "on" : "off");
 }
 
 static void report() {
@@ -241,13 +328,14 @@ static void report() {
   Serial.printf("IMU:     %s\n", imuOk ? "found (BNO085, game rotation vector at 50 Hz)" : "NOT FOUND. Check VIN/GND, SDA to D4, SCL to D5.");
   Serial.printf("Storage: %s", fsOk ? "ok, " : "NOT WORKING\n");
   if (fsOk) Serial.printf("%.1f MB free\n", (LittleFS.totalBytes() - LittleFS.usedBytes()) / 1048576.0);
-  Serial.printf("Settings: puck %d, zero roll %.1f pitch %.1f, axes %s, heel %s\n", puckNum, zeroRoll, zeroPitch, swapAxes ? "swapped" : "normal", flipHeel ? "flipped" : "normal");
+  Serial.printf("Settings: puck %d, zero roll %.1f pitch %.1f, axes %s, heel %s, auto-off %s\n", puckNum, zeroRoll, zeroPitch, swapAxes ? "swapped" : "normal", flipHeel ? "flipped" : "normal", autoOff ? "on" : "off");
 }
 
 static void command(String c) {
   c.trim();
   if (!c.length()) return;
   const char k = tolower(c[0]);
+  lastActive = millis();
   switch (k) {
     case 'h': help(); break;
     case 's': printStatus(); break;
@@ -259,39 +347,43 @@ static void command(String c) {
     case 'f': flipHeel = !flipHeel; savePrefs(); Serial.println(flipHeel ? "Heel sign flipped." : "Heel sign normal."); break;
     case 'a': swapAxes = !swapAxes; zeroRoll = zeroPitch = 0; savePrefs(); Serial.println("Axes swapped. Sit it level and type z."); break;
     case 'p': { int n = c.substring(1).toInt(); if (n >= 1 && n <= 99) { puckNum = n; savePrefs(); Serial.printf("This is now puck %d.\n", n); } else Serial.println("Use p then a number, e.g. p3"); } break;
+    case 'o': autoOff = !autoOff; savePrefs(); Serial.println(autoOff ? "Auto-off on: sleeps after 30 minutes still, off the pad, not recording." : "Auto-off off: stays awake until the button is held."); break;
+    case 'x': goToSleep("x typed"); break;
     case 'i': report(); break;
     default: Serial.println("Unknown command. Type h for help.");
   }
 }
 
-// ---------- LED: slow blink = no fix, steady blink = fix, double blink = recording ----------
-static void led() {
-  const uint32_t m = millis();
-  bool on;
-  if (recording) { const uint32_t p = m % 1000; on = p < 80 || (p > 200 && p < 280); }
-  else if (gps.fix >= 3) on = m % 1000 < 100;
-  else on = m % 2000 < 60;
-  digitalWrite(PIN_LED, on);
-}
-
 void setup() {
   pinMode(PIN_LED, OUTPUT);
-  digitalWrite(PIN_LED, HIGH);
+  pinMode(PIN_RING, OUTPUT);
+  rtc_gpio_deinit((gpio_num_t)PIN_BTN);               // back to a normal GPIO after deep sleep
+  pinMode(PIN_BTN, INPUT_PULLUP);
+  const bool woken = esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0;
+  if (woken) {
+    // a real press keeps the button down for a while; a knock lets go at once, so go straight back to sleep
+    const uint32_t t = millis();
+    while (digitalRead(PIN_BTN) == LOW && millis() - t < WAKE_HOLD_MS) delay(5);
+    if (millis() - t < WAKE_HOLD_MS) armWakeAndSleep();
+  }
+  leds(true);
   analogReadResolution(12);
   Serial.begin(115200);
   const uint32_t t = millis();
-  while (!Serial && millis() - t < 3000) delay(10);   // wait briefly for the USB serial monitor
+  while (!woken && !Serial && millis() - t < 3000) delay(10);   // wait briefly for the USB serial monitor (not after a button wake)
 
   prefs.begin("puck", false);
   puckNum = prefs.getInt("puck", 1);
   zeroRoll = prefs.getFloat("zr", 0); zeroPitch = prefs.getFloat("zp", 0);
   swapAxes = prefs.getBool("swap", false); flipHeel = prefs.getBool("flip", false);
+  autoOff = prefs.getBool("auto", true);
 
-  Serial.println("\nWakeBack bench test starting…");
+  Serial.println(woken ? "\nWakeBack bench test: woken by the button." : "\nWakeBack bench test starting…");
   fsOk = LittleFS.begin(true);
   gpsOk = startGps();
   imuOk = startImu();
-  digitalWrite(PIN_LED, LOW);
+  leds(false);
+  lastActive = millis();
   report();
   help();
 }
@@ -306,8 +398,9 @@ void loop() {
   }
   pollGps();
   pollImu();
+  if (pollButton()) { recording ? stopRecording() : startRecording(); }
   const uint32_t m = millis();
-  if (m - lastRate >= 1000) { gps.rateHz = gps.pvtThisSecond * 1000.0f / (m - lastRate); gps.pvtThisSecond = 0; lastRate = m; }
+  if (m - lastRate >= 1000) { gps.rateHz = gps.pvtThisSecond * 1000.0f / (m - lastRate); gps.pvtThisSecond = 0; lastRate = m; checkPower(); }
   if (recording && m - lastFlush >= 1000) { rec.flush(); lastFlush = m; }   // a flat battery or a swim loses a second, not the track
   if (!quiet && m - lastStatus >= 1000) { printStatus(); lastStatus = m; }
   led();

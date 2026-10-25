@@ -740,15 +740,22 @@ def puck_checkin():
     except ValueError: return jsonify(error='puck number missing'), 400
     if not 1 <= num <= 99: return jsonify(error='puck number out of range'), 400
     now = int(time.time() * 1000)
+    # a puck set up from the app sends its key: that says whose puck it is (stage 4)
+    key_row = accounts.touch_puck_key(request.headers.get('X-Puck-Key', ''), b.get('fw')) if accounts.ENABLED else None
+    owner = accounts.current_user() if key_row else None
     with lock:
         m = load_pucks(); r = m.setdefault(f'puck{num}', {})
         for k in ('battery_mv', 'free_kb', 'total_kb', 'pending', 'rssi'):
             if isinstance(b.get(k), (int, float)): r[k] = b[k]
         if b.get('charging') in ('charging', 'full', 'not'): r['charging'] = b['charging']
         if isinstance(b.get('fw'), str): r['fw'] = b['fw'][:16]
+        for k in ('orientation', 'mag', 'gps_fix', 'twist'):
+            if isinstance(b.get(k), (int, float, str)): r[k] = b[k]
         r['on_pad'] = bool(b.get('on_pad', True))
         r['last_seen'] = now
         if r['on_pad']: r['last_on_pad'] = now
+        if owner: r['owner'] = {'name': owner['name'], 'email': owner['email']}
+        elif request.headers.get('X-Puck-Key'): r.pop('owner', None)       # its key was revoked: nobody's puck until it's set up again
         save_pucks(m)
     # the puck uses this reply to set its clock before GPS lock and to know the dock heard it
     return jsonify(ok=True, time_ms=now)
@@ -778,8 +785,11 @@ def pucks():
             if not lu or (lu.get('session', '') < day) or (lu.get('session') == day and lu.get('time', 0) < mt and not os.path.exists(os.path.join(SESSIONS, lu['session'], lu.get('file', '')))):
                 r['last_upload'] = {'time': mt, 'session': day, 'file': fn, 'bytes': os.path.getsize(fp)}
     for n in range(1, FLEET + 1): m.setdefault(f'puck{n}', {})
+    keyed = accounts.puck_owners() if accounts.ENABLED else {}      # pucks with a live key: whose they are
     out = []
     for key, r in sorted(m.items(), key=lambda kv: int(kv[0][4:])):
+        num = int(key[4:])
+        if num in keyed: r['owner'] = {'name': keyed[num]['name'], 'email': keyed[num]['email']}
         seen = r.get('last_seen')
         docked = bool(r.get('on_pad')) and seen is not None and now - seen < ONLINE_SECS * 1000
         lu = r.get('last_upload')
@@ -788,6 +798,8 @@ def pucks():
             'battery_pct': pct_from_mv(r['battery_mv']) if 'battery_mv' in r else None, 'battery_mv': r.get('battery_mv'),
             'charging': r.get('charging') if docked else None,
             'free_kb': r.get('free_kb'), 'total_kb': r.get('total_kb'), 'fw': r.get('fw'), 'pending': r.get('pending'), 'rssi': r.get('rssi'),
+            'orientation': r.get('orientation'), 'mag': r.get('mag'), 'gps_fix': r.get('gps_fix'), 'twist': r.get('twist'),
+            'owner': (r.get('owner') or {}).get('name') or None,      # the owner's name only: emails stay on the server
             'last_upload': dict(lu, sailor=last_sailor(lu['session'], lu.get('file'))) if lu else None,
         })
     return jsonify(pucks=out, now=int(now))

@@ -39,6 +39,22 @@ class FriendLists {
   const FriendLists(this.friends, this.incoming, this.outgoing);
 }
 
+/// A puck key the server issued to you (the key itself is only in [IssuedPuckKey]).
+class PuckKeyInfo {
+  final int id, puck;
+  final String label, fw;
+  final int? created, lastSeen;
+  const PuckKeyInfo(this.id, this.puck, this.label, this.fw, this.created, this.lastSeen);
+  static PuckKeyInfo fromJson(Map<String, dynamic> j) => PuckKeyInfo((j['id'] as num?)?.toInt() ?? 0, (j['puck'] as num?)?.toInt() ?? 0,
+      '${j['label'] ?? ''}', '${j['fw'] ?? ''}', (j['created'] as num?)?.toInt(), (j['last_seen'] as num?)?.toInt());
+}
+
+class IssuedPuckKey {
+  final String key;
+  final PuckKeyInfo info;
+  const IssuedPuckKey(this.key, this.info);
+}
+
 /// Result of a sign-in or sign-up: either a token or "pending".
 class SignInResult {
   final String? token;
@@ -172,6 +188,21 @@ class AuthApi {
     final j = await _json(http.post(_u('/api/friends/request'), headers: _h, body: jsonEncode({'email': email})));
     return '${j['status']}';
   }
+
+  // ---- puck keys (roadmap stage 4): one per puck, tied to your account; the puck sends it with every upload
+
+  /// A new key for puck [puck]. Any earlier key you had for that number is revoked on the server.
+  Future<IssuedPuckKey> issuePuckKey(int puck, {String label = ''}) async {
+    final j = await _json(http.post(_u('/api/pucks/keys'), headers: _h, body: jsonEncode({'puck': puck, 'label': label})));
+    return IssuedPuckKey('${j['key']}', PuckKeyInfo.fromJson(j));
+  }
+
+  Future<List<PuckKeyInfo>> myPucks() async {
+    final j = await _json(http.get(_u('/api/pucks/keys'), headers: _h));
+    return ((j['pucks'] as List?) ?? const []).map((e) => PuckKeyInfo.fromJson((e as Map).cast<String, dynamic>())).toList();
+  }
+
+  Future<void> revokePuckKey(int id) => _json(http.delete(_u('/api/pucks/keys/$id'), headers: _h));
 
   Future<void> acceptFriend(int id) => _json(http.post(_u('/api/friends/$id/accept'), headers: _h));
   Future<void> declineFriend(int id) => _json(http.post(_u('/api/friends/$id/decline'), headers: _h));
