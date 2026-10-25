@@ -976,7 +976,7 @@ class DockStore {
     return j.map((k, v) => MapEntry('$k', v is Map ? v.cast<String, dynamic>() : <String, dynamic>{}));
   }
 
-  static const int onlineSecs = 90; // a docked puck checks in every ~30 s; three missed = gone
+  static const int onlineSecs = 180; // a docked puck checks in about once a minute; three missed = gone
 
   // ---- POST /api/pucks/checkin
   Future<Map<String, dynamic>> checkin(Object? body) async {

@@ -169,7 +169,8 @@ static void webStart(); static void webStop(); static void pollButton();
 bool appPendingVerify = false;
 
 // how often to try the dock, by situation
-static const uint32_t PAD_RETRY_MS = 30000;              // on the pad, dock seen recently: half a minute
+static const uint32_t PAD_RETRY_MS = 60000;              // on the pad, dock seen recently: once a minute (radio off in between, so the pad can actually charge it)
+static const uint32_t PAD_GPS_NAP_MS = 60000;            // on the pad for this long = indoors on the charger: GPS to standby until it's lifted
 static const uint32_t PAD_RETRY_SLOW_MS = 2UL * 60 * 1000;   // on the pad, dock not seen for a while: two minutes
 static const uint32_t PAD_RECENT_MS = 10UL * 60 * 1000;  // "seen recently" = a join worked in the last ten minutes
 static const uint32_t AFTER_SAIL_RETRY_MS = 60000, AFTER_SAIL_FOR_MS = 15UL * 60 * 1000;   // tracks waiting: every minute for 15 min after a sail, then OFFPAD_RETRY_MS
@@ -281,8 +282,26 @@ static bool startGps() {
   return true;
 }
 
+// On the pad the GPS is pointless (it's on a charger indoors) and it's the biggest draw after WiFi: with
+// everything running the Qi pad could barely keep up and the battery didn't gain. So after a minute on the
+// pad the GPS goes to standby, and any byte on its UART wakes it the moment the puck is lifted off.
+bool gpsNapping = false;
+static void gpsNap() {
+  if (!gpsOk || gpsNapping) return;
+  gnss.powerOffWithInterrupt(0, VAL_RXM_PMREQ_WAKEUPSOURCE_UARTRX);
+  gpsNapping = true; gps.fix = 0; gps.sats = 0; gps.sogKn = 0;
+  Serial.println("GPS resting while on the pad.");
+}
+static void gpsWake() {
+  if (!gpsOk || !gpsNapping) return;
+  Serial1.write(0xFF); delay(100);           // any byte wakes it; its settings are kept in RAM
+  gnss.setNavigationFrequency(10);
+  gpsNapping = false;
+  Serial.println("GPS awake.");
+}
+
 static void pollGps() {
-  if (!gpsOk || !gnss.getPVT()) return;
+  if (!gpsOk || gpsNapping || !gnss.getPVT()) return;
   gps.fix = gnss.getFixType();
   gps.sats = gnss.getSIV();
   gps.lat = gnss.getLatitude();
@@ -778,8 +797,9 @@ static void wifiTick() {
   }
   // the key was refused: radio off, and leave the dock alone for a while (dockRefusedKey set lastOffPadTry)
   if (dockRefused) { wifiOff(); wantLiftCheckin = false; return; }
-  // off the pad with nothing left to say: let the radio go
-  if (!onPad && !wantLiftCheckin && pendingCount() == 0) wifiOff();
+  // nothing left to say: let the radio go. On the pad that's most of the time: a check-in a minute with the
+  // radio off in between leaves the pad's few hundred mA for charging.
+  if (!wantLiftCheckin && pendingCount() == 0 && !uploading) wifiOff();
 }
 
 // ---------- the web page and its API ----------
@@ -936,11 +956,13 @@ static void everySecond() {
     const bool moving = gps.fix >= 2 && gps.sogKn > STILL_KN;
     if (tilted || moving) padLastMv = 0; else padNow = true;
   } else padLastMv = 0;
+  static uint32_t padSince = 0;
   if (padNow != onPad) {
-    onPad = padNow; lastActive = millis();
+    onPad = padNow; lastActive = millis(); padSince = millis();
     if (onPad) { if (recording) stopRecording("on the pad"); }
-    else { wantLiftCheckin = wmode == W_DOCK && dockOk; haveRest = false; stillSince = 0; }
+    else { gpsWake(); wantLiftCheckin = lastJoinOk && millis() - lastJoinOk < PAD_RECENT_MS; haveRest = false; stillSince = 0; }
   }
+  if (onPad && !gpsNapping && !recording && millis() - padSince > PAD_GPS_NAP_MS) gpsNap();
   battFull = onPad && battMv >= 4150;
 
   // on a USB lead (the bench): put the setup WiFi up without being asked, once per plug-in

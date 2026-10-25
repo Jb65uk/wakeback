@@ -141,7 +141,7 @@ With accounts on, every route below except `/api/hello` and `/api/pucks/checkin`
 | GET | `/api/auth/me` | `{accounts, user, friends, pending_in, pending_out}` |
 | GET / POST / DELETE | `/api/friends`, `/api/friends/request`, `/api/friends/<id>/accept`, `/decline`, `/api/friends/<id>` | friends |
 | GET / POST / DELETE | `/api/pucks/keys`, `/api/pucks/keys/<id>` | your puck keys: issue one for puck N (shown once), revoke one |
-| POST | `/api/pucks/checkin` | puck check-in every ~30 s on the pad: `{"puck":3,"battery_mv":4012,"charging":"charging"/"full"/"not","on_pad":true,"free_kb":12000,"total_kb":14336,"fw":"0.3.1","pending":1}` (+ `X-Puck-Key` header); reply carries dock time |
+| POST | `/api/pucks/checkin` | puck check-in about once a minute on the pad: `{"puck":3,"battery_mv":4012,"charging":"charging"/"full"/"not","on_pad":true,"free_kb":12000,"total_kb":14336,"fw":"0.3.1","pending":1}` (+ `X-Puck-Key` header); reply carries dock time |
 | GET | `/api/pucks` | every puck's status for the Dock page (last uploads only from tracks you can see) |
 | GET | `/api/dock/status` | internet, disk, clock, uptime, `can_manage_wifi` |
 | GET / POST | `/api/wifi/scan`, `/api/wifi/connect` | find and join a WiFi network (a Pi with NetworkManager; admin only with accounts on) |
@@ -182,7 +182,7 @@ Same server. Set the Pi up as a WiFi access point (`wakeback`, no internet neede
 
 Agreed, not built yet. Roughly in the order they'd make sense. The bigger direction (your own puck and phone, friends, events) is in `docs/ROADMAP.md`.
 
-1. **Puck firmware** (ESP32-S3): 10 Hz GPS + IMU logging to the CSV format above, auto start/stop (see below), Dock check-in every ~30 s on the pad (and one as it's lifted off), upload to `/api/upload` when on the pad. The dock is found at the WiFi gateway, port 5000 — the Pi on its own WiFi, or a phone running the app on its hotspot (`docs/PHONE_DOCK.md`).
+1. **Puck firmware** (ESP32-S3): 10 Hz GPS + IMU logging to the CSV format above, auto start/stop (see below), Dock check-in about once a minute on the pad (and one as it's lifted off), upload to `/api/upload` when on the pad. The dock is found at the WiFi gateway, port 5000 — the Pi on its own WiFi, or a phone running the app on its hotspot (`docs/PHONE_DOCK.md`).
    - **Auto on/off:** asleep on the pad (never records there). Lifted → IMU wakes it → GPS fix. Records after >1.5 kn for 20 s; stops after ~10 min still, then sleeps.
    - **Travel-proof:** (a) over ~25 kn for a minute = not sailing, stop and discard; (b) needs boat-like heel/pitch rocking, not car motion; (c) only records near known venues (Southport + clubs added on the dock; dock asks "new venue?" first time somewhere new); (d) travel mode, set by triple-tap or from the dock page, sleeps until next put on a pad (use for long trips and flying).
    - Dock double-checks on upload and drops anything with road speeds or no boat motion.

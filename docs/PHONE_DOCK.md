@@ -16,7 +16,7 @@ Firmware flow when on the pad (unchanged, just the address lookup):
 1. Join SSID `wakeback` (password in NVS).
 2. `GET http://<gateway>:5000/api/hello` → `{"dock":"wakeback","time_ms":…}` confirms it's a dock
    (and sets the clock if there's no GPS time yet). No reply → try again later.
-3. `POST /api/pucks/checkin` every ~30 s (and once as it's lifted off the pad), header `X-Puck-Key` when a
+3. `POST /api/pucks/checkin` about once a minute (and once as it's lifted off the pad), header `X-Puck-Key` when a
    key is set. The JSON body (from `firmware/puck/src/main.cpp` `checkin()`): `puck` (number), `battery_mv`,
    `charging` (`"not"` / `"charging"` / `"full"`), `on_pad`, `free_kb`, `total_kb`, `fw`, `pending` (tracks
    waiting), `rssi`, `recording`, `orientation` (`"deck"` / `"thwart"` / `"unknown"`), `twist` (degrees),
