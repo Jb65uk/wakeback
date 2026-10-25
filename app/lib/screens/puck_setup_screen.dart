@@ -12,6 +12,7 @@ import 'package:flutter/services.dart';
 import '../app_state.dart';
 import '../puck/puck_wifi.dart';
 import '../widgets/common.dart';
+import 'guide_screen.dart';
 import 'welcome_screen.dart';
 
 class PuckSetupScreen extends StatefulWidget {
@@ -206,7 +207,13 @@ class _PuckSetupScreenState extends State<PuckSetupScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(widget.puck == null ? 'Set up a puck' : 'Set up puck ${widget.puck} again')),
+      appBar: AppBar(title: Text(widget.puck == null ? 'Set up a puck' : 'Set up puck ${widget.puck} again'), actions: [
+        IconButton(
+          tooltip: 'Guide',
+          icon: const Icon(Icons.help_outline),
+          onPressed: () => Navigator.push(context, MaterialPageRoute<void>(builder: (_) => const GuideScreen(open: GuideTopic.puck))),
+        ),
+      ]),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
         children: switch (_stage) {

@@ -14,6 +14,7 @@ import '../record/recorder.dart';
 import '../widgets/boats.dart';
 import '../widgets/common.dart';
 import 'friends_section.dart';
+import 'guide_screen.dart';
 import 'offline_maps.dart';
 import 'pucks_card.dart';
 import 'update_card.dart';
@@ -130,6 +131,16 @@ class _SetupScreenState extends State<SetupScreen> {
           const OfflineMapsCard(),
 
           // ------------------------------------------------ about / updates
+          const SectionLabel('Help'),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.menu_book_outlined),
+              title: const Text('Guide'),
+              subtitle: const Text('Setting up, the button and the light, a sailing day, what to do when it\'s not working'),
+              isThreeLine: true,
+              onTap: () => Navigator.push(context, MaterialPageRoute<void>(builder: (_) => const GuideScreen())),
+            ),
+          ),
           const SectionLabel('About'),
           const AboutCard(),
 

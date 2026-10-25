@@ -9,6 +9,7 @@ import '../app_state.dart';
 import '../puck/puck_wifi.dart';
 import '../updates.dart';
 import '../widgets/common.dart';
+import 'guide_screen.dart';
 import 'web_page.dart';
 
 class PuckScreen extends StatefulWidget {
@@ -168,7 +169,13 @@ class _PuckScreenState extends State<PuckScreen> {
     final fw = st?.fw.isNotEmpty == true ? st!.fw : p.fw;
     final canUpdate = _latest != null && (fw.isEmpty || _latest!.newerThan(fw));
     return Scaffold(
-      appBar: AppBar(title: Text('Puck ${p.puck}')),
+      appBar: AppBar(title: Text('Puck ${p.puck}'), actions: [
+        IconButton(
+          tooltip: 'Guide',
+          icon: const Icon(Icons.help_outline),
+          onPressed: () => Navigator.push(context, MaterialPageRoute<void>(builder: (_) => const GuideScreen(open: GuideTopic.button))),
+        ),
+      ]),
       body: ListView(padding: const EdgeInsets.fromLTRB(12, 4, 12, 24), children: [
         Card(
           child: Padding(
