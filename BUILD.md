@@ -138,7 +138,7 @@ If the pad doesn't start: centre the coil, and try another pad. Some are fussy w
 2. Unplug USB, put the breadboard in a food box, and go for a walk, a bike ride, or better, a sail. It records whenever it has a fix, and stops by itself after 10 minutes still (or tap again).
 3. Back home: hold the button 6 s for the setup WiFi (or plug in USB), join `wakeback-puck-1` on your phone, and **download** the track from the Tracks card on http://192.168.4.1/. Drop it on the viewer. Once the dock or the app is set up this step goes away: the puck uploads by itself.
 
-About 4.5 hours of sailing fits in the 4.4 MB track store (5 points a second while moving, about 54 bytes a point).
+About 18 hours of sailing fits in the 4.4 MB track store (5 points a second while moving, about 12 bytes a point in the puck's compact format; it uploads as plain CSV).
 
 ## Stage 8: on the boat
 

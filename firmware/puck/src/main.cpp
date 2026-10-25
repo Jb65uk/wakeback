@@ -34,6 +34,7 @@
 #include <driver/rtc_io.h>
 #include "page.h"
 #include "ble.h"
+#include "track.h"
 
 #ifndef WB_FW_VERSION
 #define WB_FW_VERSION "dev"
@@ -69,7 +70,7 @@ static const uint32_t CHECKIN_MS = 30000;
 static const uint32_t OFFPAD_RETRY_MS = 5UL * 60 * 1000, OFFPAD_TRY_FOR_MS = 25000;   // off the pad with tracks waiting: short tries
 static const uint32_t FW_CHECK_MS = 60UL * 60 * 1000;
 static const uint32_t FLASH_RESERVE = 96 * 1024;             // stop writing when this little is left
-static const int      REC_HZ = 5;                            // points a second while moving (1 while still): plenty for a dinghy, about 4.5 h of sailing in 4.5 MB
+static const int      REC_HZ = 5;                            // points a second while moving (1 while still): plenty for a dinghy; in the compact format about 18 h of sailing fits in 4.5 MB
 
 static const char *TRK_DIR = "/trk";
 static const int DOCK_PORT = 5000;
@@ -197,8 +198,10 @@ uint32_t recStarted = 0, recLines = 0, lastPointMs = 0, lastFlush = 0;
 bool haveRest = false; int32_t restLat = 0, restLon = 0; uint32_t stillSince = 0, movingSince = 0;
 int32_t moveLat = 0, moveLon = 0; uint32_t lastMoveMs = 0;
 // the minute before the boat moved off, so the start isn't lost
-static const size_t PRE_BYTES = 40 * 1024;
-char *pre = nullptr; size_t preHead = 0, preLen = 0;
+// The minute before the boat moved off: a ring of the latest points, encoded into the file when a track starts
+static const int PRE_POINTS = 400;                   // 80 s at 5 Hz
+TrackPoint *pre = nullptr; int preHead = 0, preLen = 0;
+TrackWriter trk;                                     // the open track's encoder
 
 // ---------- small helpers ----------
 static int64_t daysFromCivil(int y, unsigned m, unsigned d) {   // Howard Hinnant's algorithm
@@ -418,23 +421,19 @@ static void learnMounting() {
 }
 
 // ---------- recording ----------
-static void preAdd(const char *line, int n) {       // ring buffer of the latest points
+static void preAdd(const TrackPoint &p) {
   if (!pre) return;
-  for (int i = 0; i < n; i++) { pre[preHead] = line[i]; preHead = (preHead + 1) % PRE_BYTES; if (preLen < PRE_BYTES) preLen++; }
+  pre[preHead] = p; preHead = (preHead + 1) % PRE_POINTS; if (preLen < PRE_POINTS) preLen++;
 }
-static void preDrain(File &f) {                      // write out the ring from the first whole line
-  if (!pre || !preLen) return;
-  size_t start = (preHead + PRE_BYTES - preLen) % PRE_BYTES;
-  if (preLen == PRE_BYTES) {                         // the oldest line is probably cut: skip to the next newline
-    while (preLen && pre[start] != '\n') { start = (start + 1) % PRE_BYTES; preLen--; }
-    if (preLen) { start = (start + 1) % PRE_BYTES; preLen--; }
-  }
-  while (preLen) {
-    const size_t chunk = min(preLen, PRE_BYTES - start);
-    f.write((const uint8_t *)pre + start, chunk);
-    start = (start + chunk) % PRE_BYTES; preLen -= chunk;
+static size_t preDrain(File &f) {                    // encode the ring into the new file, oldest first
+  size_t wrote = 0;
+  if (pre) {
+    int i = (preHead + PRE_POINTS - preLen) % PRE_POINTS;
+    uint8_t b[25];
+    for (int k = 0; k < preLen; k++) { const int n = trk.encode(pre[i], b); f.write(b, n); wrote += n; i = (i + 1) % PRE_POINTS; }
   }
   preLen = 0; preHead = 0;
+  return wrote;
 }
 
 static void startRecording(bool manual) {
@@ -445,13 +444,16 @@ static void startRecording(bool manual) {
   if (t) {
     int y; unsigned mo, d; civilFromDays((int64_t)(t / 1000 / 86400), y, mo, d);
     const uint32_t s = (uint32_t)((t / 1000) % 86400);
-    snprintf(name, sizeof name, "%s/puck%d_%04d%02u%02u_%02lu%02lu%02lu.csv", TRK_DIR, S.puck, y, mo, d,
+    snprintf(name, sizeof name, "%s/puck%d_%04d%02u%02u_%02lu%02lu%02lu.wbt", TRK_DIR, S.puck, y, mo, d,
              (unsigned long)(s / 3600), (unsigned long)(s / 60 % 60), (unsigned long)(s % 60));
-  } else snprintf(name, sizeof name, "%s/puck%d_notime_%lu.csv", TRK_DIR, S.puck, (unsigned long)(millis() / 1000));
+  } else snprintf(name, sizeof name, "%s/puck%d_notime_%lu.wbt", TRK_DIR, S.puck, (unsigned long)(millis() / 1000));
   rec = LittleFS.open(name, FILE_WRITE);
   if (!rec) { Serial.println("Couldn't create the track file."); return; }
-  rec.print("t_ms,lat,lon,sog_kn,hdg,heel,pitch\n");
-  if (!manual) preDrain(rec); else { preLen = 0; preHead = 0; }
+  uint8_t h[8]; wbtHeader(h, S.puck); rec.write(h, 8);
+  trk.reset();
+  size_t preBytes = 0;
+  if (!manual) preBytes = preDrain(rec); else { preLen = 0; preHead = 0; }
+  fsUnmeasured += 8 + preBytes;
   recName = String(name).substring(strlen(TRK_DIR) + 1);
   recording = true; recStarted = millis(); recLines = 0; lastFlush = millis();
   countTracks();
@@ -478,17 +480,16 @@ static void onFix() {
   const uint32_t gap = moving ? 1000 / REC_HZ : 1000;
   if (gps.fix >= 2 && t && (m - lastPointMs >= gap - 5)) {
     lastPointMs = m;
-    char line[112];
-    const int n = snprintf(line, sizeof line, "%llu,%.7f,%.7f,%.2f,%.0f,%.1f,%.1f\n",
-                           (unsigned long long)t, gps.lat / 1e7, gps.lon / 1e7, gps.sogKn, gps.cogDeg, imu.heel, imu.pitch);
+    const TrackPoint pt = {t, gps.lat, gps.lon, gps.sogKn, gps.cogDeg, imu.heel, imu.pitch};
     if (recording) {
-      if (rec.write((const uint8_t *)line, n) != (size_t)n) { Serial.println("!! Flash full, recording stopped."); flashFull = true; stopRecording("flash full"); }
+      uint8_t b[25]; const int n = trk.encode(pt, b);
+      if (rec.write(b, n) != (size_t)n) { Serial.println("!! Flash full, recording stopped."); flashFull = true; stopRecording("flash full"); }
       else {
         recLines++; fsUnmeasured += n;
         // the free-space figure is measured every 10 s by everySecond (walking the flash is slow); between times, estimate from what's been written
         if (m - lastFlush > 5000) { rec.flush(); lastFlush = m; if (fsFree < fsUnmeasured + FLASH_RESERVE) { flashFull = true; stopRecording("flash full"); } }
       }
-    } else preAdd(line, n);
+    } else preAdd(pt);
   }
 
   // movement from rest
@@ -671,27 +672,37 @@ static bool checkin() {
 }
 
 // multipart POST of one track straight from flash; true when the dock said ok
+static String csvName(const String &name) { return name.endsWith(".wbt") ? name.substring(0, name.length() - 4) + ".csv" : name; }
+
 static bool uploadFile(const String &name) {
+  const bool wbt = name.endsWith(".wbt");
   File f = LittleFS.open(trackPath(name), FILE_READ);
   if (!f) return false;
+  const size_t bodyLen = wbt ? wbtCsvLength(trackPath(name)) : f.size();   // the dock gets CSV either way
+  if (!bodyLen) { f.close(); return false; }
   WiFiClient c; c.setTimeout(10);
   if (!c.connect(WiFi.gatewayIP(), DOCK_PORT)) { f.close(); return false; }
   const char *BOUNDARY = "----WakeBackPuck";
   char puckField[16]; snprintf(puckField, sizeof puckField, "puck%d", S.puck);
   String head = String("--") + BOUNDARY + "\r\nContent-Disposition: form-data; name=\"puck\"\r\n\r\n" + puckField + "\r\n--" + BOUNDARY +
-                "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"" + name + "\"\r\nContent-Type: text/csv\r\n\r\n";
+                "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"" + csvName(name) + "\"\r\nContent-Type: text/csv\r\n\r\n";
   String tail = String("\r\n--") + BOUNDARY + "--\r\n";
-  const size_t len = head.length() + f.size() + tail.length();
+  const size_t len = head.length() + bodyLen + tail.length();
   c.printf("POST /api/upload HTTP/1.1\r\nHost: %s:%d\r\nConnection: close\r\nContent-Type: multipart/form-data; boundary=%s\r\n",
            WiFi.gatewayIP().toString().c_str(), DOCK_PORT, BOUNDARY);
   if (S.key.length()) c.printf("X-Puck-Key: %s\r\n", S.key.c_str());
   c.printf("Content-Length: %u\r\n\r\n", (unsigned)len);
   c.print(head);
-  uint8_t buf[1024]; size_t n;
   // the button and the LED keep working while a big track streams out, so a 2 s hold still sends it to sleep
   // (GPS isn't polled here: the fix handler could open or close a track file while this one is being read)
-  while ((n = f.read(buf, sizeof buf)) > 0) { if (c.write(buf, n) != n) { f.close(); c.stop(); return false; } pollButton(); led(); }
-  f.close();
+  if (wbt) {
+    f.close();
+    if (!wbtStreamCsv(trackPath(name), c, [] { pollButton(); led(); })) { c.stop(); return false; }
+  } else {
+    uint8_t buf[1024]; size_t n;
+    while ((n = f.read(buf, sizeof buf)) > 0) { if (c.write(buf, n) != n) { f.close(); c.stop(); return false; } pollButton(); led(); }
+    f.close();
+  }
   c.print(tail);
   const uint32_t t0 = millis(); String status, body; bool inBody = false;
   while (c.connected() || c.available()) {
@@ -839,7 +850,7 @@ static String statusJson() {
   bool first = true;
   forEachTrack([&](const String &name, size_t size) {
     if (!first) j += ','; first = false;
-    j += "{\"name\":\"" + jsonStr(name) + "\",\"kb\":" + String((unsigned)(size / 1024)) + ",\"open\":" + B(recording && name == recName) + "}";
+    j += "{\"name\":\"" + jsonStr(csvName(name)) + "\",\"kb\":" + String((unsigned)(size / 1024)) + ",\"open\":" + B(recording && name == recName) + "}";
   });
   j += "]}";
   return j;
@@ -931,6 +942,7 @@ static void startWeb() {
   });
   web.on("/api/tracks/delete", HTTP_POST, [] {
     String n = web.arg("name"); if (n.indexOf('/') >= 0 || n.indexOf("..") >= 0 || !n.length()) { web.send(400, "text/plain", "bad name"); return; }
+    if (n.endsWith(".csv") && !LittleFS.exists(trackPath(n))) n = n.substring(0, n.length() - 4) + ".wbt";
     if (recording && n == recName) stopRecording("deleted from the page");
     LittleFS.remove(trackPath(n)); countTracks(); measureFs(); flashFull = fsFree < FLASH_RESERVE; okMsg("Deleted.");
   });
@@ -963,9 +975,17 @@ static void startWeb() {
     const String u = web.uri();
     if (u.startsWith("/tracks/")) {
       String n = u.substring(8); if (n.indexOf("..") >= 0) { web.send(400, "text/plain", "bad name"); return; }
+      if (n.endsWith(".csv") && !LittleFS.exists(trackPath(n))) n = n.substring(0, n.length() - 4) + ".wbt";   // the page shows .csv names
       File f = LittleFS.open(trackPath(n), FILE_READ);
       if (!f) { web.send(404, "text/plain", "no such track"); return; }
-      web.sendHeader("Content-Disposition", "attachment; filename=\"" + n + "\"");
+      web.sendHeader("Content-Disposition", "attachment; filename=\"" + csvName(n) + "\"");
+      if (n.endsWith(".wbt")) {
+        const size_t len = wbtCsvLength(trackPath(n)); f.close();
+        web.setContentLength(len); web.send(200, "text/csv", "");
+        WiFiClient cl = web.client();
+        wbtStreamCsv(trackPath(n), cl, [] {});
+        return;
+      }
       web.streamFile(f, "text/csv"); f.close(); return;
     }
     web.send(404, "text/plain", "not found");
@@ -1114,7 +1134,7 @@ void setup() {
   while (!woken && !Serial && millis() - t < 2500) delay(10);
 
   loadSettings();
-  pre = (char *)malloc(PRE_BYTES);
+  pre = (TrackPoint *)malloc(sizeof(TrackPoint) * PRE_POINTS);
   Serial.printf("\nWakeBack puck %d, firmware %s%s\n", S.puck, FW, woken ? " (woken)" : "");
   fsOk = LittleFS.begin(true);
   if (fsOk && !LittleFS.exists(TRK_DIR)) LittleFS.mkdir(TRK_DIR);
