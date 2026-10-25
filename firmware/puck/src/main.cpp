@@ -58,6 +58,9 @@ static const uint32_t HOLD_SLEEP_MS = 2000, HOLD_SETUP_MS = 6000, WAKE_HOLD_MS =
 static const uint32_t AUTO_OFF_MS = 30UL * 60 * 1000;
 static const uint32_t SETUP_IDLE_MS = 10UL * 60 * 1000;      // leave setup mode after this long with no page open
 static const float    STILL_KN = 0.5f;                       // below this the boat counts as still
+static const uint32_t PAD_HOLD_MS = 2UL * 60 * 60 * 1000;    // still "on the pad" this long after the Qi 5 V drops (full battery, pad in standby)
+static const uint32_t PAD_HOLD_NO_IMU_MS = 10UL * 60 * 1000; // ...or this long if there's no IMU to tell us it was picked up
+static const float    PAD_TILT_DEG = 8.0f;                   // tilted this much from how it lay on the pad = picked up
 static const uint32_t STILL_FOR_MS = 20000;                  // still this long = "at rest", the start point is remembered
 static const float    START_M = 30;                          // moved this far from rest = sailing, start recording
 static const float    MOVE_M = 20;                           // while recording, must move this far every...
@@ -833,7 +836,19 @@ static void pollButton() {
 static void everySecond() {
   gps.rateHz = gps.pvtThisSecond; gps.pvtThisSecond = 0;
   battMv = readMilliVolts(PIN_BATT);
-  const bool padNow = readMilliVolts(PIN_PAD) > 4000;
+  // On the pad = 5 V from the Qi receiver. But once the battery is full the charger stops drawing and most Qi
+  // pads drop into standby (LED blinking), so the 5 V goes away while the puck is still sitting there. Keep
+  // "on the pad" until it's actually picked up: a tilt from how it lay when the 5 V was last seen, GPS
+  // movement, or two hours (ten minutes with no IMU), whichever comes first.
+  const bool padMv = readMilliVolts(PIN_PAD) > 4000;
+  static uint32_t padLastMv = 0; static float padHeel = 0, padPitch = 0;
+  bool padNow = padMv;
+  if (padMv) { padLastMv = millis(); padHeel = imu.heel; padPitch = imu.pitch; }
+  else if (padLastMv && millis() - padLastMv < (imuOk ? PAD_HOLD_MS : PAD_HOLD_NO_IMU_MS)) {
+    const bool tilted = imuOk && (fabsf(imu.heel - padHeel) > PAD_TILT_DEG || fabsf(imu.pitch - padPitch) > PAD_TILT_DEG);
+    const bool moving = gps.fix >= 2 && gps.sogKn > STILL_KN;
+    if (tilted || moving) padLastMv = 0; else padNow = true;
+  } else padLastMv = 0;
   if (padNow != onPad) {
     onPad = padNow; lastActive = millis();
     if (onPad) { if (recording) stopRecording("on the pad"); }
