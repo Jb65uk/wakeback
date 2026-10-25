@@ -125,6 +125,22 @@ class PuckApi {
   /// Leave setup mode now (the puck turns its WiFi off and goes looking for the hotspot/dock).
   Future<void> done() => _post('/api/setup/done', const {});
 
+  /// Push a firmware image (puck.bin). The puck writes it and restarts; a bad image rolls back by itself.
+  Future<void> flash(List<int> bin, {void Function(double)? progress}) async {
+    final req = http.MultipartRequest('POST', Uri.parse('$base/update'))
+      ..files.add(http.MultipartFile.fromBytes('firmware', bin, filename: 'puck.bin'));
+    http.StreamedResponse res;
+    try {
+      res = await req.send().timeout(const Duration(minutes: 3));
+    } on TimeoutException {
+      throw const PuckException('The puck didn\'t finish taking the update. Are you still on its WiFi?');
+    } catch (e) {
+      throw PuckException('Couldn\'t send the update: $e');
+    }
+    final body = await res.stream.bytesToString();
+    if (res.statusCode != 200 || !body.contains('written')) throw PuckException(body.isEmpty ? 'The puck refused the update (HTTP ${res.statusCode})' : body);
+  }
+
   Future<void> _post(String path, Map<String, String> form) async {
     http.Response r;
     try {
@@ -135,5 +151,51 @@ class PuckApi {
       throw PuckException('Can\'t reach the puck: $e');
     }
     if (r.statusCode != 200) throw PuckException('The puck said no (HTTP ${r.statusCode})');
+  }
+}
+
+/// How to get at a puck right now: over the hotspot if it's on the pad and checked in, else its setup WiFi.
+class PuckReach {
+  final String base; // http://host
+  final bool viaSetupWifi;
+  const PuckReach(this.base, this.viaSetupWifi);
+
+  /// The puck's address on the hotspot, from the phone dock's last check-in (null if not docked now).
+  static Future<String?> hotspotAddress(int puck) async {
+    try {
+      final r = await http.get(Uri.parse('http://127.0.0.1:${PuckReach.dockPort}/api/pucks')).timeout(const Duration(seconds: 4));
+      if (r.statusCode != 200) return null;
+      final j = (jsonDecode(utf8.decode(r.bodyBytes)) as Map).cast<String, dynamic>();
+      for (final p in (j['pucks'] as List? ?? const [])) {
+        if (p is Map && (p['puck'] as num?)?.toInt() == puck && p['docked'] == true && p['ip'] is String && (p['ip'] as String).isNotEmpty) {
+          return 'http://${p['ip']}';
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  static int dockPort = 5000;
+
+  /// Hotspot first (no buttons to hold), then the puck's own WiFi (the user is told to hold the button).
+  /// [onStep] gets a line to show while it works.
+  static Future<PuckReach> find(int puck, {void Function(String)? onStep}) async {
+    onStep?.call('Looking for puck $puck on the hotspot…');
+    final addr = await hotspotAddress(puck);
+    if (addr != null) {
+      try {
+        final st = await PuckApi(addr).status();
+        if (st.isPuck) return PuckReach(addr, false);
+      } catch (_) {}
+    }
+    onStep?.call('Not on the hotspot. Hold the puck\'s button 6 s (five quick blinks), then tap Connect when your phone asks…');
+    await PuckWifi.join();
+    final st = await PuckApi().status();
+    if (!st.isPuck) throw const PuckException('That network isn\'t a WakeBack puck.');
+    return const PuckReach('http://192.168.4.1', true);
+  }
+
+  Future<void> release() async {
+    if (viaSetupWifi) await PuckWifi.leave();
   }
 }

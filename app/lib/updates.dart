@@ -10,7 +10,9 @@ import 'package:open_filex/open_filex.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 
-const kReleasesApi = 'https://api.github.com/repos/Jb65uk/wakeback/releases/latest';
+// The repo publishes app (app-N) and puck firmware (puck-N) releases, so "latest" could be either: list them
+// and pick the newest of the kind wanted.
+const kReleasesApi = 'https://api.github.com/repos/Jb65uk/wakeback/releases?per_page=20';
 const kReleasesPage = 'https://github.com/Jb65uk/wakeback/releases';
 
 class AppUpdate {
@@ -51,10 +53,9 @@ class Updates {
 
   static const _offline = 'Couldn\'t reach GitHub — try on WiFi with internet, or mobile data.';
 
-  /// The newest build on GitHub, or null if it's not newer than this one. Throws a plain Exception, in
-  /// words for the sailor, when GitHub can't be reached or says no.
-  Future<AppUpdate?> check() async {
-    await _info();
+  /// The releases list from GitHub, newest first. Throws a plain Exception, in words for the sailor,
+  /// when GitHub can't be reached or says no.
+  Future<List<Map<String, dynamic>>> _releases() async {
     http.Response r;
     try {
       r = await http.get(Uri.parse(kReleasesApi), headers: {'Accept': 'application/vnd.github+json', 'User-Agent': 'WakeBack-app'}).timeout(const Duration(seconds: 15));
@@ -67,7 +68,29 @@ class Updates {
     }
     if (r.statusCode == 403) throw Exception('GitHub is rate-limiting update checks; try again later.');
     if (r.statusCode != 200) throw Exception('GitHub said HTTP ${r.statusCode}');
-    final j = (jsonDecode(utf8.decode(r.bodyBytes)) as Map).cast<String, dynamic>();
+    return ((jsonDecode(utf8.decode(r.bodyBytes)) as List?) ?? const []).whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
+  }
+
+  Map<String, dynamic>? _newest(List<Map<String, dynamic>> rels, String prefix) {
+    Map<String, dynamic>? best;
+    var bestN = -1;
+    for (final j in rels) {
+      final tag = '${j['tag_name'] ?? ''}';
+      if (!tag.startsWith(prefix) || j['draft'] == true) continue;
+      final n = int.tryParse(tag.substring(prefix.length)) ?? -1;
+      if (n > bestN) {
+        bestN = n;
+        best = j;
+      }
+    }
+    return best;
+  }
+
+  /// The newest app build on GitHub, or null if it's not newer than this one.
+  Future<AppUpdate?> check() async {
+    await _info();
+    final j = _newest(await _releases(), 'app-');
+    if (j == null) return null;
     final tag = '${j['tag_name'] ?? ''}';
     final build = int.tryParse(tag.replaceFirst('app-', '')) ?? 0;
     String? apk;
@@ -83,6 +106,36 @@ class Updates {
     notes = notes.split('\n').where((l) => !l.startsWith('Open this page on your phone')).join('\n').trim();
     if (apk == null || build <= (_installedBuild ?? 0)) return null;
     return AppUpdate(build, version, notes, apk, '${j['html_url'] ?? kReleasesPage}');
+  }
+
+  /// The newest puck firmware on GitHub: its version ("1.0.29") and the puck.bin URL. Null if none published.
+  Future<PuckFirmware?> latestPuckFirmware() async {
+    final j = _newest(await _releases(), 'puck-');
+    if (j == null) return null;
+    String? bin;
+    for (final a in (j['assets'] as List? ?? const [])) {
+      if (a is Map && '${a['name']}' == 'puck.bin') bin = '${a['browser_download_url']}';
+    }
+    if (bin == null) return null;
+    final m = RegExp(r'(\d+\.\d+\.\d+)').firstMatch('${j['name'] ?? ''}');
+    return PuckFirmware(m?.group(1) ?? '${j['tag_name']}', bin, '${j['body'] ?? ''}'.trim());
+  }
+
+  /// Fetch a puck.bin. Needs the internet, so do it before joining the puck's WiFi.
+  Future<List<int>> downloadPuckFirmware(PuckFirmware f) async {
+    http.Response r;
+    try {
+      r = await http.get(Uri.parse(f.binUrl), headers: {'User-Agent': 'WakeBack-app'}).timeout(const Duration(seconds: 60));
+    } on TimeoutException {
+      throw Exception(_offline);
+    } on SocketException {
+      throw Exception(_offline);
+    } on http.ClientException {
+      throw Exception(_offline);
+    }
+    if (r.statusCode != 200) throw Exception('GitHub said HTTP ${r.statusCode} for the firmware');
+    if (r.bodyBytes.length < 100000 || r.bodyBytes[0] != 0xE9) throw Exception('That download isn\'t a puck firmware image.');
+    return r.bodyBytes;
   }
 
   /// Download the APK and hand it to Android's installer. Progress is 0..1.
@@ -120,5 +173,22 @@ class Updates {
       throw Exception(r.message.isEmpty ? 'Android would not open the installer' : r.message);
     }
     if (kDebugMode) debugPrint('installer opened for ${f.path}');
+  }
+}
+
+class PuckFirmware {
+  final String version, binUrl, notes;
+  const PuckFirmware(this.version, this.binUrl, this.notes);
+
+  /// Is [version] ("1.0.29") newer than [installed] ("1.0.27")? Local builds ("1.0.0", "dev") always count as older.
+  bool newerThan(String installed) {
+    List<int> parts(String v) => RegExp(r'\d+').allMatches(v).map((m) => int.parse(m.group(0)!)).toList();
+    final a = parts(version), b = parts(installed);
+    if (b.isEmpty || installed.contains('dev') || installed == '1.0.0') return true;
+    for (var i = 0; i < 3; i++) {
+      final x = i < a.length ? a[i] : 0, y = i < b.length ? b[i] : 0;
+      if (x != y) return x > y;
+    }
+    return false;
   }
 }

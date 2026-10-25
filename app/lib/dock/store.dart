@@ -999,6 +999,7 @@ class DockStore {
       final ch = b['charging'];
       if (ch == 'charging' || ch == 'full' || ch == 'not') r['charging'] = ch;
       if (b['fw'] is String) r['fw'] = cut(b['fw'] as String, 16);
+      if (b['ip'] is String) r['ip'] = cut(b['ip'] as String, 40); // where the puck is on the hotspot: the app opens its page there
       r['on_pad'] = pyTruthy(b.containsKey('on_pad') ? b['on_pad'] : true);
       r['last_seen'] = now;
       if (r['on_pad'] == true) r['last_on_pad'] = now;
@@ -1066,6 +1067,7 @@ class DockStore {
         'docked': docked,
         'last_seen': seen,
         'last_on_pad': r['last_on_pad'],
+        'ip': docked ? r['ip'] : null,
         'battery_pct': r.containsKey('battery_mv') ? pctFromMv(r['battery_mv'] as num) : null,
         'battery_mv': r['battery_mv'],
         'charging': docked ? r['charging'] : null,

@@ -890,6 +890,7 @@ def puck_checkin():
         if isinstance(b.get('fw'), str): r['fw'] = b['fw'][:16]
         for k in ('orientation', 'mag', 'gps_fix', 'twist'):
             if isinstance(b.get(k), (int, float, str)): r[k] = b[k]
+        if isinstance(b.get('ip'), str): r['ip'] = b['ip'][:40]       # where the puck is on the dock's WiFi, so the app can open its page
         r['on_pad'] = bool(b.get('on_pad', True))
         r['last_seen'] = now
         if r['on_pad']: r['last_on_pad'] = now
@@ -946,6 +947,7 @@ def pucks():
             'free_kb': r.get('free_kb'), 'total_kb': r.get('total_kb'), 'fw': r.get('fw'), 'pending': r.get('pending'), 'rssi': r.get('rssi'),
             'orientation': r.get('orientation'), 'mag': r.get('mag'), 'gps_fix': r.get('gps_fix'), 'twist': r.get('twist'),
             'owner': (r.get('owner') or {}).get('name') or None,      # the owner's name only: emails stay on the server
+            'ip': r.get('ip') if docked else None,
             'last_upload': dict(lu, sailor=last_sailor(lu['session'], lu.get('file'))) if lu else None,
         })
     return jsonify(pucks=out, now=int(now))
