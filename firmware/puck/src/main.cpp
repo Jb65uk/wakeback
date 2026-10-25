@@ -247,18 +247,28 @@ static String jsonStr(const String &s) {     // escape for a JSON string
   return o;
 }
 // LittleFS has to walk the whole partition to count what's used (slow), so the figure is refreshed every 10 s, not on every ask
-static size_t fsFree = 0, fsTotal = 0;
-static void measureFs() { if (fsOk) { fsTotal = LittleFS.totalBytes(); fsFree = fsTotal - LittleFS.usedBytes(); } }
-static size_t freeBytes() { return fsFree; }
+static size_t fsFree = 0, fsTotal = 0, fsUnmeasured = 0;   // fsUnmeasured: track bytes written since the last measure
+static void measureFs() { if (fsOk) { fsTotal = LittleFS.totalBytes(); fsFree = fsTotal - LittleFS.usedBytes(); fsUnmeasured = 0; } }
 static String baseName(File &f) { String n = f.name(); if (n.startsWith("/")) n = n.substring(n.lastIndexOf('/') + 1); return n; }
-static int nTracks = 0;                      // counted once a second and after changes, not every loop
-static int countTracks() {
-  int n = 0; File d = LittleFS.open(TRK_DIR);
-  if (d) for (File f = d.openNextFile(); f; f = d.openNextFile()) if (!f.isDirectory()) n++;
-  nTracks = n; return n;
+static String trackPath(const String &name) { return String(TRK_DIR) + "/" + name; }
+// every track file in turn (not folders), by bare name and size; the callback mustn't delete while we walk the folder
+template <typename F> static void forEachTrack(F fn) {
+  File d = LittleFS.open(TRK_DIR);
+  if (!d) return;
+  for (File f = d.openNextFile(); f; f = d.openNextFile()) if (!f.isDirectory()) fn(baseName(f), (size_t)f.size());
+  d.close();
 }
-static int trackCount() { return nTracks; }
+static int nTracks = 0;                      // counted once a second and after changes, not every loop
+static int countTracks() { int n = 0; forEachTrack([&](const String &, size_t) { n++; }); nTracks = n; return n; }
 static int pendingCount() { return nTracks - (recording ? 1 : 0); }
+// the names, one per line, so a caller can delete as it goes (deleting while walking the folder isn't safe)
+static String trackNames() { String names; forEachTrack([&](const String &n, size_t) { names += n + "\n"; }); return names; }
+
+// words for the status line, the check-in and the page, so they can't drift apart
+static const char *B(bool b) { return b ? "true" : "false"; }
+static const char *orientName() { return S.orientation == 1 ? "deck" : S.orientation == 2 ? "thwart" : "unknown"; }
+static const char *chargeName() { return !onPad ? "not" : battFull ? "full" : "charging"; }
+static const char *wifiName() { return wmode == W_SETUP ? "setup" : wmode == W_DOCK ? "dock" : wmode == W_JOINING ? "joining" : "off"; }
 
 // ---------- GPS ----------
 static bool startGps() {
@@ -353,6 +363,14 @@ static void pollImu() {
   boatAngles();
 }
 
+// the page and the serial monitor both calibrate, through these
+static void calLevel() {          // the current heel and pitch (before zeroing) become the new zero
+  S.zeroHeel = wrap180(S.zeroHeel + imu.heel); S.zeroPitch = wrap180(S.zeroPitch + imu.pitch); saveSettings();
+}
+static void calFlipHeel() {       // starboard reads as port: flip the sign (and the zero with it)
+  S.flipHeel = !S.flipHeel; S.zeroHeel = -S.zeroHeel; saveSettings();
+}
+
 // which way up (at rest) and the mounting twist (while sailing straight): learnt in the background, once a second
 static void learnMounting() {
   const bool still = gps.fix >= 2 ? gps.sogKn < STILL_KN : true;
@@ -406,7 +424,7 @@ static void preDrain(File &f) {                      // write out the ring from 
 
 static void startRecording(bool manual) {
   if (!fsOk || recording) return;
-  if (freeBytes() < FLASH_RESERVE) { flashFull = true; return; }
+  if (fsFree < FLASH_RESERVE) { flashFull = true; return; }
   const uint64_t t = nowMs() ? nowMs() : gps.tMs;
   char name[48];
   if (t) {
@@ -431,7 +449,7 @@ static void stopRecording(const char *why) {
   rec.close(); recording = false;
   Serial.printf("Stopped (%s): %lu points in %s.\n", why, (unsigned long)recLines, recName.c_str());
   // a track with nothing in it is no use to anyone
-  if (recLines < 10) { LittleFS.remove(String(TRK_DIR) + "/" + recName); Serial.println("Too short, binned."); }
+  if (recLines < 10) { LittleFS.remove(trackPath(recName)); Serial.println("Too short, binned."); }
   countTracks();
   haveRest = false; stillSince = 0;
   sailEnded = millis(); lastOffPadTry = 0;      // go looking for the phone straight away, and keenly for a while
@@ -451,9 +469,9 @@ static void onFix() {
     if (recording) {
       if (rec.write((const uint8_t *)line, n) != (size_t)n) { Serial.println("!! Flash full, recording stopped."); flashFull = true; stopRecording("flash full"); }
       else {
-        recLines++;
-        // the free-space figure is refreshed every 10 s by everySecond (walking the flash is slow); estimate between times
-        if (m - lastFlush > 5000) { rec.flush(); lastFlush = m; if (fsFree > (size_t)n * 100) fsFree -= (size_t)n * 100; if (fsFree < FLASH_RESERVE) { flashFull = true; stopRecording("flash full"); } }
+        recLines++; fsUnmeasured += n;
+        // the free-space figure is measured every 10 s by everySecond (walking the flash is slow); between times, estimate from what's been written
+        if (m - lastFlush > 5000) { rec.flush(); lastFlush = m; if (fsFree < fsUnmeasured + FLASH_RESERVE) { flashFull = true; stopRecording("flash full"); } }
       }
     } else preAdd(line, n);
   }
@@ -569,19 +587,44 @@ static void wifiOff() {
 }
 static String dockUrl(const char *path) { return "http://" + WiFi.gatewayIP().toString() + ":" + String(DOCK_PORT) + path; }
 
-static bool hello() {
-  WiFiClient c; HTTPClient h; h.setTimeout(3000);
-  if (!h.begin(c, dockUrl("/api/hello"))) return false;
-  const int code = h.GET();
-  bool ok = false;
-  if (code == 200) {
-    const String b = h.getString();
-    ok = b.indexOf("\"wakeback\"") >= 0;
-    const int i = b.indexOf("\"time_ms\"");
-    if (ok && i >= 0) { const uint64_t t = strtoull(b.c_str() + b.indexOf(':', i) + 1, nullptr, 10); if (t > 1600000000000ULL) setClock(t, false); }
-  }
+// one HTTP exchange with the dock: GET when body is null, else a JSON POST. Returns the status code (0 = no connection)
+// and leaves the body in reply. The key goes with every request; the dock ignores it where it doesn't apply.
+static int dockRequest(const char *path, const char *body, uint32_t timeoutMs, String &reply) {
+  WiFiClient c; HTTPClient h; h.setTimeout(timeoutMs);
+  reply = "";
+  if (!h.begin(c, dockUrl(path))) return 0;
+  if (S.key.length()) h.addHeader("X-Puck-Key", S.key);
+  int code;
+  if (body) { h.addHeader("Content-Type", "application/json"); code = h.POST((uint8_t *)body, strlen(body)); }
+  else code = h.GET();
+  if (code > 0) reply = h.getString();
   h.end();
-  return ok;
+  return code;
+}
+// the value of a top-level JSON field as text, "" when absent (enough for the dock's small flat replies)
+static String jsonField(const String &reply, const char *key) {
+  const int i = reply.indexOf(String("\"") + key + "\"");
+  if (i < 0) return "";
+  int p = reply.indexOf(':', i); if (p < 0) return "";
+  p++;
+  while (p < (int)reply.length() && reply[p] == ' ') p++;
+  if (p < (int)reply.length() && reply[p] == '"') { const int e = reply.indexOf('"', p + 1); return e > p ? reply.substring(p + 1, e) : ""; }
+  int e = p; while (e < (int)reply.length() && reply[e] != ',' && reply[e] != '}' && reply[e] != ' ') e++;
+  return reply.substring(p, e);
+}
+static bool replyOk(const String &reply) { return jsonField(reply, "ok") == "true"; }
+// the dock sends its clock with hello and check-in: use it unless the GPS already has the time
+static void takeDockTime(const String &reply) {
+  const uint64_t t = strtoull(jsonField(reply, "time_ms").c_str(), nullptr, 10);
+  if (t > 1600000000000ULL) setClock(t, false);
+}
+
+static bool hello() {
+  String reply;
+  if (dockRequest("/api/hello", nullptr, 3000, reply) != 200) return false;
+  if (reply.indexOf("\"wakeback\"") < 0) return false;
+  takeDockTime(reply);
+  return true;
 }
 
 // the dock answered 401 or 403: the key doesn't match. Retrying every half minute just burns the battery, so stand off.
@@ -592,45 +635,37 @@ static void dockRefusedKey(const char *what) {
 }
 
 static bool checkin() {
-  WiFiClient c; HTTPClient h; h.setTimeout(4000);
-  if (!h.begin(c, dockUrl("/api/pucks/checkin"))) return false;
-  h.addHeader("Content-Type", "application/json");
-  if (S.key.length()) h.addHeader("X-Puck-Key", S.key);
   char body[400];
   snprintf(body, sizeof body,
            "{\"puck\":%d,\"battery_mv\":%d,\"charging\":\"%s\",\"on_pad\":%s,\"free_kb\":%u,\"total_kb\":%u,\"fw\":\"%s\","
            "\"pending\":%d,\"rssi\":%d,\"recording\":%s,\"orientation\":\"%s\",\"twist\":%.0f,\"mag\":%d,\"gps_fix\":%d,\"ip\":\"%s\"}",
-           S.puck, (int)battMv, !onPad ? "not" : battFull ? "full" : "charging", onPad ? "true" : "false",
-           (unsigned)(freeBytes() / 1024), (unsigned)(fsTotal / 1024), FW, pendingCount(), WiFi.RSSI(),
-           recording ? "true" : "false", S.orientation == 1 ? "deck" : S.orientation == 2 ? "thwart" : "unknown",
+           S.puck, (int)battMv, chargeName(), B(onPad),
+           (unsigned)(fsFree / 1024), (unsigned)(fsTotal / 1024), FW, pendingCount(), WiFi.RSSI(),
+           B(recording), orientName(),
            S.twist, imu.magStatus, gps.fix, WiFi.localIP().toString().c_str());
-  const int code = h.POST((uint8_t *)body, strlen(body));
-  bool ok = false;
-  if (code == 200) {
-    const String b = h.getString();
-    ok = b.indexOf("\"ok\":true") >= 0 || b.indexOf("\"ok\": true") >= 0;
-    const int i = b.indexOf("\"time_ms\"");
-    if (i >= 0) { const uint64_t t = strtoull(b.c_str() + b.indexOf(':', i) + 1, nullptr, 10); if (t > 1600000000000ULL) setClock(t, false); }
-    dockRefused = false;
-  } else if (code == 401 || code == 403) dockRefusedKey("check-in");
-  h.end();
-  return ok;
+  String reply;
+  const int code = dockRequest("/api/pucks/checkin", body, 4000, reply);
+  if (code == 401 || code == 403) { dockRefusedKey("check-in"); return false; }
+  if (code != 200) return false;
+  takeDockTime(reply);
+  dockRefused = false;
+  return replyOk(reply);
 }
 
 // multipart POST of one track straight from flash; true when the dock said ok
 static bool uploadFile(const String &name) {
-  File f = LittleFS.open(String(TRK_DIR) + "/" + name, FILE_READ);
+  File f = LittleFS.open(trackPath(name), FILE_READ);
   if (!f) return false;
   WiFiClient c; c.setTimeout(10);
   if (!c.connect(WiFi.gatewayIP(), DOCK_PORT)) { f.close(); return false; }
-  const char *B = "----WakeBackPuck";
+  const char *BOUNDARY = "----WakeBackPuck";
   char puckField[16]; snprintf(puckField, sizeof puckField, "puck%d", S.puck);
-  String head = String("--") + B + "\r\nContent-Disposition: form-data; name=\"puck\"\r\n\r\n" + puckField + "\r\n--" + B +
+  String head = String("--") + BOUNDARY + "\r\nContent-Disposition: form-data; name=\"puck\"\r\n\r\n" + puckField + "\r\n--" + BOUNDARY +
                 "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"" + name + "\"\r\nContent-Type: text/csv\r\n\r\n";
-  String tail = String("\r\n--") + B + "--\r\n";
+  String tail = String("\r\n--") + BOUNDARY + "--\r\n";
   const size_t len = head.length() + f.size() + tail.length();
   c.printf("POST /api/upload HTTP/1.1\r\nHost: %s:%d\r\nConnection: close\r\nContent-Type: multipart/form-data; boundary=%s\r\n",
-           WiFi.gatewayIP().toString().c_str(), DOCK_PORT, B);
+           WiFi.gatewayIP().toString().c_str(), DOCK_PORT, BOUNDARY);
   if (S.key.length()) c.printf("X-Puck-Key: %s\r\n", S.key.c_str());
   c.printf("Content-Length: %u\r\n\r\n", (unsigned)len);
   c.print(head);
@@ -651,22 +686,18 @@ static bool uploadFile(const String &name) {
   }
   c.stop();
   if (status.indexOf(" 401") > 0 || status.indexOf(" 403") > 0) dockRefusedKey("upload");
-  return status.indexOf(" 200") > 0 && (body.indexOf("\"ok\":true") >= 0 || body.indexOf("\"ok\": true") >= 0);
+  return status.indexOf(" 200") > 0 && replyOk(body);
 }
 
 static void uploadPending() {
-  File d = LittleFS.open(TRK_DIR);
-  if (!d) return;
-  String names;                                   // one per line, gathered first: deleting while walking the folder isn't safe
-  for (File f = d.openNextFile(); f; f = d.openNextFile()) if (!f.isDirectory()) names += baseName(f) + "\n";
-  d.close();
+  const String names = trackNames();
   uploading = true;
   int sent = 0;
   for (int s = 0; s < (int)names.length();) {
     const int e = names.indexOf('\n', s); const String name = names.substring(s, e); s = e + 1;
     if (recording && name == recName) continue;
     Serial.printf("Uploading %s… ", name.c_str());
-    if (uploadFile(name)) { LittleFS.remove(String(TRK_DIR) + "/" + name); Serial.println("done, deleted from the puck."); sent++; flashFull = false; }
+    if (uploadFile(name)) { LittleFS.remove(trackPath(name)); Serial.println("done, deleted from the puck."); sent++; flashFull = false; }
     else { if (!dockRefused) Serial.println("the dock didn't take it, will try later."); break; }
     if (webOn) web.handleClient();
   }
@@ -692,14 +723,10 @@ static void checkDockFirmware() {
   // a puck flashed from VS Code says "1.0.0" or "dev": the dock mustn't overwrite the build someone is working on
   const String me = FW;
   if (me == "1.0.0" || me.indexOf("dev") >= 0) return;
-  WiFiClient c; HTTPClient h; h.setTimeout(4000);
-  if (!h.begin(c, dockUrl("/api/firmware/latest"))) return;
-  if (h.GET() != 200) { h.end(); return; }
-  const String b = h.getString(); h.end();
-  int i = b.indexOf("\"version\""); if (i < 0) return;
-  int q = b.indexOf('"', b.indexOf(':', i) + 1); String ver = b.substring(q + 1, b.indexOf('"', q + 1));
-  i = b.indexOf("\"url\""); if (i < 0) return;
-  q = b.indexOf('"', b.indexOf(':', i) + 1); String url = b.substring(q + 1, b.indexOf('"', q + 1));
+  String reply;
+  if (dockRequest("/api/firmware/latest", nullptr, 4000, reply) != 200) return;
+  const String ver = jsonField(reply, "version");
+  String url = jsonField(reply, "url");
   // only a newer release goes on: a dock that's behind must never downgrade a puck
   if (!ver.length() || !url.length() || versionNum(ver) <= versionNum(me)) return;
   if (!url.startsWith("http")) url = dockUrl(url.c_str());
@@ -770,33 +797,30 @@ static String statusJson() {
   String j; j.reserve(1800);
   char b[700];
   snprintf(b, sizeof b, "{\"fw\":\"%s\",\"puck\":%d,\"uptime_s\":%lu,\"time_ms\":%llu,\"autorec\":%s,\"autooff\":%s,",
-           FW, S.puck, (unsigned long)(millis() / 1000), (unsigned long long)nowMs(), S.autoRec ? "true" : "false", S.autoOff ? "true" : "false");
+           FW, S.puck, (unsigned long)(millis() / 1000), (unsigned long long)nowMs(), B(S.autoRec), B(S.autoOff));
   j += b;
   snprintf(b, sizeof b, "\"gps\":{\"ok\":%s,\"fix\":%d,\"sats\":%d,\"lat\":%.7f,\"lon\":%.7f,\"sog\":%.2f,\"cog\":%.1f,\"hacc\":%.1f,\"hz\":%.0f},",
-           gpsOk ? "true" : "false", gps.fix, gps.sats, gps.lat / 1e7, gps.lon / 1e7, gps.sogKn, gps.cogDeg, gps.hAccM, gps.rateHz);
+           B(gpsOk), gps.fix, gps.sats, gps.lat / 1e7, gps.lon / 1e7, gps.sogKn, gps.cogDeg, gps.hAccM, gps.rateHz);
   j += b;
   snprintf(b, sizeof b, "\"imu\":{\"ok\":%s,\"heel\":%.1f,\"pitch\":%.1f,\"heading\":%.0f,\"twist\":%.1f,\"twist_learned\":%s,\"orientation\":\"%s\",\"mag\":%d,\"zero_heel\":%.1f,\"zero_pitch\":%.1f,\"flip\":%s},",
-           imuOk ? "true" : "false", imu.heel, imu.pitch, isnan(imu.headingX) ? -1.0f : fmodf(imu.headingX - S.twist + 720, 360), S.twist, S.twistLearned ? "true" : "false",
-           S.orientation == 1 ? "deck" : S.orientation == 2 ? "thwart" : "unknown", imu.magStatus, S.zeroHeel, S.zeroPitch, S.flipHeel ? "true" : "false");
+           B(imuOk), imu.heel, imu.pitch, isnan(imu.headingX) ? -1.0f : fmodf(imu.headingX - S.twist + 720, 360), S.twist, B(S.twistLearned),
+           orientName(), imu.magStatus, S.zeroHeel, S.zeroPitch, B(S.flipHeel));
   j += b;
   snprintf(b, sizeof b, "\"batt\":{\"mv\":%d,\"pct\":%d,\"on_pad\":%s,\"charging\":\"%s\"},\"rec\":{\"on\":%s,\"secs\":%lu,\"lines\":%lu,\"file\":\"%s\"},",
-           (int)battMv, batteryPct(battMv), onPad ? "true" : "false", !onPad ? "not" : battFull ? "full" : "charging",
-           recording ? "true" : "false", (unsigned long)(recording ? (millis() - recStarted) / 1000 : 0), (unsigned long)recLines, recording ? recName.c_str() : "");
+           (int)battMv, batteryPct(battMv), B(onPad), chargeName(),
+           B(recording), (unsigned long)(recording ? (millis() - recStarted) / 1000 : 0), (unsigned long)recLines, recording ? recName.c_str() : "");
   j += b;
   snprintf(b, sizeof b, "\"store\":{\"free_kb\":%u,\"total_kb\":%u,\"files\":%d,\"full\":%s},",
-           (unsigned)(freeBytes() / 1024), (unsigned)(fsTotal / 1024), trackCount(), flashFull ? "true" : "false");
+           (unsigned)(fsFree / 1024), (unsigned)(fsTotal / 1024), nTracks, B(flashFull));
   j += b;
-  const char *mode = wmode == W_SETUP ? "setup" : wmode == W_DOCK ? "dock" : wmode == W_JOINING ? "joining" : "off";
-  j += "\"wifi\":{\"mode\":\"" + String(mode) + "\",\"ssid\":\"" + jsonStr(S.ssid) + "\",\"ip\":\"" +
-       (wmode == W_DOCK ? WiFi.localIP().toString() : WiFi.softAPIP().toString()) + "\",\"dock_ok\":" + (dockOk ? "true" : "false") + ",\"dock_refused\":" + (dockRefused ? "true" : "false") + "},";
+  j += "\"wifi\":{\"mode\":\"" + String(wifiName()) + "\",\"ssid\":\"" + jsonStr(S.ssid) + "\",\"ip\":\"" +
+       (wmode == W_DOCK ? WiFi.localIP().toString() : WiFi.softAPIP().toString()) + "\",\"dock_ok\":" + B(dockOk) + ",\"dock_refused\":" + B(dockRefused) + "},";
   j += "\"tracks\":[";
-  File d = LittleFS.open(TRK_DIR); bool first = true;
-  if (d) for (File f = d.openNextFile(); f; f = d.openNextFile()) {
-    if (f.isDirectory()) continue;
-    const String name = baseName(f);
+  bool first = true;
+  forEachTrack([&](const String &name, size_t size) {
     if (!first) j += ','; first = false;
-    j += "{\"name\":\"" + jsonStr(name) + "\",\"kb\":" + String((unsigned)(f.size() / 1024)) + ",\"open\":" + ((recording && name == recName) ? "true" : "false") + "}";
-  }
+    j += "{\"name\":\"" + jsonStr(name) + "\",\"kb\":" + String((unsigned)(size / 1024)) + ",\"open\":" + B(recording && name == recName) + "}";
+  });
   j += "]}";
   return j;
 }
@@ -823,11 +847,8 @@ static void startWeb() {
     S.configured = true;                        // someone has been here: no more setup WiFi at power-up
     saveSettings(); okMsg("Saved.");
   });
-  web.on("/api/cal/level", HTTP_POST, [] {
-    // the current heel and pitch (before zeroing) become the new zero
-    S.zeroHeel = wrap180(S.zeroHeel + imu.heel); S.zeroPitch = wrap180(S.zeroPitch + imu.pitch); saveSettings(); okMsg("Level set: heel and pitch read 0 here.");
-  });
-  web.on("/api/cal/flip", HTTP_POST, [] { S.flipHeel = !S.flipHeel; S.zeroHeel = -S.zeroHeel; saveSettings(); okMsg(S.flipHeel ? "Heel sign flipped." : "Heel sign back to normal."); });
+  web.on("/api/cal/level", HTTP_POST, [] { calLevel(); okMsg("Level set: heel and pitch read 0 here."); });
+  web.on("/api/cal/flip", HTTP_POST, [] { calFlipHeel(); okMsg(S.flipHeel ? "Heel sign flipped." : "Heel sign back to normal."); });
   web.on("/api/cal/orient", HTTP_POST, [] {
     // told which way up it is: the learner still corrects it later if gravity says otherwise for half a minute
     const int o = web.arg("o").toInt(); if (o != 1 && o != 2) { web.send(400, "text/plain", "o must be 1 (deck) or 2 (thwart)"); return; }
@@ -842,7 +863,7 @@ static void startWeb() {
   web.on("/api/tracks/delete", HTTP_POST, [] {
     String n = web.arg("name"); if (n.indexOf('/') >= 0 || n.indexOf("..") >= 0 || !n.length()) { web.send(400, "text/plain", "bad name"); return; }
     if (recording && n == recName) stopRecording("deleted from the page");
-    LittleFS.remove(String(TRK_DIR) + "/" + n); countTracks(); measureFs(); flashFull = freeBytes() < FLASH_RESERVE; okMsg("Deleted.");
+    LittleFS.remove(trackPath(n)); countTracks(); measureFs(); flashFull = fsFree < FLASH_RESERVE; okMsg("Deleted.");
   });
   web.on("/api/setup/done", HTTP_POST, [] { okMsg("Leaving setup mode."); delay(300); usbSetupDone = true; if (wmode == W_SETUP) leaveSetup(); });
   web.on("/api/reboot", HTTP_POST, [] { okMsg("Restarting."); delay(300); if (recording) stopRecording("restart"); ESP.restart(); });
@@ -873,7 +894,7 @@ static void startWeb() {
     const String u = web.uri();
     if (u.startsWith("/tracks/")) {
       String n = u.substring(8); if (n.indexOf("..") >= 0) { web.send(400, "text/plain", "bad name"); return; }
-      File f = LittleFS.open(String(TRK_DIR) + "/" + n, FILE_READ);
+      File f = LittleFS.open(trackPath(n), FILE_READ);
       if (!f) { web.send(404, "text/plain", "no such track"); return; }
       web.sendHeader("Content-Disposition", "attachment; filename=\"" + n + "\"");
       web.streamFile(f, "text/csv"); f.close(); return;
@@ -942,7 +963,7 @@ static void everySecond() {
 
   learnMounting();
   static int tick = 0; if (++tick % 10 == 0) { measureFs(); countTracks(); }
-  if (flashFull && freeBytes() > FLASH_RESERVE * 2) flashFull = false;
+  if (flashFull && fsFree > FLASH_RESERVE * 2) flashFull = false;
   if (S.autoOff && !onPad && !recording && wmode != W_SETUP && millis() - lastActive > AUTO_OFF_MS) goToSleep("still for 30 minutes");
   // new firmware that has run a couple of minutes with the sensors alive counts as good even with no dock about
   if (appPendingVerify && millis() > 120000 && (gpsOk || imuOk)) { esp_ota_mark_app_valid_cancel_rollback(); appPendingVerify = false; }
@@ -953,40 +974,49 @@ static void printStatus() {
   const char *fixTxt[] = {"no fix", "DR", "2D", "3D", "3D+DR", "time"};
   Serial.printf("GPS %s", gpsOk ? (gps.fix < 6 ? fixTxt[gps.fix] : "?") : "NONE");
   if (gpsOk) Serial.printf(" %u sats %.0f Hz +/-%.1f m | %.2f kn %03.0f", gps.sats, gps.rateHz, gps.hAccM, gps.sogKn, gps.cogDeg);
-  if (imuOk) Serial.printf(" | heel %+5.1f pitch %+5.1f twist %.0f %s mag %d", imu.heel, imu.pitch, S.twist, S.orientation == 2 ? "thwart" : S.orientation == 1 ? "deck" : "?", imu.magStatus);
-  Serial.printf(" | batt %.2f V %d%% %s", battMv / 1000, batteryPct(battMv), !onPad ? "off pad" : battFull ? "full" : "charging");
-  Serial.printf(" | wifi %s%s", wmode == W_SETUP ? "setup" : wmode == W_DOCK ? "dock" : wmode == W_JOINING ? "joining" : "off", dockOk ? " ok" : "");
+  if (imuOk) Serial.printf(" | heel %+5.1f pitch %+5.1f twist %.0f %s mag %d", imu.heel, imu.pitch, S.twist, orientName(), imu.magStatus);
+  Serial.printf(" | batt %.2f V %d%% %s", battMv / 1000, batteryPct(battMv), !onPad ? "off pad" : chargeName());
+  Serial.printf(" | wifi %s%s", wifiName(), dockOk ? " ok" : "");
   if (recording) Serial.printf(" | REC %lus %lu pts", (unsigned long)((millis() - recStarted) / 1000), (unsigned long)recLines);
-  Serial.printf(" | %d track(s), %.1f MB free\n", trackCount(), freeBytes() / 1048576.0);
+  Serial.printf(" | %d track(s), %.1f MB free\n", nTracks, fsFree / 1048576.0);
 }
+static bool statusPaused = false;     // 'q' stops the 5 s status line so other output can be read
 static void help() {
-  Serial.printf("\nWakeBack puck %d, firmware %s\n  h help  s status  i start-up report  r start/stop recording  l list tracks  e erase all tracks\n"
-                "  w setup WiFi on/off  u talk to the dock now  p<N> puck number  z level now  f flip heel  x sleep\n\n", S.puck, FW);
+  Serial.printf("\nWakeBack puck %d, firmware %s\n  h help  s status  q pause/resume the status line  i start-up report  r start/stop recording\n"
+                "  l list tracks  erase (the whole word) erase all tracks  w setup WiFi on/off  u talk to the dock now  x sleep\n"
+                "  Puck number, level, heel sign and the rest are on the setup page (w, then http://192.168.4.1/).\n\n", S.puck, FW);
 }
 static void report() {
-  Serial.printf("GPS: %s", gpsOk ? "found" : "NOT FOUND\n");
+  // what to check when a part is missing: the same hints the old bench sketch gave
+  Serial.printf("GPS: %s", gpsOk ? "found" : "NOT FOUND. Check VCC/GND, and that GPS TX goes to D7 and GPS RX to D6.\n");
   if (gpsOk) Serial.printf(" at %lu baud, 10 Hz, sea mode\n", (unsigned long)gpsBaud);
-  Serial.printf("IMU: %s\n", imuOk ? "found (BNO085)" : "NOT FOUND");
-  Serial.printf("Storage: %s %.1f MB free, %d track(s)\n", fsOk ? "ok," : "NOT WORKING", freeBytes() / 1048576.0, trackCount());
+  Serial.printf("IMU: %s\n", imuOk ? "found (BNO085)" : "NOT FOUND. Check VIN/GND, SDA to D4, SCL to D5.");
+  Serial.printf("Storage: %s %.1f MB free, %d track(s)\n", fsOk ? "ok," : "NOT WORKING", fsFree / 1048576.0, nTracks);
   Serial.printf("Dock WiFi: \"%s\"%s. Auto-record %s. Twist %.0f%s, mounted %s.\n", S.ssid.c_str(), S.pass.length() ? "" : " (no password)",
                 S.autoRec ? "on" : "off", S.twist, S.twistLearned ? "" : " (not learnt yet)", S.orientation == 2 ? "under the thwart" : S.orientation == 1 ? "on deck" : "not known yet");
 }
 static void command(String c) {
   c.trim(); if (!c.length()) return;
   lastActive = millis();
+  if (c.equalsIgnoreCase("erase")) {
+    if (recording) stopRecording("erase");
+    const String names = trackNames();
+    for (int s = 0; s < (int)names.length();) { const int e = names.indexOf('\n', s); LittleFS.remove(trackPath(names.substring(s, e))); s = e + 1; }
+    countTracks(); measureFs(); flashFull = false; Serial.println("All tracks erased.");
+    return;
+  }
+  if (c.length() > 1) { Serial.println("Unknown command. Type h."); return; }
   switch (tolower(c[0])) {
     case 'h': help(); break;
     case 's': printStatus(); break;
+    case 'q': statusPaused = !statusPaused; Serial.println(statusPaused ? "Status line paused (q again to resume)." : "Status line back on."); break;
     case 'i': report(); break;
     case 'r': recording ? stopRecording("serial") : startRecording(true); break;
-    case 'l': { File d = LittleFS.open(TRK_DIR); if (d) for (File f = d.openNextFile(); f; f = d.openNextFile()) Serial.printf("  %s  %u KB\n", f.name(), (unsigned)(f.size() / 1024)); } break;
-    case 'e': { if (recording) stopRecording("erase"); File d = LittleFS.open(TRK_DIR); if (d) { String names; for (File f = d.openNextFile(); f; f = d.openNextFile()) names += String(f.name()) + "\n"; int s = 0; while (s < (int)names.length()) { int e = names.indexOf('\n', s); String n = names.substring(s, e); if (!n.startsWith("/")) n = String(TRK_DIR) + "/" + n; LittleFS.remove(n); s = e + 1; } } countTracks(); flashFull = false; Serial.println("All tracks erased."); } break;
+    case 'l': forEachTrack([](const String &n, size_t size) { Serial.printf("  %s  %u KB\n", n.c_str(), (unsigned)(size / 1024)); }); if (!nTracks) Serial.println("  no tracks"); break;
+    case 'e': Serial.println("To erase every track type the whole word: erase"); break;
     case 'w': wmode == W_SETUP ? leaveSetup() : enterSetup(); break;
     case 'u': if (wmode == W_SETUP) leaveSetup(); lastOffPadTry = 0; wantLiftCheckin = true;
               Serial.println(recording ? "Recording: the puck won't talk to the dock until that stops (r, or the button)." : "Looking for the dock…"); break;
-    case 'p': { const int n = c.substring(1).toInt(); if (n >= 1 && n <= 99) { S.puck = n; saveSettings(); Serial.printf("This is now puck %d.\n", n); } else Serial.println("Use p then a number, e.g. p3"); } break;
-    case 'z': S.zeroHeel = wrap180(S.zeroHeel + imu.heel); S.zeroPitch = wrap180(S.zeroPitch + imu.pitch); saveSettings(); Serial.println("Level set."); break;
-    case 'f': S.flipHeel = !S.flipHeel; S.zeroHeel = -S.zeroHeel; saveSettings(); Serial.println(S.flipHeel ? "Heel flipped." : "Heel normal."); break;
     case 'x': goToSleep("x typed"); break;
     default: Serial.println("Unknown command. Type h.");
   }
@@ -1019,7 +1049,7 @@ void setup() {
   gpsOk = startGps();
   imuOk = startImu();
   measureFs(); countTracks();
-  flashFull = fsOk && freeBytes() < FLASH_RESERVE;
+  flashFull = fsOk && fsFree < FLASH_RESERVE;
 
   // after an over-the-air update the new image runs once on probation; it's confirmed after a good check-in (or 2 min alive)
   const esp_partition_t *run = esp_ota_get_running_partition();
@@ -1051,6 +1081,6 @@ void loop() {
   led();
   const uint32_t m = millis();
   if (m - lastSec >= 1000) { lastSec = m; everySecond(); }
-  if (m - lastStatus >= 5000 && Serial) { lastStatus = m; printStatus(); }
+  if (m - lastStatus >= 5000 && Serial && !statusPaused) { lastStatus = m; printStatus(); }
   delay(2);
 }
