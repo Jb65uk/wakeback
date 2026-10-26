@@ -58,7 +58,7 @@ class PuckSeen {
 class PuckStatus {
   final int puck;
   final String fw;
-  final int batteryPct, tracks, pending;
+  final int batteryPct, tracks, pending, recHz;
   final bool autoRec, onPad, charging, batteryFull, recording, locked, pairing;
   final double heel, pitch, sogKn;
   final int gpsFix, sats;
@@ -73,6 +73,7 @@ class PuckStatus {
         batteryFull = _m(raw['batt'])['charging'] == 'full',
         recording = _m(raw['rec'])['on'] == true,
         autoRec = raw['autorec'] != false,
+        recHz = _i(raw['rec_hz']) ?? 5,
         locked = raw['locked'] == true,
         pairing = raw['pairing'] == true,
         tracks = _i(_m(raw['store'])['files']) ?? 0,
@@ -422,15 +423,17 @@ class PuckBle {
     return st;
   }
 
-  /// Puck number, the key, auto-record. Allowed without auth only while the puck's pairing window is open
-  /// (or it has no key yet); the puck decides. Giving it a key makes this link authed.
-  Future<void> settings({int? puck, String? key, bool? autoRec, bool? autoOff}) async {
+  /// Puck number, the key, auto-record, auto-off, logging rate (1, 2, 5 or 10 points a second while moving).
+  /// Allowed without auth only while the puck's pairing window is open (or it has no key yet); the puck decides.
+  /// Giving it a key makes this link authed.
+  Future<void> settings({int? puck, String? key, bool? autoRec, bool? autoOff, int? rate}) async {
     if (!authed && !pairing && locked) _needAuth();
     final form = {
       if (puck != null) 'puck': '$puck',
       if (key != null && key.isNotEmpty) 'key': key,
       if (autoRec != null) 'autorec': autoRec ? '1' : '0',
       if (autoOff != null) 'autooff': autoOff ? '1' : '0',
+      if (rate != null) 'rate': '$rate',
     };
     final enc = form.entries.map((e) => '${Uri.encodeQueryComponent(e.key)}=${Uri.encodeQueryComponent(e.value)}').join('&');
     await command('set $enc');

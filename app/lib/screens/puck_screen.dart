@@ -442,6 +442,35 @@ class _PuckScreenState extends State<PuckScreen> {
         const SectionLabel('Recording and power'),
         Card(
           child: Column(children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('Points a second while moving', style: t.textTheme.titleSmall),
+                const SizedBox(height: 6),
+                SegmentedButton<int>(
+                  segments: const [
+                    ButtonSegment(value: 1, label: Text('1')),
+                    ButtonSegment(value: 2, label: Text('2')),
+                    ButtonSegment(value: 5, label: Text('5')),
+                    ButtonSegment(value: 10, label: Text('10')),
+                  ],
+                  selected: {st?.recHz ?? 5},
+                  showSelectedIcon: false,
+                  onSelectionChanged: _busy || !live ? null : (v) => _do('Setting the rate…', (b) => b.settings(rate: v.first).then((_) => {'msg': '${v.first} a second while moving.'})),
+                ),
+                const SizedBox(height: 6),
+                Hint(_rateHint(st?.recHz ?? 5)),
+              ]),
+            ),
+            const Divider(height: 1),
+            SwitchListTile(
+              secondary: const Icon(Icons.play_circle_outline),
+              title: const Text('Record on its own'),
+              subtitle: const Text('Starts when the boat moves off, stops after 10 minutes still.'),
+              value: st?.autoRec ?? true,
+              onChanged: _busy || !live ? null : (v) => _do(v ? 'Turning auto-record on…' : 'Turning auto-record off…', (b) => b.settings(autoRec: v).then((_) => {'msg': v ? 'Records on its own.' : 'Button only.'})),
+            ),
+            const Divider(height: 1),
             ListTile(
               leading: Icon(recording ? Icons.stop_circle_outlined : Icons.fiber_manual_record, color: recording ? null : Colors.redAccent),
               title: Text(recording ? 'Stop recording' : 'Start recording'),
@@ -483,6 +512,13 @@ class _PuckScreenState extends State<PuckScreen> {
       ]),
     );
   }
+
+  static String _rateHint(int hz) => switch (hz) {
+        10 => 'Smoothest replay; about 9 hours of sailing fits on the puck.',
+        5 => 'Plenty for a dinghy; about 18 hours fits on the puck.',
+        2 => 'Enough for the track and the numbers; about 45 hours fits.',
+        _ => 'Just the track; days of sailing fit. Always 1 a second while still.',
+      };
 
   Widget _num(BuildContext context, String label, String value) {
     final t = Theme.of(context);
