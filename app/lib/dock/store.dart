@@ -999,7 +999,7 @@ class DockStore {
       final ch = b['charging'];
       if (ch == 'charging' || ch == 'full' || ch == 'not') r['charging'] = ch;
       if (b['fw'] is String) r['fw'] = cut(b['fw'] as String, 16);
-      if (b['ip'] is String) r['ip'] = cut(b['ip'] as String, 40); // where the puck is on the hotspot: the app opens its page there
+      if (b['ip'] is String) r['ip'] = cut(b['ip'] as String, 40); // where the puck is on the dock's network
       r['on_pad'] = pyTruthy(b.containsKey('on_pad') ? b['on_pad'] : true);
       r['last_seen'] = now;
       if (r['on_pad'] == true) r['last_on_pad'] = now;
@@ -1011,7 +1011,7 @@ class DockStore {
   }
 
   /// Pucks the app wants to talk to: their next check-in reply tells them to keep WiFi up for a while.
-  /// Set by PuckReach, cleared when the puck has been told (one check-in).
+  /// Set by a dock client, cleared when the puck has been told (one check-in). Unused on the phone now.
   final Map<int, int> holdRequests = {};
 
   Future<String?> _lastSailor(String session, String? fname) async {

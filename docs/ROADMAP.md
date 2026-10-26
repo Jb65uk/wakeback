@@ -121,3 +121,30 @@ PC or cloud). Still open: the update button needs the repo public (or a separate
 
 Also still on you: add the GitHub signing secrets; scope Cloudflare Access to `/admin` only so the app can
 create accounts.
+
+## 26 Oct — Bluetooth only (firmware + app 0.18.0)
+
+Decision: a puck belongs to one person and talks to that person's phone over Bluetooth, full stop. No WiFi in the
+puck (no hotspot, no setup AP, no dock check-in); the club dock Pi is out of scope (a tablet running the app does
+the same job). Sharing still goes phone → server as before.
+
+- **Firmware** (`firmware/puck`): WiFi, web server, captive portal and `page.h` gone (main.cpp 1180 → ~815 lines).
+  `ble.h`: `hello` carries a nonce, `auth` = HMAC-SHA256(key, nonce) — the key never goes over the air; everything
+  but hello is refused (and the link dropped) until then. `tracks` / `get <name> [offset]` streams the raw `.wbt` on a
+  new data characteristic with CRC-32 of the part and of the whole file; `done <name>` deletes. Pairing window: no key
+  = open; 6 s hold = open 10 min (`p` on serial); a different key wipes the tracks. The advert carries 2 bytes of
+  SHA-256(key) and the number of tracks waiting, name in the scan response (the 128-bit UUID fills the 31-byte advert —
+  this is why the first BLE build was invisible). Commands run on `loop()` (the NimBLE task's 4 KB stack overflowed on
+  `statusJson()` and crashed the puck on first connect). 7.5–15 ms connection interval. `forget` on serial drops the key.
+- **App 0.18.0** (`app/lib/puck/`): `wbt.dart` decodes `.wbt` to the CSV the dock writes; `puck_ble.dart` scans by
+  service UUID, matches the owner hash against the keys this phone holds (`MyPuck.key`, kept now), does hello/auth,
+  pulls tracks with resume + CRC; `puck_pull.dart` empties a puck into Sessions and clears it; `puck_watcher.dart`
+  does that by itself every 90 s while the app is in front (only connects when the advert says tracks are waiting).
+  Set up a puck is number + auto-record + Connect; the puck screen has Get its tracks, live speed/heel/pitch, flip.
+  Hotspot settings, `puck_wifi.dart`, `android_src/MainActivity.kt`, the Dock page and "See them check in" are gone;
+  the pocket dock is loopback-only and only serves the viewer (and the demo pucks).
+- **Same phone, set up again**: the existing key is kept (no wipe). **New phone / new owner**: hold 6 s, Set up a
+  puck, new key, tracks wiped. **Lost / sold**: Forget in the app revokes the key on the server; the puck keeps the
+  dead key until someone re-pairs it.
+- Still to prove on the bench: first auth, a 1 MB track over BLE (expect 20–40 kB/s), the watcher picking a puck up
+  on the pad, a BLE firmware update onto this build.

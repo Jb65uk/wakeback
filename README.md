@@ -9,7 +9,6 @@ wakeback/
 ├── viewer/admin.html     the admin page (/admin): users, tracks, puck keys, log of changes
 ├── viewer/record.html    record a sail with the phone's own GPS in the browser (/record)
 ├── app/                  Android phone/tablet app: the dock in your pocket, runs this same viewer (see app/README.md)
-├── docs/PHONE_DOCK.md    how pucks upload to a phone hotspot instead of the dock (firmware notes)
 ├── docs/ROADMAP.md       where this is heading: your own sailing, friends, events
 ├── server/app.py         the server (Flask): sessions, uploads, venues, pucks, dock
 ├── server/accounts.py    accounts, friends, sharing, puck keys, admin (SQLite)
@@ -71,8 +70,8 @@ Settings (environment variables):
 `app/` is an Android app that runs the dock's API on the phone and shows this same viewer, so
 everything above works on a phone or tablet, saved on the device, with no dock Pi:
 
-- **No dock?** Turn on the phone's hotspot (`wakeback`): pucks join it and upload to the phone exactly as
-  they would to the Pi — the dock is always the WiFi gateway on port 5000 (`docs/PHONE_DOCK.md`).
+- **Pucks talk to the app over Bluetooth** (26 Oct 2026): set-up, calibration, tracks and firmware. There is no
+  WiFi in a puck; the dock Pi's puck routes are kept for the demo and for any future club collector.
 - **Sync** tab: copies each day's tracks, names, races and course both ways with this server
   (at home or on the Pi), using the API below — nothing extra on the server. **Invite a mate** sends the link.
 - Build it on Windows with `app/setup.ps1` (see `app/README.md`).
@@ -182,7 +181,7 @@ Same server. Set the Pi up as a WiFi access point (`wakeback`, no internet neede
 
 Agreed, not built yet. Roughly in the order they'd make sense. The bigger direction (your own puck and phone, friends, events) is in `docs/ROADMAP.md`.
 
-1. **Puck firmware** (ESP32-S3): 10 Hz GPS + IMU logging to the CSV format above, auto start/stop (see below), Dock check-in about once a minute on the pad (and one as it's lifted off), upload to `/api/upload` when on the pad. The dock is found at the WiFi gateway, port 5000 — the Pi on its own WiFi, or a phone running the app on its hotspot (`docs/PHONE_DOCK.md`).
+1. **Puck firmware** (ESP32-S3): 10 Hz GPS + IMU logging in the compact `.wbt` form, auto start/stop (see below); everything else over Bluetooth to the owner's phone (`firmware/puck/src/ble.h`): a key per puck, HMAC auth, tracks pulled and cleared, firmware pushed.
    - **Auto on/off:** asleep on the pad (never records there). Lifted → IMU wakes it → GPS fix. Records after >1.5 kn for 20 s; stops after ~10 min still, then sleeps.
    - **Travel-proof:** (a) over ~25 kn for a minute = not sailing, stop and discard; (b) needs boat-like heel/pitch rocking, not car motion; (c) only records near known venues (Southport + clubs added on the dock; dock asks "new venue?" first time somewhere new); (d) travel mode, set by triple-tap or from the dock page, sleeps until next put on a pad (use for long trips and flying).
    - Dock double-checks on upload and drops anything with road speeds or no boat motion.

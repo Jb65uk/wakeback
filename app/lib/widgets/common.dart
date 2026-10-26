@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../auth/auth_api.dart';
 import '../dock/store.dart';
-import '../puck/puck_wifi.dart';
+import '../puck/puck_ble.dart';
 import '../sync/server_sync.dart';
 
 /// An error as a sentence a sailor can act on. Our own exceptions already carry one; a network failure

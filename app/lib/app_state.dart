@@ -13,7 +13,8 @@ import 'demo/demo_pucks.dart';
 import 'dock/pocket_dock.dart';
 import 'dock/store.dart';
 import 'dock/tiles.dart';
-import 'puck/puck_wifi.dart';
+import 'puck/puck_ble.dart';
+import 'puck/puck_watcher.dart';
 import 'sync/server_sync.dart';
 import 'updates.dart';
 import 'widgets/common.dart' show friendly;
@@ -31,10 +32,9 @@ class AppState extends ChangeNotifier {
   late final PocketDock dock;
   late final TileCache tiles;
   late final DemoPucks demo;
-  final DockSettings dockSettings = DockSettings();
 
-  /// Set if port 5000 couldn't be opened (pucks then can't reach the phone; replays still work). Plain words.
-  String? dockError;
+  /// Listens for your pucks over Bluetooth while the app is open and pulls their tracks by itself.
+  late final PuckWatcher watcher;
 
   /// The viewer asked for full screen (projector / tablet): hide the app's own bars.
   final ValueNotifier<bool> fullscreen = ValueNotifier(false);
@@ -43,21 +43,21 @@ class AppState extends ChangeNotifier {
     _p = await SharedPreferences.getInstance();
     _docs = await getApplicationDocumentsDirectory();
     store = await _openStore(demoMode);
-    dockSettings.wifi = hotspotName;
-    dock = PocketDock(store, _asset, dockSettings);
+    dock = PocketDock(store, _asset);
     tiles = TileCache(Directory('${_docs.path}/wakeback-tiles'));
     dock.tiles = tiles;
     dock.me = () => {'name': profileName, 'email': profileEmail};
     dock.demoMode = () => demoMode;
-    dock.onUpload = tracksChanged; // a puck's track just landed: the Sails tab reloads and it syncs
-    try {
-      await dock.start(port: 5000);
-    } catch (_) {
-      dockError = 'Another app is using the dock\'s port. Restart WakeBack.';
-      await dock.start(port: 0, address: InternetAddress.loopbackIPv4);
-    }
+    dock.onUpload = tracksChanged; // a track just landed (demo pucks, the import page): the Sails tab reloads and it syncs
+    // the local server only serves the viewer inside the app now (pucks talk Bluetooth): loopback, any free port
+    await dock.start(port: 0, address: InternetAddress.loopbackIPv4);
     demo = DemoPucks(dock.localUrl);
-    PuckReach.dockPort = dock.port; // so "open the puck's page" can ask the dock where a puck is
+    PuckBle.setKeys({for (final p in myPucks) p.puck: p.key});
+    watcher = PuckWatcher(store: () => store, enabled: () => !demoMode && myPucks.any((p) => p.key.isNotEmpty));
+    watcher.onPulled = (r, puck) {
+      if (r.tracks > 0) tracksChanged();
+    };
+    watcher.start();
   }
 
   /// Real data lives in wakeback/; the demo in its own folder so leaving the demo can wipe it cleanly.
@@ -223,20 +223,7 @@ class AppState extends ChangeNotifier {
 
   // ------------------------------------------------------------------ settings
 
-  // These three are typed into text fields, so they don't notify on every keystroke: the screens that show
-  // them read them when they build.
-
-  /// The phone hotspot pucks join (set by Set up a puck; shown on the Dock page).
-  String get hotspotName => _p.getString('hotspotName') ?? 'wakeback';
-  set hotspotName(String v) {
-    final s = v.trim().isEmpty ? 'wakeback' : v.trim();
-    _p.setString('hotspotName', s);
-    dockSettings.wifi = s;
-  }
-
-  /// Kept for setting up pucks to join this phone's hotspot.
-  String get hotspotPass => _p.getString('hotspotPass') ?? '';
-  set hotspotPass(String v) => _p.setString('hotspotPass', v);
+  // Typed into a text field, so it doesn't notify on every keystroke: the screens that show it read it when they build.
 
   /// You: owner of everything this phone records or imports (your account when signed in).
   String get profileName => _p.getString('profileName') ?? '';
@@ -252,8 +239,8 @@ class AppState extends ChangeNotifier {
 
   // ------------------------------------------------------------------ your pucks (set up from this app)
 
-  /// Pucks you've set up from this phone: number, when, firmware seen, and the server key id (0 = none, set up
-  /// without an account). The key itself was handed to the puck and isn't kept here.
+  /// Pucks you've set up from this phone: number, when, firmware seen, the server key id (0 = none, set up
+  /// without an account) and the key itself, which is what lets this phone talk to the puck over Bluetooth.
   List<MyPuck> get myPucks {
     final l = _p.getStringList('myPucks') ?? const [];
     final out = <MyPuck>[];
@@ -272,6 +259,7 @@ class AppState extends ChangeNotifier {
     store
       ..myPucks = l.map((x) => x.puck).toSet()
       ..fleet = _fleet;
+    PuckBle.setKeys({for (final x in l) x.puck: x.key});
     notifyListeners();
   }
 
@@ -280,6 +268,7 @@ class AppState extends ChangeNotifier {
     store
       ..myPucks = myPucks.map((x) => x.puck).toSet()
       ..fleet = _fleet;
+    PuckBle.setKeys({for (final x in myPucks) x.puck: x.key});
     notifyListeners();
   }
 
@@ -389,9 +378,14 @@ AppState get app => AppState.instance;
 /// A puck set up from this phone (see AppState.myPucks).
 class MyPuck {
   final int puck, keyId, setUpMs;
-  final String fw, hotspot;
-  const MyPuck({required this.puck, this.keyId = 0, required this.setUpMs, this.fw = '', this.hotspot = ''});
+  final String fw;
+
+  /// The account key the puck holds (empty: set up without one, or before keys were kept on the phone — Set up
+  /// again gives it a fresh one). The puck only talks to a phone that can prove it has this.
+  final String key;
+  const MyPuck({required this.puck, this.keyId = 0, required this.setUpMs, this.fw = '', this.key = ''});
+  MyPuck copyWith({String? fw}) => MyPuck(puck: puck, keyId: keyId, setUpMs: setUpMs, fw: fw ?? this.fw, key: key);
   static MyPuck fromJson(Map<String, dynamic> j) => MyPuck(
-      puck: (j['puck'] as num).toInt(), keyId: (j['keyId'] as num?)?.toInt() ?? 0, setUpMs: (j['setUpMs'] as num?)?.toInt() ?? 0, fw: '${j['fw'] ?? ''}', hotspot: '${j['hotspot'] ?? ''}');
-  Map<String, dynamic> toJson() => {'puck': puck, 'keyId': keyId, 'setUpMs': setUpMs, 'fw': fw, 'hotspot': hotspot};
+      puck: (j['puck'] as num).toInt(), keyId: (j['keyId'] as num?)?.toInt() ?? 0, setUpMs: (j['setUpMs'] as num?)?.toInt() ?? 0, fw: '${j['fw'] ?? ''}', key: '${j['key'] ?? ''}');
+  Map<String, dynamic> toJson() => {'puck': puck, 'keyId': keyId, 'setUpMs': setUpMs, 'fw': fw, 'key': key};
 }

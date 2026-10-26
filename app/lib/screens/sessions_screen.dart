@@ -440,7 +440,7 @@ class _SessionListState extends State<_SessionList> with WidgetsBindingObserver 
         child: ListView(children: const [
           SizedBox(height: 80),
           _Empty(Icons.sailing_outlined, 'No sessions yet',
-              'Record a sail, or import a track from the You tab. Pucks that join your hotspot land here too.'),
+              'Record a sail, or import a track from the You tab. Your puck\'s sails land here by themselves when it\'s awake near the phone.'),
         ]),
       );
     }

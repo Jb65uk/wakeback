@@ -1,19 +1,15 @@
-// One puck, from the app: what it's doing, the everyday buttons (level, which way up, upload now, record,
+// One puck, from the app: what it's doing, the everyday buttons (level, which way up, get its tracks, record,
 // sleep) and a firmware update — all over Bluetooth, so the puck only has to be awake and within reach.
-//
-// Its full web page (tracks on it, WiFi details, the rest of the calibration) is still there as a second
-// route: over the hotspot when it's on the pad, or its own setup WiFi (button held 6 s) when it isn't.
 import 'dart:async';
 
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
 import '../puck/puck_ble.dart';
-import '../puck/puck_wifi.dart';
+import '../puck/puck_pull.dart';
 import '../updates.dart';
 import '../widgets/common.dart';
 import 'guide_screen.dart';
-import 'web_page.dart';
 
 class PuckScreen extends StatefulWidget {
   final MyPuck puck;
@@ -25,27 +21,28 @@ class PuckScreen extends StatefulWidget {
 class _PuckScreenState extends State<PuckScreen> {
   PuckBle? _ble;
   StreamSubscription<bool>? _link;
-  PuckReach? _reach;
   PuckStatus? _status;
   bool _statusLive = false; // the status card shows a live puck (false: the last thing it said before the link dropped)
   String? _step, _error;
   bool _busy = false;
   PuckFirmware? _latest;
   String? _latestError;
-  double? _flashProgress;
+  double? _progress; // a track pull or a firmware push, 0..1
+  List<PuckTrack>? _tracks;
 
   @override
   void initState() {
     super.initState();
+    PuckBle.busy = true; // the background watcher keeps off the link while this screen is up
     _checkLatest();
-    _connectBle();
+    _connect();
   }
 
   @override
   void dispose() {
     _link?.cancel();
     _ble?.disconnect();
-    _reach?.release();
+    PuckBle.busy = false;
     super.dispose();
   }
 
@@ -59,23 +56,21 @@ class _PuckScreenState extends State<PuckScreen> {
   }
 
   Future<void> _rememberFw(String fw) async {
-    if (fw.isNotEmpty && fw != widget.puck.fw) {
-      await app.putMyPuck(MyPuck(puck: widget.puck.puck, keyId: widget.puck.keyId, setUpMs: widget.puck.setUpMs, fw: fw, hotspot: widget.puck.hotspot));
-    }
+    if (fw.isNotEmpty && fw != widget.puck.fw) await app.putMyPuck(widget.puck.copyWith(fw: fw));
   }
 
-  // ---------------------------------------------------------------- Bluetooth
+  // ---------------------------------------------------------------- the link
 
   /// Connect over Bluetooth (if not already) and read the puck. False, with [_error] set, if it isn't about.
-  Future<bool> _connectBle() async {
-    if (_ble?.isConnected == true) return true;
+  Future<bool> _connect() async {
+    if (_ble?.isConnected == true && _ble!.authed) return true;
     setState(() {
       _busy = true;
       _error = null;
       _step = 'Looking for puck ${widget.puck.puck} over Bluetooth…';
     });
     try {
-      final b = await PuckBle.connect(widget.puck.puck);
+      final b = await PuckBle.connect(widget.puck.puck, key: widget.puck.key.isNotEmpty ? widget.puck.key : null);
       if (!mounted) {
         await b.disconnect();
         return false;
@@ -93,6 +88,12 @@ class _PuckScreenState extends State<PuckScreen> {
         _ble = b;
         _step = 'Reading the puck…';
       });
+      if (!b.authed) {
+        throw PuckException(b.pairing
+            ? 'Puck ${widget.puck.puck} has a key this phone doesn\'t hold. Its pairing window is open, so "Set up again" from Your pucks makes it yours.'
+            : 'Puck ${widget.puck.puck} doesn\'t answer to this phone\'s key (set up from another phone, or set up again since). '
+                'Hold its button 6 seconds, then "Set up again" from Your pucks.');
+      }
       final st = await b.status();
       if (!mounted) return false;
       setState(() {
@@ -117,8 +118,8 @@ class _PuckScreenState extends State<PuckScreen> {
 
   Future<void> _refresh() async {
     final b = _ble;
-    if (b == null || !b.isConnected) {
-      await _connectBle();
+    if (b == null || !b.isConnected || !b.authed) {
+      await _connect();
       return;
     }
     try {
@@ -137,7 +138,7 @@ class _PuckScreenState extends State<PuckScreen> {
 
   /// One button: connect if needed, send the command, show the puck's answer, read it again.
   Future<void> _do(String doing, Future<Map<String, dynamic>> Function(PuckBle b) f, {bool thenRefresh = true}) async {
-    if (!await _connectBle() || !mounted) return;
+    if (!await _connect() || !mounted) return;
     setState(() {
       _busy = true;
       _error = null;
@@ -176,65 +177,48 @@ class _PuckScreenState extends State<PuckScreen> {
     });
   }
 
-  // ---------------------------------------------------------------- the web page (WiFi)
+  // ---------------------------------------------------------------- tracks
 
-  /// Find the puck over WiFi and read its status. Over the hotspot if the dock says it's on the pad; its setup
-  /// WiFi only when [setupWifi] (the user chose that, having held the button).
-  Future<bool> _connectWifi({bool setupWifi = false}) async {
-    if (_reach != null) return true;
+  Future<void> _pull() async {
+    if (!await _connect() || !mounted) return;
     setState(() {
       _busy = true;
       _error = null;
-      _step = null;
+      _progress = 0;
+      _step = 'Asking what it has…';
     });
     try {
-      PuckReach r;
-      if (setupWifi) {
-        setState(() => _step = 'Joining the puck\'s WiFi — tap Connect when your phone asks…');
-        await PuckWifi.join();
-        final st0 = await PuckApi().status();
-        if (!st0.isPuck) throw const PuckException('That network isn\'t a WakeBack puck.');
-        r = const PuckReach('http://192.168.4.1', true);
-      } else {
-        r = await PuckReach.find(widget.puck.puck, allowSetupWifi: false, onStep: (s) {
-          if (mounted) setState(() => _step = s);
-        });
-      }
-      final st = await PuckApi(r.base).status();
-      if (!mounted) return false;
-      setState(() {
-        _reach = r;
-        _status = st;
-        _statusLive = true;
-        _step = null;
+      final r = await PuckPull.all(_ble!, app.store, onStep: (s) {
+        if (mounted) setState(() => _step = s);
+      }, progress: (p) {
+        if (mounted) setState(() => _progress = p);
       });
-      await _rememberFw(st.fw);
-      return true;
+      if (!mounted) return;
+      if (r.tracks > 0) app.tracksChanged();
+      toast(context, r.sentence, error: !r.ok);
+      await _refresh();
     } catch (e) {
+      if (mounted) setState(() => _error = friendly(e));
+    } finally {
       if (mounted) {
         setState(() {
-          _error = friendly(e);
+          _busy = false;
           _step = null;
+          _progress = null;
         });
       }
-      return false;
-    } finally {
-      if (mounted) setState(() => _busy = false);
     }
   }
 
-  Future<void> _openPage({bool setupWifi = false}) async {
-    if (!await _connectWifi(setupWifi: setupWifi) || !mounted) return;
-    await Navigator.push(context, MaterialPageRoute<void>(builder: (_) => ServerViewerPage(url: '${_reach!.base}/', title: 'Puck ${widget.puck.puck}')));
-    // the page may have changed things (or the puck left setup mode): let go of that route and read it again
-    if (!mounted) return;
-    final r = _reach;
-    setState(() => _reach = null);
-    await r?.release();
-    await _refresh();
+  Future<void> _listTracks() async {
+    if (!await _connect() || !mounted) return;
+    try {
+      final l = await _ble!.tracks();
+      if (mounted) setState(() => _tracks = l);
+    } catch (e) {
+      if (mounted) setState(() => _error = friendly(e));
+    }
   }
-
-  Future<bool> _onPad() async => PuckReach.docked(await PuckReach.dockPucks(), widget.puck.puck);
 
   // ---------------------------------------------------------------- firmware
 
@@ -249,12 +233,11 @@ class _PuckScreenState extends State<PuckScreen> {
     setState(() {
       _busy = true;
       _error = null;
-      _flashProgress = 0;
+      _progress = 0;
       _step = 'Downloading firmware ${f.version}…';
     });
     List<int> bin;
     try {
-      // needs the internet: do it before the phone may hop onto the puck's WiFi
       bin = await Updates.instance.downloadPuckFirmware(f);
     } catch (e) {
       if (mounted) {
@@ -262,62 +245,44 @@ class _PuckScreenState extends State<PuckScreen> {
           _error = friendly(e);
           _busy = false;
           _step = null;
-          _flashProgress = null;
+          _progress = null;
         });
       }
       return;
     }
     if (!mounted) return;
     setState(() => _busy = false);
-
-    // Bluetooth first; the puck's web page (hotspot or setup WiFi) only if this phone has no Bluetooth to offer
-    final haveBle = await PuckBle.available();
-    final overBle = haveBle && await _connectBle();
-    if (!mounted) return;
-    if (!overBle) {
-      if (haveBle) {
-        // Bluetooth is fine, the puck just wasn't heard (asleep?): _connectBle has said so
-        setState(() => _flashProgress = null);
-        return;
-      }
-      if (!await _connectWifi(setupWifi: _reach == null && !await _onPad()) || !mounted) {
-        setState(() => _flashProgress = null);
-        return;
-      }
+    if (!await _connect() || !mounted) {
+      setState(() => _progress = null);
+      return;
     }
     setState(() {
       _busy = true;
       _step = 'Sending ${(bin.length / 1024).round()} KB to the puck…';
     });
     try {
-      if (overBle) {
-        await _ble!.flash(bin, progress: (p) {
-          if (mounted) setState(() => _flashProgress = p);
-        });
-      } else {
-        await PuckApi(_reach!.base).flash(bin);
-      }
+      await _ble!.flash(bin, progress: (p) {
+        if (mounted) setState(() => _progress = p);
+      });
       if (!mounted) return;
       await _link?.cancel();
       _link = null;
       setState(() {
         _step = null;
-        _flashProgress = null;
+        _progress = null;
         _statusLive = false;
         _ble = null; // it restarts: whatever we were on is gone
-        _reach = null;
       });
-      await app.putMyPuck(MyPuck(puck: widget.puck.puck, keyId: widget.puck.keyId, setUpMs: widget.puck.setUpMs, fw: f.version, hotspot: widget.puck.hotspot));
-      if (mounted) toast(context, 'Firmware ${f.version} sent. The puck is restarting; give it a minute, then it checks in as usual.');
+      await app.putMyPuck(widget.puck.copyWith(fw: f.version));
+      if (mounted) toast(context, 'Firmware ${f.version} sent. The puck is restarting; give it a minute.');
     } catch (e) {
       if (mounted) setState(() => _error = friendly(e));
     } finally {
-      await PuckWifi.leave();
       if (mounted) {
         setState(() {
           _busy = false;
           _step = null;
-          _flashProgress = null;
+          _progress = null;
         });
       }
     }
@@ -334,6 +299,7 @@ class _PuckScreenState extends State<PuckScreen> {
     final canUpdate = _latest != null && (fw.isEmpty || _latest!.newerThan(fw));
     final live = _ble?.isConnected == true && _statusLive;
     final recording = st?.recording == true;
+    final pending = st?.pending ?? 0;
     final dim = t.textTheme.bodySmall?.copyWith(color: t.colorScheme.onSurfaceVariant);
     return Scaffold(
       appBar: AppBar(title: Text('Puck ${p.puck}'), actions: [
@@ -360,7 +326,8 @@ class _PuckScreenState extends State<PuckScreen> {
                           if (st.batteryPct >= 0) 'battery ${st.batteryPct}%${st.charging ? ', charging' : st.batteryFull ? ', full' : ''}',
                           if (st.onPad && !st.charging && !st.batteryFull) 'on the pad',
                           if (st.recording) 'recording',
-                          '${st.tracks} track${st.tracks == 1 ? '' : 's'} on it',
+                          if (st.gpsFix >= 3) 'GPS ${st.sats} sats' else 'no GPS fix',
+                          '$pending track${pending == 1 ? '' : 's'} waiting',
                         ].join(' · '),
                         style: dim,
                       ),
@@ -369,8 +336,8 @@ class _PuckScreenState extends State<PuckScreen> {
                           ? 'Connected over Bluetooth'
                           : st != null
                               ? 'Not connected now (as it was last time)'
-                              : p.keyId > 0
-                                  ? 'Uploads as you'
+                              : p.key.isNotEmpty
+                                  ? 'Yours: talks to this phone only'
                                   : 'No account key',
                       style: live ? dim?.copyWith(color: Colors.greenAccent) : dim,
                     ),
@@ -383,6 +350,14 @@ class _PuckScreenState extends State<PuckScreen> {
                     onPressed: _refresh,
                   ),
               ]),
+              if (live && st != null) ...[
+                const SizedBox(height: 10),
+                Row(children: [
+                  _num(context, 'Speed', '${st.sogKn.toStringAsFixed(1)} kn'),
+                  _num(context, 'Heel', '${st.heel.toStringAsFixed(0)}°'),
+                  _num(context, 'Pitch', '${st.pitch.toStringAsFixed(0)}°'),
+                ]),
+              ],
               if (_step != null) ...[
                 const SizedBox(height: 12),
                 Row(children: [
@@ -390,6 +365,10 @@ class _PuckScreenState extends State<PuckScreen> {
                   const SizedBox(width: 10),
                   Expanded(child: Text(_step!, style: t.textTheme.bodyMedium)),
                 ]),
+              ],
+              if (_progress != null) ...[
+                const SizedBox(height: 8),
+                LinearProgressIndicator(value: _progress! > 0 ? _progress : null),
               ],
               if (_error != null) ...[
                 const SizedBox(height: 12),
@@ -405,6 +384,32 @@ class _PuckScreenState extends State<PuckScreen> {
               ],
             ]),
           ),
+        ),
+        const SectionLabel('Tracks'),
+        Card(
+          child: Column(children: [
+            ListTile(
+              leading: const Icon(Icons.download_outlined),
+              title: Text(pending > 0 ? 'Get its tracks ($pending waiting)' : 'Get its tracks'),
+              subtitle: const Text('Over Bluetooth, straight into Sessions; each one is cleared off the puck once it\'s here. '
+                  'This happens by itself too whenever the puck is awake near the phone with WakeBack open.'),
+              isThreeLine: true,
+              enabled: !_busy,
+              onTap: _busy ? null : _pull,
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.list_alt),
+              title: const Text('What\'s on it'),
+              subtitle: _tracks == null
+                  ? const Text('Tap to list the tracks still on the puck.')
+                  : Text(_tracks!.isEmpty
+                      ? 'Nothing on it.'
+                      : _tracks!.map((x) => '${x.name} (${(x.bytes / 1024).round()} KB${x.open ? ', recording' : ''})').join('\n')),
+              enabled: !_busy,
+              onTap: _busy ? null : _listTracks,
+            ),
+          ]),
         ),
         const SectionLabel('On the boat'),
         Card(
@@ -422,25 +427,25 @@ class _PuckScreenState extends State<PuckScreen> {
                 OutlinedButton(onPressed: _busy ? null : () => _do('Setting which way up…', (b) => b.command('orient 1')), child: const Text('Mounted on deck')),
                 OutlinedButton(onPressed: _busy ? null : () => _do('Setting which way up…', (b) => b.command('orient 2')), child: const Text('Under the thwart')),
               ]),
+              const SizedBox(height: 6),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: _busy ? null : () => _do('Flipping the heel sign…', (b) => b.command('flip')),
+                  icon: const Icon(Icons.swap_horiz, size: 18),
+                  label: const Text('Heel reads backwards'),
+                ),
+              ),
             ]),
           ),
         ),
-        const SectionLabel('Tracks and power'),
+        const SectionLabel('Recording and power'),
         Card(
           child: Column(children: [
             ListTile(
-              leading: const Icon(Icons.cloud_upload_outlined),
-              title: const Text('Upload now'),
-              subtitle: const Text('The puck goes looking for the hotspot straight away and hands over its tracks. Have the hotspot on and WakeBack open.'),
-              isThreeLine: true,
-              enabled: !_busy,
-              onTap: _busy ? null : () => _do('Telling it to find the hotspot…', (b) => b.command('upload')),
-            ),
-            const Divider(height: 1),
-            ListTile(
               leading: Icon(recording ? Icons.stop_circle_outlined : Icons.fiber_manual_record, color: recording ? null : Colors.redAccent),
               title: Text(recording ? 'Stop recording' : 'Start recording'),
-              subtitle: Text(recording ? 'Closes the track it\'s on now; only a finished track can be uploaded.' : 'By hand. It starts by itself when the boat moves off anyway.'),
+              subtitle: Text(recording ? 'Closes the track it\'s on now; only a finished track can be fetched.' : 'By hand. It starts by itself when the boat moves off anyway.'),
               enabled: !_busy,
               onTap: _busy ? null : () => _do(recording ? 'Stopping…' : 'Starting…', (b) => b.command(recording ? 'rec stop' : 'rec start')),
             ),
@@ -467,15 +472,6 @@ class _PuckScreenState extends State<PuckScreen> {
               subtitle: _latest != null && _latest!.notes.isNotEmpty ? Text(_latest!.notes, maxLines: 4, overflow: TextOverflow.ellipsis) : null,
               trailing: canUpdate ? FilledButton(onPressed: _busy ? null : _update, child: const Text('Update')) : null,
             ),
-            if (_flashProgress != null)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  LinearProgressIndicator(value: _flashProgress! > 0 ? _flashProgress : null),
-                  const SizedBox(height: 4),
-                  Text(_flashProgress! > 0 ? '${(_flashProgress! * 100).round()}% sent' : 'Getting ready…', style: dim),
-                ]),
-              ),
             const Divider(height: 1),
             const Padding(
               padding: EdgeInsets.fromLTRB(16, 10, 16, 12),
@@ -484,29 +480,16 @@ class _PuckScreenState extends State<PuckScreen> {
             ),
           ]),
         ),
-        const SectionLabel('The puck\'s full page'),
-        Card(
-          child: Column(children: [
-            ListTile(
-              leading: const Icon(Icons.tune),
-              title: const Text('Open the puck\'s page'),
-              subtitle: const Text('Everything on it: the tracks, WiFi details, the rest of the calibration. Over WiFi: puck on the pad with the hotspot on, '
-                  'and it answers within a minute.'),
-              isThreeLine: true,
-              enabled: !_busy,
-              onTap: _busy ? null : () => _openPage(),
-            ),
-            const Divider(height: 1),
-            ListTile(
-              leading: const Icon(Icons.wifi_find),
-              title: const Text('Not on the pad? Use its setup WiFi'),
-              subtitle: const Text('Hold the puck\'s button 6 seconds (five quick blinks), then tap this and Connect when your phone asks.'),
-              isThreeLine: true,
-              enabled: !_busy,
-              onTap: _busy ? null : () => _openPage(setupWifi: true),
-            ),
-          ]),
-        ),
+      ]),
+    );
+  }
+
+  Widget _num(BuildContext context, String label, String value) {
+    final t = Theme.of(context);
+    return Expanded(
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(label, style: t.textTheme.labelSmall?.copyWith(color: t.colorScheme.onSurfaceVariant)),
+        Text(value, style: t.textTheme.titleMedium),
       ]),
     );
   }

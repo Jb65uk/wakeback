@@ -48,9 +48,7 @@ jobs:
           if 'android.permission.INTERNET' not in s:
               s = re.sub(r'(<manifest[^>]*>)', r'\1\n    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />\n    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />', s, count=1)
           # Record tab: GPS with the screen off, as a foreground service with a notification
-          # Set up a puck: joining the puck's setup WiFi from the app (android_src/MainActivity.kt)
-          for perm in ['ACCESS_FINE_LOCATION', 'ACCESS_COARSE_LOCATION', 'FOREGROUND_SERVICE', 'FOREGROUND_SERVICE_LOCATION', 'WAKE_LOCK', 'POST_NOTIFICATIONS',
-                       'ACCESS_WIFI_STATE', 'CHANGE_WIFI_STATE', 'CHANGE_NETWORK_STATE']:
+          for perm in ['ACCESS_FINE_LOCATION', 'ACCESS_COARSE_LOCATION', 'FOREGROUND_SERVICE', 'FOREGROUND_SERVICE_LOCATION', 'WAKE_LOCK', 'POST_NOTIFICATIONS']:
               if f'android.permission.{perm}"' not in s:
                   s = re.sub(r'(<manifest[^>]*>)', rf'\1\n    <uses-permission android:name="android.permission.{perm}" />', s, count=1)
           # Talking to a puck over Bluetooth LE (lib/puck/puck_ble.dart). Scanning is never for location.
@@ -66,8 +64,6 @@ jobs:
           s = s.replace('android:label="wakeback"', 'android:label="WakeBack"')
           open(p, 'w').write(s)
           PY
-          # our MainActivity (joins a puck's setup WiFi) over the generated one
-          cp android_src/MainActivity.kt android/app/src/main/kotlin/uk/bridgesolutions/wakeback/MainActivity.kt
 
       - name: Release signing key (same key every build, so updates install over the top)
         env:

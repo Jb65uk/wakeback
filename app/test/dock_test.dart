@@ -29,7 +29,7 @@ class Dock {
     dir = await Directory.systemTemp.createTemp('wakeback_test');
     store = DockStore(dir);
     await store.init();
-    dock = PocketDock(store, diskAssets, DockSettings());
+    dock = PocketDock(store, diskAssets);
     await dock.start(port: 0, address: InternetAddress.loopbackIPv4);
   }
 
@@ -296,7 +296,7 @@ void main() {
     d.dock.me = () => {'name': 'James', 'email': 'james@example.com'};
     expect((await d.req('GET', '/api/auth/me')).$2, {'accounts': false, 'user': {'name': 'James', 'email': 'james@example.com'}});
     await d.upload('puck1_103000.csv', south); // mine (profile owner)
-    await d.upload('Mate.csv', south, fields: {'owner_name': 'Dave', 'owner_email': 'dave@x.com'}); // a friend's puck via my hotspot
+    await d.upload('Mate.csv', south, fields: {'owner_name': 'Dave', 'owner_email': 'dave@x.com'}); // a friend's puck, uploaded here
     final (_, list) = await d.req('GET', '/api/sessions');
     final s = (list as List).single;
     expect(s['mine'], ['puck1_103000.csv']);
