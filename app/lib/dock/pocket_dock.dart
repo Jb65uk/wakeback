@@ -1,6 +1,7 @@
-// The dock, on the phone. Same URLs and replies as server/app.py, so:
-//   - the real viewer (index.html), Dock page and phone-upload page run unchanged in the app
-//   - pucks on the phone's hotspot check in and upload exactly as they would to the Pi
+// The app's local web server: the same URLs and replies as server/app.py, so the real viewer (index.html)
+// runs unchanged inside the app against this phone's sessions. Loopback only — real pucks talk Bluetooth
+// (lib/puck/), not HTTP; the check-in and upload routes are kept for the demo pucks, which pretend to be
+// a dock's fleet.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -13,17 +14,12 @@ import 'tiles.dart';
 
 typedef AssetLoader = Future<Uint8List?> Function(String name);
 
-class DockSettings {
-  String wifi = 'wakeback'; // the phone hotspot name pucks join
-}
-
 class PocketDock {
   DockStore store; // swapped when entering/leaving demo mode
 
   /// Map tiles for the viewer, cached on the phone (offline maps). Null = the viewer fetches them itself.
   TileCache? tiles;
   final AssetLoader assets;
-  final DockSettings settings;
   HttpServer? _server;
   final DateTime _boot = DateTime.now();
 
@@ -36,14 +32,14 @@ class PocketDock {
   /// A puck (or the phone-upload page) just landed a track: lists can reload.
   void Function()? onUpload;
 
-  PocketDock(this.store, this.assets, this.settings);
+  PocketDock(this.store, this.assets);
 
   int get port => _server?.port ?? 0;
   String get localUrl => 'http://127.0.0.1:$port';
 
-  /// Pucks expect the dock on port 5000. [address] defaults to every interface so the hotspot can reach it.
-  Future<void> start({int port = 5000, InternetAddress? address}) async {
-    _server = await HttpServer.bind(address ?? InternetAddress.anyIPv4, port, shared: true);
+  /// Loopback, any free port, by default: only the app's own viewer talks to it.
+  Future<void> start({int port = 0, InternetAddress? address}) async {
+    _server = await HttpServer.bind(address ?? InternetAddress.loopbackIPv4, port, shared: true);
     _server!.autoCompress = true;
     _server!.listen((req) {
       _handle(req);
@@ -270,7 +266,7 @@ class PocketDock {
       'networks': <Object>[],
       'can_manage_wifi': false,
       'demo': demoMode(),
-      'dock_wifi': settings.wifi,
+      'dock_wifi': '',
       'hostname': 'WakeBack phone',
       'time_ms': DateTime.now().millisecondsSinceEpoch,
       'uptime_s': DateTime.now().difference(_boot).inSeconds,

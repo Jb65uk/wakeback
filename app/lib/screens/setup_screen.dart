@@ -18,7 +18,6 @@ import 'guide_screen.dart';
 import 'offline_maps.dart';
 import 'pucks_card.dart';
 import 'update_card.dart';
-import 'web_page.dart';
 import 'welcome_screen.dart';
 
 class SetupScreen extends StatefulWidget {
@@ -151,36 +150,10 @@ class _SetupScreenState extends State<SetupScreen> {
             child: ExpansionTile(
               leading: const Icon(Icons.tune),
               title: const Text('Advanced'),
-              subtitle: const Text('Hotspot and dock, server, demo'),
+              subtitle: const Text('Server, demo'),
               shape: const Border(),
               childrenPadding: EdgeInsets.zero,
               children: [
-                Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    if (app.dockError != null) ...[
-                      Row(children: [
-                        const Icon(Icons.error_outline, color: Colors.orangeAccent),
-                        const SizedBox(width: 8),
-                        Expanded(child: Text(app.dockError!, style: t.textTheme.titleSmall)),
-                      ]),
-                      const SizedBox(height: 10),
-                    ],
-                    const Hint('Pucks upload to this phone over its hotspot. Keep WakeBack open while pucks are on their pads.'),
-                    const SizedBox(height: 8),
-                    Text('Hotspot: ${app.hotspotName} — set by Set up a puck', style: t.textTheme.bodyMedium),
-                    const SizedBox(height: 8),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: OutlinedButton.icon(
-                        onPressed: () => Navigator.push(context, MaterialPageRoute<void>(builder: (_) => ServerViewerPage(url: '${app.dock.localUrl}/dock', title: 'Pucks'))),
-                        icon: const Icon(Icons.sensors, size: 18),
-                        label: const Text('Dock page'),
-                      ),
-                    ),
-                  ]),
-                ),
-                const Divider(height: 1),
                 ListTile(
                   leading: const Icon(Icons.dns_outlined),
                   title: const Text('Server'),
@@ -215,7 +188,7 @@ class _SetupScreenState extends State<SetupScreen> {
                 secondary: const Icon(Icons.science_outlined),
                 title: const Text('Demo pucks'),
                 subtitle: Text(app.demo.lastEvent ??
-                    'Five pretend pucks check in to this phone every 3 s; P4 comes back from sailing after 20 s and uploads its session. See them under You → Pucks → See them check in.'),
+                    'Five pretend pucks check in to this phone every 3 s; P4 comes back from sailing after 20 s and its session appears in Sessions.'),
                 isThreeLine: true,
                 value: app.demo.running,
                 onChanged: (on) => on ? app.demo.start() : app.demo.stop(),

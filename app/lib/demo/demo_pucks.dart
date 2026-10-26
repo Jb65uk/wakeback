@@ -1,5 +1,5 @@
 // Port of tools/fake_pucks.py: pretend pucks checking in to the phone's dock over HTTP,
-// exactly as real pucks on the hotspot will. P4 comes back from sailing after ~20 s
+// the way the club dock's fleet does. P4 comes back from sailing after ~20 s
 // and uploads a fresh session through /api/upload.
 import 'dart:async';
 import 'dart:convert';

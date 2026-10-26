@@ -100,7 +100,11 @@ class _PuckPickerSheetState extends State<_PuckPickerSheet> {
                 contentPadding: EdgeInsets.zero,
                 leading: CircleAvatar(radius: 16, backgroundColor: t.colorScheme.primary, child: Text('${p.puck}', style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w700))),
                 title: Text('WakeBack puck ${p.puck}'),
-                subtitle: Text(widget.exclude.contains(p.puck) ? '${p.signal} · already in your list' : p.signal),
+                subtitle: Text([
+                  p.signal,
+                  if (widget.exclude.contains(p.puck)) 'already in your list' else if (p.mine) 'yours' else if (p.unpaired) 'not set up yet' else 'someone else\'s (needs its pairing window)',
+                  if (p.pending > 0) '${p.pending} track${p.pending == 1 ? '' : 's'} waiting',
+                ].join(' · ')),
                 trailing: Icon(p.rssi >= -65
                     ? Icons.signal_cellular_alt
                     : p.rssi >= -80

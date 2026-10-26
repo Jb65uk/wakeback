@@ -1,12 +1,14 @@
 # WakeBack app (Android phone / tablet)
 
-**The dock in your pocket.** The app runs the same API as `server/app.py` on the phone and shows the
+**Your pucks, your sails.** The app talks to your pucks over Bluetooth (`lib/puck/`): sets them up, pulls their
+tracks and pushes firmware. It runs the same API as `server/app.py` on the phone (loopback only) and shows the
 **real viewer** (`viewer/index.html`) — races, marks, start/finish lines, tacks & gybes, wind, big screen,
-crew names, venues, weather, the Dock page — all saved on the phone. Every session is a date + venue, and everything
+crew names, venues, weather — all saved on the phone. Every session is a date + venue, and everything
 your phone records is marked as yours (the You tab).
 
-- **No dock Pi yet?** Turn on the phone's hotspot. Pucks join it and upload to the phone exactly as they
-  would to the Pi (same `/api/pucks/checkin` and `/api/upload`).
+- **Pucks**: a puck belongs to one account. Set up a puck gives it a key from the server; from then on only a
+  phone holding that key can talk to it (`firmware/puck/src/ble.h`). While WakeBack is open the app listens for
+  your pucks and pulls any waiting tracks by itself (`lib/puck/puck_watcher.dart`); the puck screen does it on demand.
 - **Your server** (`app.py` at home or on the Pi): the **Sync** tab copies each day's tracks, names,
   races and course both ways. **Invite a mate** sends the server link.
 - Works at the lake with no signal (Leaflet is bundled; only the map background needs internet).
@@ -14,7 +16,11 @@ your phone records is marked as yours (the You tab).
 ```
 app/
   lib/dock/store.dart         the dock's storage + rules, ported line for line from server/app.py
-  lib/dock/pocket_dock.dart   the dock's HTTP API on port 5000 + serves the viewer pages
+  lib/dock/pocket_dock.dart   the dock's HTTP API on loopback + serves the viewer pages (demo pucks use it; real ones talk Bluetooth)
+  lib/puck/puck_ble.dart      Bluetooth to a puck: scan (own pucks by owner hash), hello/auth (HMAC), commands, tracks, firmware
+  lib/puck/wbt.dart           the puck's compact .wbt track format decoded to CSV (port of firmware/puck/src/track.h)
+  lib/puck/puck_pull.dart     pull every finished track off a puck into Sessions, then clear it off the puck
+  lib/puck/puck_watcher.dart  does that by itself every 90 s while the app is open
   lib/dock/stats.dart         miles / hours / speeds / wind / heel per track, totals and the league (= server/stats.py)
   lib/dock/badges.dart        personal bests ("new record") and badges, from your tracks
   lib/dock/tiles.dart         map tile cache: the dock serves /tiles/... so Replay works offline
@@ -69,15 +75,14 @@ Press `r` in the terminal to reload after a change, `q` to quit.
    `http://localhost:5000` on the PC: the demo day's there with its races and course.
    On a real phone use the PC's LAN address, e.g. `http://192.168.1.20:5000`.
 
-## Pucks uploading to the phone (no dock)
+## Pucks and the phone
 
-1. Android Settings → Hotspot: name **wakeback** (or whatever you set in You → Advanced) and the password your
-   pucks use. Turn it on.
-2. Open WakeBack and keep it open (screen on is safest) while pucks sit on their charging pads.
-3. Pucks join, check in every ~30 s and upload. Watch them on the viewer's **Dock** tab.
-
-The firmware side is in `docs/PHONE_DOCK.md`: pucks look for the dock at their WiFi **gateway** on
-port 5000, which is the Pi on its own WiFi and the phone on its hotspot — one code path for both.
+1. You → Pucks → Set up a puck, with the puck awake (on the pad, or press its button). The app hands it a key
+   from your account over Bluetooth. A puck that already has a key needs its pairing window open first (hold its
+   button 6 s).
+2. After a sail: open WakeBack near the puck. Every 90 s the app listens; a puck of yours advertising tracks
+   waiting gets emptied into Sessions and cleared. Or tap the puck → Get its tracks.
+3. Everything about the puck (live numbers, level, which way up, record, sleep, firmware) is on its screen.
 
 ## Troubleshooting
 
@@ -85,7 +90,7 @@ port 5000, which is the Pi on its own WiFi and the phone on its hotspot — one 
 |---|---|
 | `flutter` not recognised | PATH not set, or terminal opened before you set it |
 | Build asks for a different NDK version | copy the `ndkVersion = "…"` line it prints into `android\app\build.gradle.kts` under `android {` |
-| You → Advanced shows "Couldn't open port 5000" | another app has it; restart the phone. Replays still work, pucks can't upload until then |
+| "Isn't yours on this phone" | the puck answers only to the phone that set it up: hold its button 6 s and Set up again |
 | Sync: "Can't reach the server" | check the address (include `http://` or `https://`); from the emulator the PC is `10.0.2.2` |
 | Map background blank | no internet for tiles — tracks, marks and lines still draw |
 

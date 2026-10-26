@@ -8,7 +8,6 @@ import '../widgets/format.dart';
 import '../widgets/puck_picker.dart';
 import 'puck_screen.dart';
 import 'puck_setup_screen.dart';
-import 'web_page.dart';
 
 class PucksCard extends StatelessWidget {
   const PucksCard({super.key});
@@ -23,8 +22,8 @@ class PucksCard extends StatelessWidget {
           leading: const Icon(Icons.sensors),
           title: const Text('Your pucks'),
           subtitle: Text(pucks.isEmpty
-              ? 'Set a puck up from here: it then records every sail by itself and uploads to this phone.'
-              : 'Uploads land here whenever WakeBack is open on screen with hotspot "${app.hotspotName}" on.'),
+              ? 'Set a puck up from here: it then records every sail by itself and hands the tracks to this phone over Bluetooth.'
+              : app.watcher.lastEvent ?? 'Tracks come over by themselves whenever a puck is awake near the phone with WakeBack open.'),
           isThreeLine: true,
         ),
         for (final p in pucks)
@@ -35,10 +34,8 @@ class PucksCard extends StatelessWidget {
             onTap: () => Navigator.push(context, MaterialPageRoute<void>(builder: (_) => PuckScreen(puck: p))),
             subtitle: Text([
               if (p.fw.isNotEmpty) 'firmware ${p.fw}',
-              p.keyId > 0 ? 'uploads as you' : 'no account key',
+              p.key.isNotEmpty ? 'yours' : p.keyId > 0 ? 'key not on this phone — Set up again' : 'no account key',
               if (p.setUpMs > 0) 'set up ${dayMonth(p.setUpMs)}',
-              // the hotspot name changed since: the puck is still looking for the old one
-              if (p.hotspot.isNotEmpty && p.hotspot != app.hotspotName) 'set up for "${p.hotspot}" — Set up again',
             ].join(' · ')),
             trailing: PopupMenuButton<String>(
               onSelected: (v) => v == 'open'
@@ -47,7 +44,7 @@ class PucksCard extends StatelessWidget {
                       ? _setUp(context, p.puck)
                       : _forget(context, p),
               itemBuilder: (_) => const [
-                PopupMenuItem(value: 'open', child: Text('Settings and firmware')),
+                PopupMenuItem(value: 'open', child: Text('Tracks, settings and firmware')),
                 PopupMenuItem(value: 'again', child: Text('Set up again')),
                 PopupMenuItem(value: 'forget', child: Text('Forget this puck')),
               ],
@@ -64,9 +61,9 @@ class PucksCard extends StatelessWidget {
             ),
             if (pucks.isNotEmpty)
               OutlinedButton.icon(
-                onPressed: () => Navigator.push(context, MaterialPageRoute<void>(builder: (_) => ServerViewerPage(url: '${app.dock.localUrl}/dock', title: 'Pucks'))),
-                icon: const Icon(Icons.monitor_heart_outlined, size: 18),
-                label: const Text('See them check in'),
+                onPressed: () => app.watcher.tick(),
+                icon: const Icon(Icons.download_outlined, size: 18),
+                label: const Text('Check for tracks now'),
               ),
           ]),
         ),
@@ -94,9 +91,9 @@ class PucksCard extends StatelessWidget {
       context,
       'Forget puck ${p.puck}?',
       keyed
-          ? 'Its key is revoked on the server, so it can\'t upload as you any more (sold it, or lost it?). Its sails already uploaded stay. Setting it up again gives it a new key.'
+          ? 'Its key is revoked on the server, so its sails can\'t go up as you any more (sold it, or lost it?). The sails already here stay. The puck itself keeps the old key until someone holds its button 6 s and sets it up again.'
           : p.keyId > 0
-              ? 'It\'s taken off this list. Its key can\'t be revoked while you\'re signed out — it will keep uploading as you until you sign in and set it up again (that replaces its key).'
+              ? 'It\'s taken off this list. Its key can\'t be revoked while you\'re signed out — sign in and forget it again to do that.'
               : 'It\'s taken off this list. The puck itself keeps its settings until you set it up again.',
       ok: 'Forget',
       danger: true,
