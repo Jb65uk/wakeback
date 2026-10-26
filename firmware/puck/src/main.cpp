@@ -249,6 +249,9 @@ static const char *B(bool b) { return b ? "true" : "false"; }
 static const char *orientName() { return S.orientation == 1 ? "deck" : S.orientation == 2 ? "thwart" : "unknown"; }
 static const char *chargeName() { return !onPad ? "not" : battFull ? "full" : "charging"; }
 // ---------- GPS ----------
+// fixes a second: the logging rate while moving, but never below 5 so moving off is still spotted quickly.
+// 10 Hz costs the GPS ~10 mA more than 5 and at 5 Hz logging half of it was thrown away.
+static int navHz() { return S.recHz >= 5 ? S.recHz : 5; }
 static bool startGps() {
   static const uint32_t bauds[] = {38400, 115200, 9600, 57600, 230400};
   Serial1.setRxBufferSize(4096);
@@ -261,7 +264,7 @@ static bool startGps() {
   if (!gpsBaud) return false;
   gnss.setUART1Output(COM_TYPE_UBX);
   gnss.setDynamicModel(DYN_MODEL_SEA);
-  gnss.setNavigationFrequency(10);
+  gnss.setNavigationFrequency(navHz());
   gnss.setAutoPVT(true);
   return true;
 }
@@ -279,7 +282,7 @@ static void gpsNap() {
 static void gpsWake() {
   if (!gpsOk || !gpsNapping) return;
   Serial1.write(0xFF); delay(100);           // any byte wakes it; its settings are kept in RAM
-  gnss.setNavigationFrequency(10);
+  gnss.setNavigationFrequency(navHz());
   gpsNapping = false;
   Serial.println("GPS awake.");
 }
@@ -305,7 +308,8 @@ static void pollGps() {
 // ---------- IMU ----------
 static bool enableImuReports() {
   bool ok = bno.enableReport(SH2_GAME_ROTATION_VECTOR, 20000);        // 50 Hz, gyro + accel: heel and pitch
-  bno.enableReport(SH2_ROTATION_VECTOR, 100000);                      // 10 Hz, with the magnetometer: heading, so the twist can be learnt
+  // with the magnetometer: heading, so the twist can be learnt. 10 Hz while learning, 1 Hz once it's known (~5 mA)
+  bno.enableReport(SH2_ROTATION_VECTOR, S.twistLearned ? 1000000 : 100000);
   return ok;
 }
 static bool startImu() {
@@ -366,8 +370,8 @@ static void calLevel() {          // the current heel and pitch (before zeroing)
 static void calFlipHeel() {       // starboard reads as port: flip the sign (and the zero with it)
   S.flipHeel = !S.flipHeel; S.zeroHeel = -S.zeroHeel; saveSettings();
 }
-static void setTwist(float deg) { S.twist = wrap180(deg); S.twistLearned = true; saveSettings(); }
-static void calReset() { S.zeroHeel = S.zeroPitch = S.twist = 0; S.twistLearned = false; S.flipHeel = false; S.orientation = 0; saveSettings(); }
+static void setTwist(float deg) { S.twist = wrap180(deg); S.twistLearned = true; saveSettings(); if (imuOk) enableImuReports(); }
+static void calReset() { S.zeroHeel = S.zeroPitch = S.twist = 0; S.twistLearned = false; S.flipHeel = false; S.orientation = 0; saveSettings(); if (imuOk) enableImuReports(); }
 
 // which way up (at rest) and the mounting twist (while sailing straight): learnt in the background, once a second
 static void learnMounting() {
@@ -393,7 +397,7 @@ static void learnMounting() {
       S.twist = wrap180(S.twist + err * (S.twistLearned ? 0.02f : 0.2f));
       static int settled = 0;
       if (fabsf(err) < 5) settled++; else settled = 0;
-      if (settled > 60 && !S.twistLearned) { S.twistLearned = true; saveSettings(); }
+      if (settled > 60 && !S.twistLearned) { S.twistLearned = true; saveSettings(); enableImuReports(); }
       if (millis() - lastSave > 120000) { lastSave = millis(); saveSettings(); }
     }
   }
@@ -505,7 +509,7 @@ static void led() {
   else if (gps.fix >= 3) on = m % 1000 < 100;
   else on = m % 2000 < 60;
   digitalWrite(PIN_LED, on);
-  if (!onPad) analogWrite(PIN_RING, on ? 255 : 0);
+  if (!onPad) analogWrite(PIN_RING, on ? 64 : 0);   // a quarter: enough to see, ~2 mA saved
   else if (battFull) analogWrite(PIN_RING, 255);
   else { const float ph = (m % 3000) / 3000.0f * 6.2832f; analogWrite(PIN_RING, (int)(8 + 120 * (1 - cosf(ph)))); }
 }
@@ -604,7 +608,7 @@ static String applySettings(const String &form, bool &keyChanged) {
     else if (k == "key") { if (v.length()) S.key = v.substring(0, 64); }
     else if (k == "autorec") S.autoRec = v == "1";
     else if (k == "autooff") S.autoOff = v == "1";
-    else if (k == "rate") { const int hz = v.toInt(); if (hz == 1 || hz == 2 || hz == 5 || hz == 10) S.recHz = hz; }
+    else if (k == "rate") { const int hz = v.toInt(); if (hz == 1 || hz == 2 || hz == 5 || hz == 10) { S.recHz = hz; if (gpsOk && !gpsNapping) gnss.setNavigationFrequency(navHz()); } }
     else if (k == "stopmin") { const int m = v.toInt(); if (m >= 2 && m <= 60) S.stopMin = m; }
     else if (k == "sleepmin") { const int m = v.toInt(); if (m >= 5 && m <= 240) S.sleepMin = m; }
   }
@@ -743,7 +747,7 @@ static void help() {
 static void report() {
   // what to check when a part is missing: the same hints the old bench sketch gave
   Serial.printf("GPS: %s", gpsOk ? "found" : "NOT FOUND. Check VCC/GND, and that GPS TX goes to D7 and GPS RX to D6.\n");
-  if (gpsOk) Serial.printf(" at %lu baud, 10 Hz, sea mode\n", (unsigned long)gpsBaud);
+  if (gpsOk) Serial.printf(" at %lu baud, %d Hz, sea mode\n", (unsigned long)gpsBaud, navHz());
   Serial.printf("IMU: %s\n", imuOk ? "found (BNO085)" : "NOT FOUND. Check VIN/GND, SDA to D4, SCL to D5.");
   Serial.printf("Storage: %s %.1f MB free, %d track(s)\n", fsOk ? "ok," : "NOT WORKING", fsFree / 1048576.0, nTracks);
   Serial.printf("Key: %s. Auto-record %s, %d Hz moving. Twist %.0f%s, mounted %s.\n", S.key.length() ? "set (locked to its owner)" : "NONE (anyone can set it up)",
