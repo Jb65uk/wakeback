@@ -401,14 +401,39 @@ class _PuckScreenState extends State<PuckScreen> {
             ListTile(
               leading: const Icon(Icons.list_alt),
               title: const Text('What\'s on it'),
-              subtitle: _tracks == null
-                  ? const Text('Tap to list the tracks still on the puck.')
-                  : Text(_tracks!.isEmpty
+              subtitle: Text(_tracks == null
+                  ? 'Tap to list the tracks still on the puck.'
+                  : _tracks!.isEmpty
                       ? 'Nothing on it.'
-                      : _tracks!.map((x) => '${x.name} (${(x.bytes / 1024).round()} KB${x.open ? ', recording' : ''})').join('\n')),
+                      : '${_tracks!.length} track${_tracks!.length == 1 ? '' : 's'}. Tap one\'s bin to delete it without fetching.'),
               enabled: !_busy,
               onTap: _busy ? null : _listTracks,
             ),
+            if (_tracks != null)
+              for (final x in _tracks!)
+                ListTile(
+                  dense: true,
+                  contentPadding: const EdgeInsets.only(left: 56, right: 8),
+                  title: Text(x.name, style: t.textTheme.bodySmall),
+                  subtitle: Text('${(x.bytes / 1024).round()} KB${x.open ? ' · recording now' : ''}'),
+                  trailing: x.open
+                      ? null
+                      : IconButton(
+                          tooltip: 'Delete from the puck',
+                          icon: const Icon(Icons.delete_outline, size: 20),
+                          onPressed: _busy ? null : () => _deleteTrack(x),
+                        ),
+                ),
+            if (_tracks != null && _tracks!.isNotEmpty) ...[
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.delete_sweep_outlined, color: Colors.orangeAccent),
+                title: const Text('Erase every track on the puck'),
+                subtitle: const Text('Fetched or not. Can\'t be undone.'),
+                enabled: !_busy,
+                onTap: _busy ? null : _eraseAll,
+              ),
+            ],
           ]),
         ),
         const SectionLabel('On the boat'),
@@ -416,7 +441,12 @@ class _PuckScreenState extends State<PuckScreen> {
           child: Padding(
             padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Hint('With the puck clipped in and the boat sitting level, tell it so: heel and pitch then read 0 from here. Then say which way up it\'s mounted.'),
+              if (st != null) ...[
+                Text(_calibrationLine(st), style: t.textTheme.bodyMedium),
+                const SizedBox(height: 8),
+              ],
+              const Hint('With the puck clipped in and the boat sitting level, tell it so: heel and pitch then read 0 from here. Then say which way up it\'s mounted. '
+                  'The twist from the bow it works out itself the first time you sail in a straight line.'),
               const SizedBox(height: 8),
               Wrap(spacing: 8, runSpacing: 4, children: [
                 FilledButton.tonalIcon(
@@ -427,14 +457,41 @@ class _PuckScreenState extends State<PuckScreen> {
                 OutlinedButton(onPressed: _busy ? null : () => _do('Setting which way up…', (b) => b.command('orient 1')), child: const Text('Mounted on deck')),
                 OutlinedButton(onPressed: _busy ? null : () => _do('Setting which way up…', (b) => b.command('orient 2')), child: const Text('Under the thwart')),
               ]),
-              const SizedBox(height: 6),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: TextButton.icon(
-                  onPressed: _busy ? null : () => _do('Flipping the heel sign…', (b) => b.command('flip')),
-                  icon: const Icon(Icons.swap_horiz, size: 18),
-                  label: const Text('Heel reads backwards'),
-                ),
+              const SizedBox(height: 4),
+              ExpansionTile(
+                tilePadding: EdgeInsets.zero,
+                childrenPadding: EdgeInsets.zero,
+                shape: const Border(),
+                title: Text('Advanced', style: t.textTheme.titleSmall),
+                children: [
+                  if (st != null)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: Text(
+                        'Twist ${st.twist.toStringAsFixed(0)}° ${st.twistLearned ? '(learned)' : '(not learned yet)'} · level offsets heel ${st.zeroHeel.toStringAsFixed(1)}°, pitch ${st.zeroPitch.toStringAsFixed(1)}°'
+                        '${st.flip ? ' · heel sign flipped' : ''}',
+                        style: dim,
+                      ),
+                    ),
+                  Wrap(spacing: 8, runSpacing: 4, children: [
+                    OutlinedButton.icon(
+                      onPressed: _busy ? null : _typeTwist,
+                      icon: const Icon(Icons.rotate_right, size: 18),
+                      label: const Text('Type the twist'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: _busy ? null : () => _do('Flipping the heel sign…', (b) => b.command('flip')),
+                      icon: const Icon(Icons.swap_horiz, size: 18),
+                      label: const Text('Heel reads backwards'),
+                    ),
+                    TextButton.icon(
+                      onPressed: _busy ? null : _resetCal,
+                      icon: const Icon(Icons.restart_alt, size: 18),
+                      label: const Text('Reset calibration'),
+                    ),
+                  ]),
+                  const SizedBox(height: 4),
+                ],
               ),
             ]),
           ),
@@ -466,10 +523,35 @@ class _PuckScreenState extends State<PuckScreen> {
             SwitchListTile(
               secondary: const Icon(Icons.play_circle_outline),
               title: const Text('Record on its own'),
-              subtitle: const Text('Starts when the boat moves off, stops after 10 minutes still.'),
+              subtitle: Text('Starts when the boat moves off, stops after ${st?.stopMin ?? 10} minutes still.'),
               value: st?.autoRec ?? true,
               onChanged: _busy || !live ? null : (v) => _do(v ? 'Turning auto-record on…' : 'Turning auto-record off…', (b) => b.settings(autoRec: v).then((_) => {'msg': v ? 'Records on its own.' : 'Button only.'})),
             ),
+            _minutes(
+              context,
+              'Sail is over after',
+              'Minutes without moving 20 m before the track closes. Lunch ashore? Make it longer and the whole day stays one track.',
+              const [5, 10, 20, 30],
+              st?.stopMin ?? 10,
+              (m) => _do('Setting it…', (b) => b.settings(stopMin: m).then((_) => {'msg': 'A sail ends after $m minutes still.'})),
+            ),
+            const Divider(height: 1),
+            SwitchListTile(
+              secondary: const Icon(Icons.power_settings_new),
+              title: const Text('Switch itself off'),
+              subtitle: Text('Sleeps after ${st?.sleepMin ?? 30} minutes still, off the pad. A press or the pad wakes it.'),
+              value: st?.autoOff ?? true,
+              onChanged: _busy || !live ? null : (v) => _do(v ? 'Turning auto-off on…' : 'Turning auto-off off…', (b) => b.settings(autoOff: v).then((_) => {'msg': v ? 'Sleeps by itself.' : 'Stays awake until you hold the button.'})),
+            ),
+            if (st?.autoOff ?? true)
+              _minutes(
+                context,
+                'Sleep after',
+                'Minutes still before it switches itself off.',
+                const [15, 30, 60, 120],
+                st?.sleepMin ?? 30,
+                (m) => _do('Setting it…', (b) => b.settings(sleepMin: m).then((_) => {'msg': 'Sleeps after $m minutes still.'})),
+              ),
             const Divider(height: 1),
             ListTile(
               leading: Icon(recording ? Icons.stop_circle_outlined : Icons.fiber_manual_record, color: recording ? null : Colors.redAccent),
@@ -509,6 +591,72 @@ class _PuckScreenState extends State<PuckScreen> {
             ),
           ]),
         ),
+      ]),
+    );
+  }
+
+  Future<void> _deleteTrack(PuckTrack x) async {
+    if (!await confirm(context, 'Delete ${x.name} from the puck?', 'It hasn\'t been fetched. Gone for good.', ok: 'Delete', danger: true)) return;
+    await _do('Deleting…', (b) => b.done(x.name).then((_) => {'msg': 'Deleted.'}));
+    await _listTracks();
+  }
+
+  Future<void> _eraseAll() async {
+    if (!await confirm(context, 'Erase every track on puck ${widget.puck.puck}?', 'Fetched or not, all of them. Can\'t be undone.', ok: 'Erase', danger: true)) return;
+    await _do('Erasing…', (b) => b.command('erase'));
+    await _listTracks();
+  }
+
+  Future<void> _typeTwist() async {
+    final c = TextEditingController(text: _status?.twist.toStringAsFixed(0) ?? '0');
+    final v = await showDialog<double>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Mounting twist'),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Hint('Degrees the puck\'s lid arrow points clockwise of the bow. 0 = arrow at the bow. It normally learns this by itself on the first straight leg; only type it if that\'s not happening.'),
+          const SizedBox(height: 8),
+          TextField(controller: c, keyboardType: const TextInputType.numberWithOptions(signed: true, decimal: true), decoration: const InputDecoration(suffixText: '°'), autofocus: true),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, double.tryParse(c.text.trim())), child: const Text('Set')),
+        ],
+      ),
+    );
+    if (v == null || !mounted) return;
+    await _do('Setting the twist…', (b) => b.setTwist(v).then((_) => {'msg': 'Twist ${v.toStringAsFixed(0)}°.'}));
+  }
+
+  Future<void> _resetCal() async {
+    if (!await confirm(context, 'Reset calibration?', 'Level, twist, heel sign and which way up all go back to unknown. It relearns which way up and the twist by itself; set level again with the boat sat level.', ok: 'Reset', danger: true)) return;
+    await _do('Resetting…', (b) => b.calReset().then((_) => {'msg': 'Calibration cleared.'}));
+  }
+
+  static String _calibrationLine(PuckStatus st) {
+    final where = switch (st.orientation) { 'deck' => 'Mounted on deck', 'thwart' => 'Under the thwart', _ => 'Which way up: not known yet' };
+    final twist = st.twistLearned ? 'twist ${st.twist.toStringAsFixed(0)}° learned' : 'twist not learned yet (sail a straight leg)';
+    final mag = switch (st.mag) { 3 => 'compass good', 2 => 'compass fair', _ => 'compass poor (turn it over a few times)' };
+    return '$where · $twist · $mag';
+  }
+
+  Widget _minutes(BuildContext context, String title, String hint, List<int> choices, int current, void Function(int) onPick) {
+    final t = Theme.of(context);
+    final live = _ble?.isConnected == true && _statusLive;
+    final set = choices.contains(current) ? {current} : {choices.first};
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(title, style: t.textTheme.titleSmall),
+        const SizedBox(height: 6),
+        SegmentedButton<int>(
+          segments: [for (final m in choices) ButtonSegment(value: m, label: Text('$m min'))],
+          selected: set,
+          showSelectedIcon: false,
+          onSelectionChanged: _busy || !live ? null : (v) => onPick(v.first),
+        ),
+        const SizedBox(height: 4),
+        Hint(hint),
       ]),
     );
   }
