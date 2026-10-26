@@ -62,7 +62,8 @@ static const float    MOVE_M = 20;                           // while recording,
 static const uint32_t STOP_AFTER_MS = 10UL * 60 * 1000;      // ...10 minutes, or the sail is over
 static const uint32_t PAD_GPS_NAP_MS = 60000;                // on the pad this long = indoors on the charger: GPS to standby until it's lifted
 static const uint32_t FLASH_RESERVE = 96 * 1024;             // stop writing when this little is left
-static const int      REC_HZ = 5;                            // points a second while moving (1 while still): plenty for a dinghy; in the compact format about 18 h of sailing fits in 4.5 MB
+// points a second while moving (1 while still) is a setting (S.recHz, 1/2/5/10, from the app): 5 is plenty for a dinghy and
+// in the compact format about 18 h of sailing fits in 4.5 MB; 10 halves that, 2 doubles it
 
 static const char *TRK_DIR = "/trk";
 
@@ -100,6 +101,7 @@ struct Settings {
   bool twistLearned = false, flipHeel = false;
   int orientation = 0;               // 0 unknown, 1 deck (IMU up), 2 under the thwart (IMU down)
   bool autoRec = true, autoOff = true;
+  int recHz = 5;                     // points a second while the boat is moving: 1, 2, 5 or 10
   bool configured = false;           // someone has set it up from the app
 } S;
 
@@ -129,6 +131,7 @@ static void loadSettings() {
   S.flipHeel = prefs.getBool("flip", false);
   S.orientation = prefs.getInt("orient", 0);
   S.autoRec = prefs.getBool("arec", true); S.autoOff = prefs.getBool("auto", true);
+  S.recHz = prefs.getInt("rhz", 5);
 }
 
 static void saveSettings() {
@@ -140,6 +143,7 @@ static void saveSettings() {
   prefs.putBool("flip", S.flipHeel);
   prefs.putInt("orient", S.orientation);
   prefs.putBool("arec", S.autoRec); prefs.putBool("auto", S.autoOff);
+  prefs.putInt("rhz", S.recHz);
   if (S.configured) prefs.putBool("cfg", true);
 }
 
@@ -170,7 +174,7 @@ uint32_t recStarted = 0, recLines = 0, lastPointMs = 0, lastFlush = 0;
 bool haveRest = false; int32_t restLat = 0, restLon = 0; uint32_t stillSince = 0, movingSince = 0;
 int32_t moveLat = 0, moveLon = 0; uint32_t lastMoveMs = 0;
 // The minute before the boat moved off: a ring of the latest points, encoded into the file when a track starts
-static const int PRE_POINTS = 400;                   // 80 s at 5 Hz
+static const int PRE_POINTS = 400;                   // 80 s at 5 Hz (40 s at 10)
 TrackPoint *pre = nullptr; int preHead = 0, preLen = 0;
 TrackWriter trk;                                     // the open track's encoder
 
@@ -448,7 +452,7 @@ static void onFix() {
   const uint32_t m = millis();
   const uint64_t t = clockSet ? nowMs() : gps.tMs;
   const bool moving = gps.sogKn > STILL_KN;
-  const uint32_t gap = moving ? 1000 / REC_HZ : 1000;
+  const uint32_t gap = moving ? 1000 / S.recHz : 1000;
   if (gps.fix >= 2 && t && (m - lastPointMs >= gap - 5)) {
     lastPointMs = m;
     const TrackPoint pt = {t, gps.lat, gps.lon, gps.sogKn, gps.cogDeg, imu.heel, imu.pitch};
@@ -533,8 +537,8 @@ static void goToSleep(const char *why) {
 static String statusJson() {
   String j; j.reserve(1400);
   char b[600];
-  snprintf(b, sizeof b, "{\"ok\":true,\"fw\":\"%s\",\"puck\":%d,\"uptime_s\":%lu,\"time_ms\":%llu,\"autorec\":%s,\"autooff\":%s,\"locked\":%s,\"pairing\":%s,",
-           FW, S.puck, (unsigned long)(millis() / 1000), (unsigned long long)nowMs(), B(S.autoRec), B(S.autoOff), B(S.key.length() > 0), B(pairingOpen()));
+  snprintf(b, sizeof b, "{\"ok\":true,\"fw\":\"%s\",\"puck\":%d,\"uptime_s\":%lu,\"time_ms\":%llu,\"autorec\":%s,\"autooff\":%s,\"rec_hz\":%d,\"locked\":%s,\"pairing\":%s,",
+           FW, S.puck, (unsigned long)(millis() / 1000), (unsigned long long)nowMs(), B(S.autoRec), B(S.autoOff), S.recHz, B(S.key.length() > 0), B(pairingOpen()));
   j += b;
   snprintf(b, sizeof b, "\"gps\":{\"ok\":%s,\"fix\":%d,\"sats\":%d,\"lat\":%.7f,\"lon\":%.7f,\"sog\":%.2f,\"cog\":%.1f,\"hacc\":%.1f,\"hz\":%.0f},",
            B(gpsOk), gps.fix, gps.sats, gps.lat / 1e7, gps.lon / 1e7, gps.sogKn, gps.cogDeg, gps.hAccM, gps.rateHz);
@@ -596,6 +600,7 @@ static String applySettings(const String &form, bool &keyChanged) {
     else if (k == "key") { if (v.length()) S.key = v.substring(0, 64); }
     else if (k == "autorec") S.autoRec = v == "1";
     else if (k == "autooff") S.autoOff = v == "1";
+    else if (k == "rate") { const int hz = v.toInt(); if (hz == 1 || hz == 2 || hz == 5 || hz == 10) S.recHz = hz; }
   }
   keyChanged = S.key != oldKey;
   if (keyChanged && oldKey.length()) eraseTracks("new owner");
@@ -735,8 +740,8 @@ static void report() {
   if (gpsOk) Serial.printf(" at %lu baud, 10 Hz, sea mode\n", (unsigned long)gpsBaud);
   Serial.printf("IMU: %s\n", imuOk ? "found (BNO085)" : "NOT FOUND. Check VIN/GND, SDA to D4, SCL to D5.");
   Serial.printf("Storage: %s %.1f MB free, %d track(s)\n", fsOk ? "ok," : "NOT WORKING", fsFree / 1048576.0, nTracks);
-  Serial.printf("Key: %s. Auto-record %s. Twist %.0f%s, mounted %s.\n", S.key.length() ? "set (locked to its owner)" : "NONE (anyone can set it up)",
-                S.autoRec ? "on" : "off", S.twist, S.twistLearned ? "" : " (not learnt yet)", S.orientation == 2 ? "under the thwart" : S.orientation == 1 ? "on deck" : "not known yet");
+  Serial.printf("Key: %s. Auto-record %s, %d Hz moving. Twist %.0f%s, mounted %s.\n", S.key.length() ? "set (locked to its owner)" : "NONE (anyone can set it up)",
+                S.autoRec ? "on" : "off", S.recHz, S.twist, S.twistLearned ? "" : " (not learnt yet)", S.orientation == 2 ? "under the thwart" : S.orientation == 1 ? "on deck" : "not known yet");
 }
 static void command(String c) {
   c.trim(); if (!c.length()) return;

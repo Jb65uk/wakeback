@@ -1,6 +1,6 @@
 // Bluetooth LE: the only way anything talks to the puck. One service, four characteristics:
 //
-//   command  (write)        a line: "hello" | "auth <hmac-hex>" | "status" | "set k=v&k=v" | "level" | "orient 1|2" |
+//   command  (write)        a line: "hello" | "auth <hmac-hex>" | "status" | "set k=v&k=v" (puck, key, autorec, autooff, rate=1|2|5|10) | "level" | "orient 1|2" |
 //                           "flip" | "twist <deg>" | "calreset" | "rec start|stop" | "tracks" | "get <name> [offset]" | "done <name>" | "sleep" | "reboot" |
 //                           "ota begin <bytes>" | "ota status" | "ota end"
 //   reply    (notify/read)  the answer, JSON, ending in "\n". A long reply (status is ~1 KB) goes in MTU-sized chunks;
