@@ -1,7 +1,7 @@
 // Bluetooth LE: the only way anything talks to the puck. One service, four characteristics:
 //
-//   command  (write)        a line: "hello" | "auth <hmac-hex>" | "status" | "set k=v&k=v" (puck, key, autorec, autooff, rate=1|2|5|10) | "level" | "orient 1|2" |
-//                           "flip" | "twist <deg>" | "calreset" | "rec start|stop" | "tracks" | "get <name> [offset]" | "done <name>" | "sleep" | "reboot" |
+//   command  (write)        a line: "hello" | "auth <hmac-hex>" | "status" | "set k=v&k=v" (puck, key, autorec, autooff, rate=1|2|5|10, stopmin=2..60, sleepmin=5..240) | "level" | "orient 1|2" |
+//                           "flip" | "twist <deg>" | "calreset" | "rec start|stop" | "tracks" | "get <name> [offset]" | "done <name>" | "erase" | "sleep" | "reboot" |
 //                           "ota begin <bytes>" | "ota status" | "ota end"
 //   reply    (notify/read)  the answer, JSON, ending in "\n". A long reply (status is ~1 KB) goes in MTU-sized chunks;
 //                           the app joins them until it sees the newline.
@@ -48,6 +48,7 @@ static bool setOrientation(int o);
 static void startRecording(bool manual);
 static void stopRecording(const char *why);
 static bool deleteTrack(const String &name);
+static void eraseTracks(const char *why);
 static bool streamTrack(const String &name, size_t offset, size_t &total, uint32_t &crc, uint32_t &crcFile);   // sends the bytes with bleData()
 static void goToSleep(const char *why);
 static bool otaBegin(size_t bytes);
@@ -181,6 +182,7 @@ static void bleCommand(const String &line) {
     else bleReply(jsonMsg(false, "Couldn't send that track."));
   }
   else if (op == "done") bleReply(deleteTrack(arg) ? jsonMsg(true, "Deleted.") : jsonMsg(false, "No such track."));
+  else if (op == "erase") { eraseTracks("app"); bleReply(jsonMsg(true, "All tracks erased.")); }
   else if (op == "sleep") { bleReply(jsonMsg(true, "Sleeping.")); delay(300); goToSleep("app"); }
   else if (op == "reboot") { bleReply(jsonMsg(true, "Restarting.")); delay(300); ESP.restart(); }
   else if (op == "ota") {

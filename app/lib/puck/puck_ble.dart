@@ -58,10 +58,11 @@ class PuckSeen {
 class PuckStatus {
   final int puck;
   final String fw;
-  final int batteryPct, tracks, pending, recHz;
-  final bool autoRec, onPad, charging, batteryFull, recording, locked, pairing;
-  final double heel, pitch, sogKn;
+  final int batteryPct, tracks, pending, recHz, stopMin, sleepMin, mag;
+  final bool autoRec, autoOff, onPad, charging, batteryFull, recording, locked, pairing, twistLearned, flip;
+  final double heel, pitch, sogKn, twist, zeroHeel, zeroPitch;
   final int gpsFix, sats;
+  final String orientation; // "deck", "thwart" or "unknown"
   final Map<String, dynamic> raw;
 
   PuckStatus.fromMap(this.raw)
@@ -73,7 +74,17 @@ class PuckStatus {
         batteryFull = _m(raw['batt'])['charging'] == 'full',
         recording = _m(raw['rec'])['on'] == true,
         autoRec = raw['autorec'] != false,
+        autoOff = raw['autooff'] != false,
         recHz = _i(raw['rec_hz']) ?? 5,
+        stopMin = _i(raw['stop_min']) ?? 10,
+        sleepMin = _i(raw['sleep_min']) ?? 30,
+        twist = _d(_m(raw['imu'])['twist']),
+        twistLearned = _m(raw['imu'])['twist_learned'] == true,
+        orientation = '${_m(raw['imu'])['orientation'] ?? 'unknown'}',
+        mag = _i(_m(raw['imu'])['mag']) ?? 0,
+        zeroHeel = _d(_m(raw['imu'])['zero_heel']),
+        zeroPitch = _d(_m(raw['imu'])['zero_pitch']),
+        flip = _m(raw['imu'])['flip'] == true,
         locked = raw['locked'] == true,
         pairing = raw['pairing'] == true,
         tracks = _i(_m(raw['store'])['files']) ?? 0,
@@ -426,7 +437,7 @@ class PuckBle {
   /// Puck number, the key, auto-record, auto-off, logging rate (1, 2, 5 or 10 points a second while moving).
   /// Allowed without auth only while the puck's pairing window is open (or it has no key yet); the puck decides.
   /// Giving it a key makes this link authed.
-  Future<void> settings({int? puck, String? key, bool? autoRec, bool? autoOff, int? rate}) async {
+  Future<void> settings({int? puck, String? key, bool? autoRec, bool? autoOff, int? rate, int? stopMin, int? sleepMin}) async {
     if (!authed && !pairing && locked) _needAuth();
     final form = {
       if (puck != null) 'puck': '$puck',
@@ -434,6 +445,8 @@ class PuckBle {
       if (autoRec != null) 'autorec': autoRec ? '1' : '0',
       if (autoOff != null) 'autooff': autoOff ? '1' : '0',
       if (rate != null) 'rate': '$rate',
+      if (stopMin != null) 'stopmin': '$stopMin',
+      if (sleepMin != null) 'sleepmin': '$sleepMin',
     };
     final enc = form.entries.map((e) => '${Uri.encodeQueryComponent(e.key)}=${Uri.encodeQueryComponent(e.value)}').join('&');
     await command('set $enc');
@@ -519,6 +532,15 @@ class PuckBle {
 
   /// The puck can delete it: the phone has it safely.
   Future<void> done(String name) => _authed('done $name');
+
+  /// Every track off the puck, fetched or not.
+  Future<void> erase() => _authed('erase');
+
+  /// The mounting twist by hand (degrees clockwise from the bow); normally it learns this itself.
+  Future<void> setTwist(double deg) => _authed('twist ${deg.toStringAsFixed(1)}');
+
+  /// Level, twist, heel sign and which way up: all back to nothing known.
+  Future<void> calReset() => _authed('calreset');
 
   // ---------------------------------------------------------------- firmware
 

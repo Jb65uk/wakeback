@@ -49,7 +49,7 @@ static const int PIN_BTN = 3;
 
 // ---------- timing and thresholds ----------
 static const uint32_t HOLD_SLEEP_MS = 2000, HOLD_PAIR_MS = 6000, WAKE_HOLD_MS = 300;
-static const uint32_t AUTO_OFF_MS = 30UL * 60 * 1000;
+// sleep after this long still off the pad (S.sleepMin, default 30, from the app)
 static const uint32_t PAIR_WINDOW_MS = 10UL * 60 * 1000;     // after the 6 s hold, an app may hand over a key for this long
 static const float    STILL_KN = 0.5f;                       // below this the boat counts as still
 static const uint32_t PAD_HOLD_MS = 2UL * 60 * 60 * 1000;    // still "on the pad" this long after the Qi 5 V drops (full battery, pad in standby)
@@ -59,7 +59,7 @@ static const uint32_t STILL_FOR_MS = 20000;                  // still this long 
 static const float    START_M = 30;                          // moved this far from rest = sailing, start recording
 static const uint32_t START_MOVING_MS = 5000;                // ...and been above STILL_KN for this long: indoor GPS wander moves 30 m but never holds a speed
 static const float    MOVE_M = 20;                           // while recording, must move this far every...
-static const uint32_t STOP_AFTER_MS = 10UL * 60 * 1000;      // ...10 minutes, or the sail is over
+// ...this many minutes (S.stopMin, default 10, from the app), or the sail is over
 static const uint32_t PAD_GPS_NAP_MS = 60000;                // on the pad this long = indoors on the charger: GPS to standby until it's lifted
 static const uint32_t FLASH_RESERVE = 96 * 1024;             // stop writing when this little is left
 // points a second while moving (1 while still) is a setting (S.recHz, 1/2/5/10, from the app): 5 is plenty for a dinghy and
@@ -102,6 +102,8 @@ struct Settings {
   int orientation = 0;               // 0 unknown, 1 deck (IMU up), 2 under the thwart (IMU down)
   bool autoRec = true, autoOff = true;
   int recHz = 5;                     // points a second while the boat is moving: 1, 2, 5 or 10
+  int stopMin = 10;                  // minutes without moving 20 m = the sail is over
+  int sleepMin = 30;                 // minutes still off the pad = go to sleep (if autoOff)
   bool configured = false;           // someone has set it up from the app
 } S;
 
@@ -132,6 +134,7 @@ static void loadSettings() {
   S.orientation = prefs.getInt("orient", 0);
   S.autoRec = prefs.getBool("arec", true); S.autoOff = prefs.getBool("auto", true);
   S.recHz = prefs.getInt("rhz", 5);
+  S.stopMin = prefs.getInt("stopm", 10); S.sleepMin = prefs.getInt("slpm", 30);
 }
 
 static void saveSettings() {
@@ -144,6 +147,7 @@ static void saveSettings() {
   prefs.putInt("orient", S.orientation);
   prefs.putBool("arec", S.autoRec); prefs.putBool("auto", S.autoOff);
   prefs.putInt("rhz", S.recHz);
+  prefs.putInt("stopm", S.stopMin); prefs.putInt("slpm", S.sleepMin);
   if (S.configured) prefs.putBool("cfg", true);
 }
 
@@ -245,6 +249,9 @@ static const char *B(bool b) { return b ? "true" : "false"; }
 static const char *orientName() { return S.orientation == 1 ? "deck" : S.orientation == 2 ? "thwart" : "unknown"; }
 static const char *chargeName() { return !onPad ? "not" : battFull ? "full" : "charging"; }
 // ---------- GPS ----------
+// fixes a second: the logging rate while moving, but never below 5 so moving off is still spotted quickly.
+// 10 Hz costs the GPS ~10 mA more than 5 and at 5 Hz logging half of it was thrown away.
+static int navHz() { return S.recHz >= 5 ? S.recHz : 5; }
 static bool startGps() {
   static const uint32_t bauds[] = {38400, 115200, 9600, 57600, 230400};
   Serial1.setRxBufferSize(4096);
@@ -257,7 +264,7 @@ static bool startGps() {
   if (!gpsBaud) return false;
   gnss.setUART1Output(COM_TYPE_UBX);
   gnss.setDynamicModel(DYN_MODEL_SEA);
-  gnss.setNavigationFrequency(10);
+  gnss.setNavigationFrequency(navHz());
   gnss.setAutoPVT(true);
   return true;
 }
@@ -275,7 +282,7 @@ static void gpsNap() {
 static void gpsWake() {
   if (!gpsOk || !gpsNapping) return;
   Serial1.write(0xFF); delay(100);           // any byte wakes it; its settings are kept in RAM
-  gnss.setNavigationFrequency(10);
+  gnss.setNavigationFrequency(navHz());
   gpsNapping = false;
   Serial.println("GPS awake.");
 }
@@ -301,7 +308,8 @@ static void pollGps() {
 // ---------- IMU ----------
 static bool enableImuReports() {
   bool ok = bno.enableReport(SH2_GAME_ROTATION_VECTOR, 20000);        // 50 Hz, gyro + accel: heel and pitch
-  bno.enableReport(SH2_ROTATION_VECTOR, 100000);                      // 10 Hz, with the magnetometer: heading, so the twist can be learnt
+  // with the magnetometer: heading, so the twist can be learnt. 10 Hz while learning, 1 Hz once it's known (~5 mA)
+  bno.enableReport(SH2_ROTATION_VECTOR, S.twistLearned ? 1000000 : 100000);
   return ok;
 }
 static bool startImu() {
@@ -362,8 +370,8 @@ static void calLevel() {          // the current heel and pitch (before zeroing)
 static void calFlipHeel() {       // starboard reads as port: flip the sign (and the zero with it)
   S.flipHeel = !S.flipHeel; S.zeroHeel = -S.zeroHeel; saveSettings();
 }
-static void setTwist(float deg) { S.twist = wrap180(deg); S.twistLearned = true; saveSettings(); }
-static void calReset() { S.zeroHeel = S.zeroPitch = S.twist = 0; S.twistLearned = false; S.flipHeel = false; S.orientation = 0; saveSettings(); }
+static void setTwist(float deg) { S.twist = wrap180(deg); S.twistLearned = true; saveSettings(); if (imuOk) enableImuReports(); }
+static void calReset() { S.zeroHeel = S.zeroPitch = S.twist = 0; S.twistLearned = false; S.flipHeel = false; S.orientation = 0; saveSettings(); if (imuOk) enableImuReports(); }
 
 // which way up (at rest) and the mounting twist (while sailing straight): learnt in the background, once a second
 static void learnMounting() {
@@ -389,7 +397,7 @@ static void learnMounting() {
       S.twist = wrap180(S.twist + err * (S.twistLearned ? 0.02f : 0.2f));
       static int settled = 0;
       if (fabsf(err) < 5) settled++; else settled = 0;
-      if (settled > 60 && !S.twistLearned) { S.twistLearned = true; saveSettings(); }
+      if (settled > 60 && !S.twistLearned) { S.twistLearned = true; saveSettings(); enableImuReports(); }
       if (millis() - lastSave > 120000) { lastSave = millis(); saveSettings(); }
     }
   }
@@ -483,7 +491,7 @@ static void onFix() {
   } else {
     if (distM(moveLat, moveLon, gps.lat, gps.lon) > MOVE_M) { moveLat = gps.lat; moveLon = gps.lon; lastMoveMs = m; }
     // a track started by the button ends the same way as an automatic one: ten minutes without going anywhere
-    if (m - lastMoveMs > STOP_AFTER_MS) stopRecording("still for 10 minutes");
+    if (m - lastMoveMs > (uint32_t)S.stopMin * 60000UL) stopRecording("still too long");
   }
 }
 
@@ -501,7 +509,7 @@ static void led() {
   else if (gps.fix >= 3) on = m % 1000 < 100;
   else on = m % 2000 < 60;
   digitalWrite(PIN_LED, on);
-  if (!onPad) analogWrite(PIN_RING, on ? 255 : 0);
+  if (!onPad) analogWrite(PIN_RING, on ? 64 : 0);   // a quarter: enough to see, ~2 mA saved
   else if (battFull) analogWrite(PIN_RING, 255);
   else { const float ph = (m % 3000) / 3000.0f * 6.2832f; analogWrite(PIN_RING, (int)(8 + 120 * (1 - cosf(ph)))); }
 }
@@ -537,8 +545,8 @@ static void goToSleep(const char *why) {
 static String statusJson() {
   String j; j.reserve(1400);
   char b[600];
-  snprintf(b, sizeof b, "{\"ok\":true,\"fw\":\"%s\",\"puck\":%d,\"uptime_s\":%lu,\"time_ms\":%llu,\"autorec\":%s,\"autooff\":%s,\"rec_hz\":%d,\"locked\":%s,\"pairing\":%s,",
-           FW, S.puck, (unsigned long)(millis() / 1000), (unsigned long long)nowMs(), B(S.autoRec), B(S.autoOff), S.recHz, B(S.key.length() > 0), B(pairingOpen()));
+  snprintf(b, sizeof b, "{\"ok\":true,\"fw\":\"%s\",\"puck\":%d,\"uptime_s\":%lu,\"time_ms\":%llu,\"autorec\":%s,\"autooff\":%s,\"rec_hz\":%d,\"stop_min\":%d,\"sleep_min\":%d,\"locked\":%s,\"pairing\":%s,",
+           FW, S.puck, (unsigned long)(millis() / 1000), (unsigned long long)nowMs(), B(S.autoRec), B(S.autoOff), S.recHz, S.stopMin, S.sleepMin, B(S.key.length() > 0), B(pairingOpen()));
   j += b;
   snprintf(b, sizeof b, "\"gps\":{\"ok\":%s,\"fix\":%d,\"sats\":%d,\"lat\":%.7f,\"lon\":%.7f,\"sog\":%.2f,\"cog\":%.1f,\"hacc\":%.1f,\"hz\":%.0f},",
            B(gpsOk), gps.fix, gps.sats, gps.lat / 1e7, gps.lon / 1e7, gps.sogKn, gps.cogDeg, gps.hAccM, gps.rateHz);
@@ -600,7 +608,9 @@ static String applySettings(const String &form, bool &keyChanged) {
     else if (k == "key") { if (v.length()) S.key = v.substring(0, 64); }
     else if (k == "autorec") S.autoRec = v == "1";
     else if (k == "autooff") S.autoOff = v == "1";
-    else if (k == "rate") { const int hz = v.toInt(); if (hz == 1 || hz == 2 || hz == 5 || hz == 10) S.recHz = hz; }
+    else if (k == "rate") { const int hz = v.toInt(); if (hz == 1 || hz == 2 || hz == 5 || hz == 10) { S.recHz = hz; if (gpsOk && !gpsNapping) gnss.setNavigationFrequency(navHz()); } }
+    else if (k == "stopmin") { const int m = v.toInt(); if (m >= 2 && m <= 60) S.stopMin = m; }
+    else if (k == "sleepmin") { const int m = v.toInt(); if (m >= 5 && m <= 240) S.sleepMin = m; }
   }
   keyChanged = S.key != oldKey;
   if (keyChanged && oldKey.length()) eraseTracks("new owner");
@@ -712,7 +722,7 @@ static void everySecond() {
   if (flashFull && fsFree > FLASH_RESERVE * 2) flashFull = false;
   if (bleConnected) lastActive = millis();      // the app is talking to us: not idle
   if (pendingCount() != blePendingAdvertised) bleAdvRefresh(S.puck, S.key, pendingCount());   // the advert says how many tracks are waiting
-  if (S.autoOff && !onPad && !recording && !pairingOpen() && millis() - lastActive > AUTO_OFF_MS) goToSleep("still for 30 minutes");
+  if (S.autoOff && !onPad && !recording && !pairingOpen() && millis() - lastActive > (uint32_t)S.sleepMin * 60000UL) goToSleep("still too long");
   // new firmware that has run a couple of minutes with the sensors alive counts as good even with no app about
   if (appPendingVerify && millis() > 120000 && (gpsOk || imuOk)) { esp_ota_mark_app_valid_cancel_rollback(); appPendingVerify = false; }
 }
@@ -737,7 +747,7 @@ static void help() {
 static void report() {
   // what to check when a part is missing: the same hints the old bench sketch gave
   Serial.printf("GPS: %s", gpsOk ? "found" : "NOT FOUND. Check VCC/GND, and that GPS TX goes to D7 and GPS RX to D6.\n");
-  if (gpsOk) Serial.printf(" at %lu baud, 10 Hz, sea mode\n", (unsigned long)gpsBaud);
+  if (gpsOk) Serial.printf(" at %lu baud, %d Hz, sea mode\n", (unsigned long)gpsBaud, navHz());
   Serial.printf("IMU: %s\n", imuOk ? "found (BNO085)" : "NOT FOUND. Check VIN/GND, SDA to D4, SCL to D5.");
   Serial.printf("Storage: %s %.1f MB free, %d track(s)\n", fsOk ? "ok," : "NOT WORKING", fsFree / 1048576.0, nTracks);
   Serial.printf("Key: %s. Auto-record %s, %d Hz moving. Twist %.0f%s, mounted %s.\n", S.key.length() ? "set (locked to its owner)" : "NONE (anyone can set it up)",
