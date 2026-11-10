@@ -214,7 +214,10 @@ body.inapp #dock{border:0;padding:0;margin:0}
 select{background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:7px 8px}
 #chart{width:100%;height:92px;display:block;cursor:crosshair;border-radius:4px;background:rgba(0,0,0,.18)}
 #scrub{width:100%;accent-color:var(--signal)}
-#togglePanel{display:none}
+#togglePanel,#more{display:none}
+#barMain,#barMore{display:contents}
+body.inapp #fs{display:none}   /* in the app, Replay always has the whole screen */
+.mapback{box-shadow:0 1px 5px rgba(0,0,0,.5);background:var(--panel);font-weight:600}
 #sheetBar{display:none}
 .savest[hidden]{display:none}
 .savest{margin:8px 0 0;font-size:13px;color:var(--muted);display:flex;align-items:center;gap:6px}
@@ -229,11 +232,17 @@ select{background:var(--panel-2);border:1px solid var(--line);border-radius:6px;
 #tabs a.on{background:var(--ink);color:var(--panel)}
 #dockWarn:not(:empty){display:inline-block;margin-left:6px;min-width:18px;padding:0 5px;border-radius:9px;background:var(--signal);color:var(--panel);font-size:12px;line-height:18px}
 #cards{display:none}
-body.big #panel{display:none}
+/* with the boat cards up, the stats and tools slide in over the map from the left (a tablet opens on the cards,
+   so they mustn't be out of reach) */
+body.big #panel{position:fixed;left:0;top:0;bottom:0;width:340px;max-width:92vw;transform:translateX(-105%);transition:transform .25s ease;z-index:1500;box-shadow:4px 0 18px rgba(0,0,0,.45)}
+body.big #panel.open{transform:none}
+body.big #sheetBar{display:flex;position:sticky;top:-20px;margin:-20px -18px 0;padding:10px 18px;background:var(--panel);z-index:5;justify-content:flex-end;align-items:center;border-bottom:1px solid var(--line)}
+body.big #sheetBar span{display:none}
 body.big #app{grid-template-columns:1fr 300px}
 body.big #map,body.big #replay{grid-column:1}
 body.big #cards{display:flex;grid-row:1/3;grid-column:2;flex-direction:column;gap:10px;padding:14px;border-left:1px solid var(--line);overflow:auto;background:var(--panel)}
-body.big #togglePanel,body.big #trailOnlyWrap{display:none}
+body.big #togglePanel{display:inline-flex}
+body.big #trailOnlyWrap{display:none}
 .chips{display:flex;flex-wrap:wrap;gap:6px}
 .chip{border:1px solid var(--line);border-radius:999px;padding:4px 10px;font-size:13px;color:var(--muted);cursor:pointer;background:var(--panel-2)}
 .chip.on{background:var(--signal);color:var(--panel);border-color:var(--signal);font-weight:600}
@@ -248,7 +257,7 @@ body.big #togglePanel,body.big #trailOnlyWrap{display:none}
 .card .v small{font-size:14px;font-weight:500;color:var(--muted);margin-left:2px}
 .card .l{color:var(--muted);font-size:12px;margin-top:2px}
 .spacer{flex:1}
-#replay.disabled canvas,#replay.disabled #scrub,#replay.disabled .row>*:not(#togglePanel):not(.spacer){opacity:.45;pointer-events:none}
+#replay.disabled canvas,#replay.disabled #scrub,#replay.disabled #barMain>*:not(#togglePanel):not(#more):not(.spacer),#replay.disabled #barMore>*:not(.spacer){opacity:.45;pointer-events:none}
 /* boat markers */
 .boat-ico{background:none;border:0}
 .hull{width:24px;height:24px;display:flex;align-items:center;justify-content:center;transition:none}
@@ -259,35 +268,61 @@ body.big #togglePanel,body.big #trailOnlyWrap{display:none}
 #drop.show{display:flex}
 #toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--panel);padding:10px 14px;border-radius:6px;font-weight:500;z-index:2100;display:none;max-width:90vw}
 .leaflet-container{background:#0d2231;font-family:var(--body)}
-@media (max-width:760px){
+/* A phone, either way up (narrow, or wide but short): the boats-and-tools panel is a sheet that slides up, and
+   the replay bar is one slim row with the rest behind More. */
+@media (max-width:760px),(max-height:520px){
   #app{grid-template-columns:1fr;grid-template-rows:1fr auto}
-  /* big screen on a phone held upright: map, then one slim row per boat, then a short replay bar */
-  body.big #app{grid-template-columns:1fr;grid-template-rows:minmax(180px,1fr) auto auto}
-  body.big #cards{grid-row:2;grid-column:1;flex-direction:column;gap:6px;padding:8px 10px;overflow-y:auto;overflow-x:hidden;border-left:0;border-top:1px solid var(--line);max-height:40vh}
+  #map{grid-column:1}
+  #replay{grid-column:1}
+  #panel{position:fixed;left:0;right:0;bottom:0;max-height:78%;border-right:0;border-top:1px solid var(--line);border-radius:14px 14px 0 0;transform:translateY(105%);transition:transform .25s ease;padding-bottom:calc(20px + env(safe-area-inset-bottom,0px));z-index:1500}
+  #panel.open{transform:none}
+  body.big #panel{top:auto;width:auto;max-width:none;right:0;transform:translateY(105%);box-shadow:none}
+  body.big #panel.open{transform:none}
+  body.big #sheetBar{justify-content:space-between}
+  body.big #sheetBar span{display:block}
+  #togglePanel{display:inline-flex}
+  #sheetBar{display:flex;position:sticky;top:-20px;margin:-20px -18px 0;padding:10px 18px;background:var(--panel);z-index:5;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line)}
+  #sheetBar span{width:40px;height:4px;border-radius:2px;background:var(--line)}
+  #bar{display:block}
+  #barMain,#barMore{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  #barMain .btn{padding:8px 10px}
+  #barMore{display:none;margin-top:8px}
+  #replay.more #barMore{display:flex}
+  #more{display:inline-flex}
+  /* boat cards at phone size: one slim row per boat, three numbers each; tap a boat for the rest */
   body.big #raceTitle,body.big #wxBig{display:none}   /* the wind is on the map; the race is the lit chip */
   body.big #cards .chips{flex:0 0 auto;flex-wrap:nowrap;overflow-x:auto}
   body.big #cards .chip{white-space:nowrap;font-size:14px;padding:5px 12px}
   body.big #fieldBox{font-size:13px}
-  body.big #cards .card{flex:0 0 auto;display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:12px;align-items:center;padding:7px 10px;border-left-width:6px}
+  body.big #cards .card{flex:0 0 auto;display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:12px;align-items:center;padding:7px 10px;border-left-width:6px;cursor:pointer}
   body.big #cards .card .top{grid-column:1;min-width:0}
   body.big #cards .card .csub{grid-column:1;font-size:12px;margin-top:1px}
   body.big #cards .card .vals{grid-column:2;grid-row:1/span 2;display:flex;gap:14px;margin-top:0}
-  body.big #cards .card .vals>div:nth-child(n+4){display:none}   /* room for three numbers a boat */
+  body.big #cards .card .vals>div:nth-child(n+4){display:none}
+  body.big #cards .card.open .vals{grid-column:1/-1;grid-row:auto;flex-wrap:wrap;gap:8px 16px;margin-top:6px}
+  body.big #cards .card.open .vals>div:nth-child(n+4){display:block}
   body.big #cards .card input.nm{font-size:19px}
   body.big #cards .card .pb{height:22px;min-width:32px;font-size:15px}
   body.big #cards .card .v{font-size:24px}
   body.big #cards .card .v small{font-size:11px}
   body.big #cards .card .l{font-size:10.5px;margin-top:1px}
-  body.big #replay{grid-row:3;padding:8px 10px;gap:6px}
-  body.big #metric,body.big #fit,body.big label:has(#loop){display:none}
+  body.big #replay{padding:8px 10px;gap:6px}
   body.big #chart{height:54px}
-  #map{grid-column:1}
-  #replay{grid-column:1}
-  #panel{position:fixed;left:0;right:0;bottom:0;max-height:78%;border-right:0;border-top:1px solid var(--line);border-radius:14px 14px 0 0;transform:translateY(105%);transition:transform .25s ease;padding-bottom:calc(20px + env(safe-area-inset-bottom,0px));z-index:1500}
-  #panel.open{transform:none}
-  #togglePanel{display:inline-flex}
-  #sheetBar{display:flex;position:sticky;top:-20px;margin:-20px -18px 0;padding:10px 18px;background:var(--panel);z-index:5;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line)}
-  #sheetBar span{width:40px;height:4px;border-radius:2px;background:var(--line)}
+}
+/* upright: map, then the boats, then the bar */
+@media (max-width:760px){
+  body.big #app{grid-template-columns:1fr;grid-template-rows:minmax(180px,1fr) auto auto}
+  body.big #cards{grid-row:2;grid-column:1;flex-direction:column;gap:6px;padding:8px 10px;overflow-y:auto;overflow-x:hidden;border-left:0;border-top:1px solid var(--line);max-height:40vh}
+  body.big #replay{grid-row:3}
+}
+/* on its side: the map with the boats down the right, and a short chart so the map keeps its height */
+@media (min-width:761px) and (max-height:520px){
+  body.big #app{grid-template-columns:1fr 290px}
+  body.big #cards{gap:6px;padding:8px 10px}
+  body.big #cards .card{grid-template-columns:minmax(0,1fr)}   /* name on top, numbers under it: 290 px won't take both side by side */
+  body.big #cards .card .vals,body.big #cards .card.open .vals{grid-column:1;grid-row:auto;margin-top:4px}
+  #replay{padding:8px 10px;gap:6px}
+  #chart,body.big #chart{height:44px}
 }
 @media (prefers-reduced-motion:reduce){#panel{transition:none}}
 </style>
@@ -386,7 +421,7 @@ body.big #togglePanel,body.big #trailOnlyWrap{display:none}
       <p><b>Start and finish lines:</b> Add start line, tap the committee boat end, then the pin end. Drag either end to adjust. A line can be start, finish or both. Put in the gun time (or use the estimate) to get seconds late, distance back at the gun and OCS. The finish gives order and elapsed time. Tap a boat in the results to watch its start.</p>
       <p><b>Colours:</b> "By tack" colours tracks red on port tack, green on starboard. In the list, →Stbd / →Port is the tack a boat ended up on.</p>
       <p><b>Wrong call?</b> Use the drop-down on any tack, gybe or mark to change it, or pick "Not one". Your corrections are saved with the session.</p>
-      <p><b>Projector:</b> B for big screen, F for full screen, Loop to keep replaying. Space plays and pauses.</p>
+      <p><b>Projector:</b> B for the boat cards (a big card of live numbers for each boat), F for full screen, Loop to keep replaying. Space plays and pauses.</p>
       <p><b>Align starts</b> lines everyone up from when they first go over 1.5 kn, to race a mate from a different day or yourself from last week.</p>
     </details>
   </aside>
@@ -416,20 +451,28 @@ body.big #togglePanel,body.big #trailOnlyWrap{display:none}
   </div>
 
   <section id="replay" class="disabled" aria-label="Replay">
-    <div class="row">
+    <!-- On a wide screen the two groups run together as one row. On a phone the first is the bar and the
+         second sits behind More, so the map keeps the height. -->
+    <div class="row" id="bar">
+      <div id="barMain">
       <button class="btn primary" id="play">Play</button>
       <span id="clock">--:--:--</span>
       <select id="rate" aria-label="Replay speed">
         <option value="1">1×</option><option value="5">5×</option><option value="10" selected>10×</option><option value="30">30×</option><option value="60">60×</option>
       </select>
+      <span class="spacer"></span>
+      <button class="btn" id="big">Boat cards</button>
+      <button class="btn" id="togglePanel">Stats &amp; tools</button>
+      <button class="btn" id="more" aria-expanded="false" aria-controls="barMore">More</button>
+      </div>
+      <div id="barMore">
       <select id="metric" aria-label="Chart data"><option value="sog">Chart: speed</option><option value="heel">Chart: heel</option><option value="pitch">Chart: pitch</option><option value="twa">Chart: wind angle</option><option value="vmg">Chart: VMG</option></select>
       <label class="row" style="gap:6px;color:var(--muted)" id="trailOnlyWrap"><input type="checkbox" id="trailOnly"> Trails only</label>
       <label class="row" style="gap:6px;color:var(--muted)"><input type="checkbox" id="loop"> Loop</label>
       <span class="spacer"></span>
       <button class="btn" id="fit">Fit</button>
-      <button class="btn" id="big">Big screen</button>
       <button class="btn" id="fs">Full screen</button>
-      <button class="btn" id="togglePanel">Boats &amp; tools</button>
+      </div>
     </div>
     <canvas id="chart" aria-label="Speed over time, click to jump"></canvas>
     <input type="range" id="scrub" min="0" max="10000" value="0" aria-label="Replay position">
@@ -1213,7 +1256,7 @@ function renameBoat(id, name) {
   renderTacks(); drawChartBase(); render();
 }
 
-// ---------- big screen cards ----------
+// ---------- boat cards ("big" in the code: it began as the projector view) ----------
 function renderChips() {
   $('#fieldChips').innerHTML = FIELDS.map(([k, l]) => `<button class="chip${fields.has(k) ? ' on' : ''}" data-field="${k}">${l}</button>`).join('');
 }
@@ -1235,17 +1278,23 @@ function fitCardNames() {
   });
 }
 window.addEventListener('resize', fitCardNames);
+const openCards = new Set();   // phone: boats whose card is opened out to show every number, not just three
 function renderCards() {
   // only the boats on show: one you've unticked, or one that wasn't out in this race, has no card
   const shown = boats.filter(b => b.visible && b.inRace);
   $('#cardList').innerHTML = shown.map(b => `
-    <div class="card" style="--c:${b.color}">
+    <div class="card${openCards.has(b.id) ? ' open' : ''}" data-card="${b.id}" style="--c:${b.color}">
       <div class="top">${badge(b)}<input class="nm" data-cname="${b.id}" value="${esc(b.name)}" list="sailors" aria-label="Who sailed ${puckNum(b) ? 'puck ' + puckNum(b) : 'this track'}"></div>
       ${boatSub(b) ? `<div class="csub">${esc(boatSub(b))}</div>` : ''}
       <div class="vals">${[...fields].map(f => `<div><div class="v" data-cv="${b.id}:${f}">–</div><div class="l">${FIELDS.find(x => x[0] === f)[1]}</div></div>`).join('')}</div>
     </div>`).join('') || (boats.length ? '<div class="empty">No boats selected. Tick a boat in the list to show it here.</div>' : '');
   fitCardNames();
+  // and again once the lettering has settled: a name measured before its font arrived (or gave up arriving, with
+  // no signal at the lake) reads as fitting and then comes out clipped
+  clearTimeout(fitLater); fitLater = setTimeout(() => { fitCardNames(); setTimeout(fitCardNames, 1500); }, 400);
 }
+let fitLater = 0;
+if (document.fonts && document.fonts.addEventListener) document.fonts.addEventListener('loadingdone', fitCardNames);
 $('#fieldChips').addEventListener('click', e => {
   const c = e.target.closest('[data-field]'); if (!c) return;
   const k = c.dataset.field;
@@ -1254,14 +1303,64 @@ $('#fieldChips').addEventListener('click', e => {
   renderChips(); renderCards(); render();
 });
 $('#cardList').addEventListener('change', e => { const n = e.target.closest('[data-cname]'); if (n) renameBoat(n.dataset.cname, n.value); });
+$('#cardList').addEventListener('click', e => {
+  if (e.target.closest('input')) return;   // the name is for typing in
+  const c = e.target.closest('[data-card]'); if (!c) return;
+  const id = c.dataset.card;
+  if (openCards.has(id)) openCards.delete(id); else openCards.add(id);
+  c.classList.toggle('open', openCards.has(id));
+});
 function setBig(on) {
   document.body.classList.toggle('big', on);
-  $('#big').textContent = on ? 'Normal view' : 'Big screen';
+  $('#big').textContent = on ? 'Map only' : 'Boat cards';
   if (on) { renderChips(); renderCards(); render(); }
   setTimeout(() => { map.invalidateSize(); fitCardNames(); drawChartBase(); render(); }, 50);
 }
-$('#big').addEventListener('click', () => setBig(!document.body.classList.contains('big')));
+// In the app the view picks itself. A tablet opens on the boat cards and remembers if you'd rather not. A phone
+// follows the way it's held: upright is the map, on its side is the map with the boats beside it; the button
+// overrides that until the phone is next turned. In a browser it's all by hand (B, or the button), as before.
+const isPhone = () => Math.min(window.innerWidth, window.innerHeight) < 600;
+const stored = (k, v) => { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch {} return null; };
+let viewByHand = null;
+function autoView() {
+  if (!inApp) return;
+  const want = isPhone() ? (viewByHand != null ? viewByHand : window.innerWidth > window.innerHeight) : stored('wakeback-view') !== 'map';
+  if (want !== document.body.classList.contains('big')) setBig(want);
+}
+$('#big').addEventListener('click', () => {
+  const on = !document.body.classList.contains('big');
+  setBig(on);
+  if (inApp) { if (isPhone()) viewByHand = on; else stored('wakeback-view', on ? 'cards' : 'map'); }
+});
+window.matchMedia('(orientation: landscape)').addEventListener('change', () => { viewByHand = null; setTimeout(autoView, 150); });
+$('#more').addEventListener('click', () => {
+  const on = $('#replay').classList.toggle('more');
+  $('#more').textContent = on ? 'Less' : 'More'; $('#more').setAttribute('aria-expanded', on);
+  setTimeout(() => { map.invalidateSize(); drawChartBase(); render(); }, 50);
+});
+// replay speed and what the chart shows come back as you left them
+for (const id of ['rate', 'metric']) {
+  const el = $('#' + id), was = stored('wakeback-' + id);
+  if (was && [...el.options].some(o => o.value === was)) el.value = was;
+  el.addEventListener('change', () => stored('wakeback-' + id, el.value));
+}
+// In the app Replay has the whole screen (the app hides its own bars), so the way back is on the map.
+if (inApp) {
+  const Back = L.Control.extend({
+    options: { position: 'topleft' },
+    onAdd() {
+      const b = L.DomUtil.create('button', 'btn mapback');
+      b.type = 'button'; b.innerHTML = '&#8592; Sails'; b.setAttribute('aria-label', 'Back to your sails');
+      L.DomEvent.disableClickPropagation(b);
+      b.addEventListener('click', () => WakeBackApp.postMessage(JSON.stringify({ type: 'back' })));
+      return b;
+    },
+  });
+  const back = new Back(); map.addControl(back);
+  const corner = back.getContainer().parentNode; corner.insertBefore(back.getContainer(), corner.firstChild);   // above the zoom buttons
+}
 $('#fs').addEventListener('click', () => {
+  if (inApp) return;
   if (window.WakeBackApp) {   // inside the WakeBack phone/tablet app: it hides its own bars
     const on = !document.body.classList.contains('appfs'); document.body.classList.toggle('appfs', on);
     WakeBackApp.postMessage(JSON.stringify({ type: 'fullscreen', on })); setTimeout(() => map.invalidateSize(), 350); return;
@@ -2235,12 +2334,13 @@ $('#demo').addEventListener('click', async () => {
   $('#clear').click();
   await addBoats([simBoat('James 5154', 4.6, 11, 0, 12, 'puck1'), simBoat('Dave', 4.4, 23, 8, 5, 'puck2'), simBoat('Mike', 4.2, 37, -8, 24, 'puck3')]);
   meta.marks = demoMarks(); meta.lines = demoLines(); saveMeta(); recomputeAll(); renderMarks();
-  toast('Demo loaded: three Solos, three laps. Press Play, then B for big screen.');
+  toast('Demo loaded: three Solos, three laps. Press Play; Boat cards shows each boat\'s numbers.');
 });
 
 // inside the WakeBack app the demo only shows in demo mode (the app adds ?demo=1)
 if (window.WakeBackApp && !new URLSearchParams(location.search).has('demo')) document.body.classList.add('nodemo');
 renderList(); renderChips(); renderRaces(); renderMarks(); recomputeTimeline(); render(); dockInit();
+autoView();
 })();
 </script>
 </body>

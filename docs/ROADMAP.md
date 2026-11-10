@@ -181,3 +181,12 @@ After a read-through of the whole puck path. Rule for the firmware from here: ne
   binned (one older than 3 min is closed and kept), no activity credit so the puck can sleep; clears 5 min after
   the last road speed. Button-started tracks exempt. Raised when wake-on-motion for v2 came up: that needs this
   plus a venue list before it's usable (a bag or a car would wake it otherwise).
+- **Replay on a phone and a tablet** (same PR, `viewer/index.html` + the app's home screen). Checked by rendering the
+  viewer in headless Chromium at phone and tablet sizes (map height on an upright phone 523 → 619 px; on its side
+  158 → 263). In the app Replay always has the whole screen (the app hides its bars; "← Sails" is a control on the
+  map; Full screen is gone from the app's copy). The bar is Play / clock / speed / Boat cards / Stats & tools / More,
+  with chart, trails, loop and fit behind More on a phone. "Big screen" is now **Boat cards** / **Map only**: a
+  tablet opens on the cards and remembers the choice; a phone follows the way it's held (upright = map, on its side
+  = cards beside the map) until the button says otherwise. Cards on a phone open out on a tap. Speed and chart type
+  are remembered. Stats & tools slides over the map in the cards view too (it used to be unreachable there). A
+  browser on the club PC is unchanged apart from the names: B and F still work.

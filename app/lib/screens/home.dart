@@ -51,12 +51,18 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _back() async {
-    if (_page == _replay && (await _viewer.currentState?.handleBack() ?? false)) return; // full screen / inner page
     if (_page != _sails) {
-      setState(() => _page = _sails);
+      await _go(_sails);
       return;
     }
     await SystemNavigator.pop();
+  }
+
+  /// Show a page. Replay gets the whole screen (the app's bars and Android's go; the viewer has its own
+  /// "← Sails" on the map, and the back button works); every other page gets them back.
+  Future<void> _go(int page) async {
+    await _viewer.currentState?.setFullscreen(page == _replay);
+    if (mounted) setState(() => _page = page);
   }
 
   /// A sail tapped in the Sails tab (or a record in Stats): replay it.
@@ -76,7 +82,7 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     if (!mounted) return;
-    setState(() => _page = _replay);
+    await _go(_replay);
     _viewer.currentState?.openSession(id);
   }
 
@@ -106,7 +112,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     labelType: NavigationRailLabelType.all,
                     groupAlignment: -0.9,
                     selectedIndex: _page == _replay ? 0 : _tabPages.indexOf(_page),
-                    onDestinationSelected: (i) => setState(() => _page = _tabPages[i]),
+                    onDestinationSelected: (i) => _go(_tabPages[i]),
                     destinations: const [
                       NavigationRailDestination(icon: Icon(Icons.sailing_outlined), selectedIcon: Icon(Icons.sailing), label: Text('Sails')),
                       NavigationRailDestination(icon: _RecordIcon(selected: false), selectedIcon: _RecordIcon(selected: true), label: Text('Record')),
@@ -120,7 +126,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   Material(
                     color: t.colorScheme.primary,
                     child: InkWell(
-                      onTap: () => setState(() => _page = _you),
+                      onTap: () => _go(_you),
                       child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
                         child: Row(children: [
@@ -137,7 +143,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   Material(
                     color: t.colorScheme.surface,
                     child: InkWell(
-                      onTap: () => setState(() => _page = _sails),
+                      onTap: () => _go(_sails),
                       child: SizedBox(
                         height: 40,
                         child: Row(children: [
@@ -159,6 +165,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       key: _viewer,
                       url: '${app.dock.localUrl}/${app.demoMode ? '?demo=1' : ''}',
                       ownBack: false,
+                      onBack: _back,
                     ),
                     const SetupScreen(),
                   ]),
@@ -172,7 +179,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     height: 60,
                     // in Replay, Sails stays lit: that's where you came from and where back goes
                     selectedIndex: _page == _replay ? 0 : _tabPages.indexOf(_page),
-                    onDestinationSelected: (i) => setState(() => _page = _tabPages[i]),
+                    onDestinationSelected: (i) => _go(_tabPages[i]),
                     destinations: const [
                       NavigationDestination(icon: Icon(Icons.sailing_outlined), selectedIcon: Icon(Icons.sailing), label: 'Sails'),
                       NavigationDestination(icon: _RecordIcon(selected: false), selectedIcon: _RecordIcon(selected: true), label: 'Record'),

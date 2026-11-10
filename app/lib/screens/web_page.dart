@@ -19,7 +19,10 @@ class WakeWebView extends StatefulWidget {
 
   /// Handle the Android back button itself (a pushed page). The home screen handles it for Replay.
   final bool ownBack;
-  const WakeWebView({super.key, required this.url, this.ownBack = true});
+
+  /// The viewer's own "← Sails" button on the map (Replay in the app has the whole screen, so the way back is there).
+  final VoidCallback? onBack;
+  const WakeWebView({super.key, required this.url, this.ownBack = true, this.onBack});
 
   @override
   State<WakeWebView> createState() => WakeWebViewState();
@@ -129,11 +132,15 @@ class WakeWebViewState extends State<WakeWebView> with AutomaticKeepAliveClientM
         await f.writeAsString('${msg['data'] ?? ''}');
         await Share.shareXFiles([XFile(f.path, mimeType: '${msg['mime'] ?? 'application/octet-stream'}')], subject: name);
       case 'fullscreen':
-        await _setFullscreen(msg['on'] == true);
+        await setFullscreen(msg['on'] == true);
+      case 'back':
+        widget.onBack?.call();
     }
   }
 
-  Future<void> _setFullscreen(bool on) async {
+  /// Hide (or bring back) the app's own bars and Android's, so the viewer has the whole screen.
+  Future<void> setFullscreen(bool on) async {
+    if (app.fullscreen.value == on) return;
     app.fullscreen.value = on;
     await SystemChrome.setEnabledSystemUIMode(on ? SystemUiMode.immersiveSticky : SystemUiMode.edgeToEdge);
   }
@@ -173,7 +180,7 @@ class WakeWebViewState extends State<WakeWebView> with AutomaticKeepAliveClientM
   Future<bool> handleBack() async {
     if (app.fullscreen.value) {
       await _c.runJavaScript("document.body.classList.contains('appfs') && document.getElementById('fs') && document.getElementById('fs').click()");
-      await _setFullscreen(false); // in case the page didn't answer
+      await setFullscreen(false); // in case the page didn't answer
       return true;
     }
     if (await _c.canGoBack()) {

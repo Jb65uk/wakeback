@@ -109,6 +109,7 @@ class _GuideScreenState extends State<GuideScreen> {
           open: widget.open == GuideTopic.sails,
           steps: const [
             ('Sessions', 'One per day and venue. Tap one to replay: every boat on the map, speed and heel, races picked out automatically (accept or adjust them). Lay marks and start lines; they\'re kept.'),
+            ('Replay', 'Replay takes the whole screen; ← Sails on the map (or the back button) brings you out. Play, the clock and the speed are always there; More has the chart, loop and fit. Boat cards shows each boat\'s live numbers (tap a boat for all of them) and Map only hides them again. A tablet opens on the cards; a phone shows the map upright and the cards when you turn it on its side. Stats & tools has each boat\'s figures, races, marks and wind.'),
             ('Friends or private', 'Each sail is visible to your friends unless you switch it to private on the session. Private sails stay off everyone\'s league, including the admin\'s.'),
             ('Stats and League', 'Miles, hours, top speed, best averages, badges; the league ranks you and your friends by class. Tap a sail → Share for a picture of the track to send on WhatsApp.'),
             ('Sync', 'Happens by itself when you\'re signed in and have signal. The cloud icon on Sails shows where it\'s up to; tap it for details.'),
