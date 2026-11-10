@@ -126,6 +126,10 @@ class _PuckScreenState extends State<PuckScreen> {
         return false;
       }
       await _link?.cancel();
+      if (!mounted) {
+        await b.disconnect();
+        return false;
+      }
       _link = b.connected.listen((on) {
         if (!on && mounted && identical(_ble, b)) {
           setState(() {

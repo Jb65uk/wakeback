@@ -219,10 +219,11 @@ class BleCmdCb : public NimBLECharacteristicCallbacks {
     blePending = String(c->getValue().c_str()); bleHasPending = true;
   }
 };
-static void blePoll() {                           // called from loop()
-  if (!bleHasPending) return;
+static bool blePoll() {                           // called from loop(); true when it ran a command (which may have taken a while)
+  if (!bleHasPending) return false;
   const String line = blePending; bleHasPending = false;
   bleCommand(line);
+  return true;
 }
 class BleOtaCb : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &) override {

@@ -170,7 +170,7 @@ bool transferring = false;           // a track or firmware image is moving over
 // with a hot start a second or two later; on the pad, being lifted does. Never while a track is being recorded.
 bool resting = false, restRefSet = false, gpsEverFixed = false;
 float restRef[3] = {0, 0, 1}, quietRef[3] = {0, 0, 1};      // "up" as it lay when it went to rest / when it last moved
-uint32_t lastMotion = 0, lastRestSample = 0;
+uint32_t lastMotion = 0, lastRestSample = 0, lastImuEvent = 0;
 // What the battery really does: seconds awake off the pad since it last sat there full. Kept through sleep (not a
 // reset or a re-flash), and thrown away by a part-way top-up, so the app can say "22% used in 2 h 10 min".
 RTC_DATA_ATTR uint32_t awakeSinceFull = 0;
@@ -274,6 +274,13 @@ static const char *chargeName() { return !onPad ? "not" : battFull ? "full" : "c
 // fixes a second: the logging rate while moving, but never below 5 so moving off is still spotted quickly.
 // 10 Hz costs the GPS ~10 mA more than 5 and at 5 Hz logging half of it was thrown away.
 static int navHz() { return S.recHz >= 5 ? S.recHz : 5; }
+// everything the puck asks of the GPS, in one place: at start-up, after a rest, and again if it ever falls silent
+static void gpsConfigure() {
+  gnss.setUART1Output(COM_TYPE_UBX);
+  gnss.setDynamicModel(DYN_MODEL_SEA);
+  gnss.setNavigationFrequency(navHz());
+  gnss.setAutoPVT(true);
+}
 static bool startGps() {
   static const uint32_t bauds[] = {38400, 115200, 9600, 57600, 230400};
   Serial1.setRxBufferSize(4096);
@@ -284,10 +291,7 @@ static bool startGps() {
     Serial1.end();
   }
   if (!gpsBaud) return false;
-  gnss.setUART1Output(COM_TYPE_UBX);
-  gnss.setDynamicModel(DYN_MODEL_SEA);
-  gnss.setNavigationFrequency(navHz());
-  gnss.setAutoPVT(true);
+  gpsConfigure();
   return true;
 }
 
@@ -301,8 +305,11 @@ static void gpsNap() {
 }
 static void gpsWake() {
   if (!gpsOk || !gpsNapping) return;
-  Serial1.write(0xFF); delay(100);           // any byte wakes it; its settings are kept in RAM
-  gnss.setNavigationFrequency(navHz());
+  Serial1.write(0xFF); delay(100);           // any byte wakes it
+  // It should come back as it was (the settings live in its battery-backed memory), but a sail hangs on it:
+  // say it all again, after a pause if it wasn't listening yet.
+  if (!gnss.setNavigationFrequency(navHz())) delay(400);
+  gpsConfigure();
   gpsNapping = false;
 }
 
@@ -372,6 +379,7 @@ static void pollImu() {
   if (bno.wasReset()) enableImuReports();
   sh2_SensorValue_t v;
   while (bno.getSensorEvent(&v)) {
+    lastImuEvent = millis();
     if (v.sensorId == SH2_GAME_ROTATION_VECTOR) {
       const float w = v.un.gameRotationVector.real, x = v.un.gameRotationVector.i,
                   y = v.un.gameRotationVector.j, z = v.un.gameRotationVector.k;
@@ -603,7 +611,9 @@ static void goToSleep(const char *why) {
   Serial.flush();
   bleStop();
   blinkN(3);
-  if (gpsOk) gnss.powerOffWithInterrupt(0, VAL_RXM_PMREQ_WAKEUPSOURCE_UARTRX);
+  // already in standby (resting)? Then say nothing: any byte on its UART would wake it, and it would sit awake
+  // while the puck sleeps
+  if (gpsOk && !gpsNapping) gnss.powerOffWithInterrupt(0, VAL_RXM_PMREQ_WAKEUPSOURCE_UARTRX);
   if (imuOk) { bno.enableReport(SH2_GAME_ROTATION_VECTOR, 0); bno.enableReport(SH2_ROTATION_VECTOR, 0); bno.enableReport(SH2_ACCELEROMETER, 0); }
   delay(50);
   analogWrite(PIN_RING, 0); pinMode(PIN_RING, INPUT);
@@ -774,6 +784,16 @@ static void pollButton() {
 // ---------- once a second ----------
 static void everySecond() {
   gps.rateHz = gps.pvtThisSecond; gps.pvtThisSecond = 0;
+  // An awake GPS reports several times a second, fix or no fix. Ten seconds of nothing means it has lost what it
+  // was told (or never heard it after a rest): tell it again, and once a minute after that until it answers.
+  static int gpsSilent = 0;
+  if (gpsOk && !gpsNapping && gps.rateHz == 0) {
+    if (++gpsSilent == 10 || (gpsSilent > 10 && gpsSilent % 60 == 0)) {
+      Serial.println("GPS has gone quiet: setting it up again.");
+      Serial1.write(0xFF); delay(100);
+      gpsConfigure();
+    }
+  } else gpsSilent = 0;
   battMv = readMilliVolts(PIN_BATT);
   // On the pad = 5 V from the Qi receiver. But once the battery is full the charger stops drawing and most Qi
   // pads drop into standby (LED blinking), so the 5 V goes away while the puck is still sitting there. Keep
@@ -795,9 +815,16 @@ static void everySecond() {
     else { leaveRest("lifted off the pad"); lastMotion = millis(); haveRest = false; stillSince = 0; }
   }
   battFull = onPad && battMv >= 4150;
-  if (battFull) { awakeSinceFull = 0; sinceFullKnown = 1; }
-  else if (onPad) sinceFullKnown = 0;           // topped up part-way: the count no longer means anything
-  else if (sinceFullKnown) awakeSinceFull++;
+  // "full" is remembered for the whole visit to the pad: once the charger stops, the cell settles back under 4.15 V
+  static bool fullThisVisit = false;
+  if (!onPad) { fullThisVisit = false; if (sinceFullKnown) awakeSinceFull++; }
+  else {
+    if (battFull) fullThisVisit = true;
+    if (fullThisVisit) { awakeSinceFull = 0; sinceFullKnown = 1; }
+    else sinceFullKnown = 0;                    // topped up part-way (so far): the count no longer means anything
+  }
+  // awake and not resting, the IMU reports 50 times a second: five seconds of nothing and it's asked again
+  if (imuOk && !resting && millis() - lastImuEvent > 5000) { enableImuReports(); lastImuEvent = millis(); }
 
   // Has the puck been left alone? A tilt, a held speed (onFix), a track being recorded or the app on the line all say no.
   if (!resting) {
@@ -926,7 +953,9 @@ void loop() {
   if (gps.fresh) { gps.fresh = false; onFix(); }
   pollImu();
   pollButton();
-  blePoll();                                    // run any command the app sent over Bluetooth, on this task
+  // run any command the app sent over Bluetooth, on this task. Sending a track can take a minute with the IMU
+  // unread: that silence isn't the IMU's fault, so the rest watchdog starts counting again from here.
+  if (blePoll()) lastRestSample = lastImuEvent = millis();
   led();
   const uint32_t m = millis();
   if (m - lastSec >= 1000) { lastSec = m; everySecond(); }

@@ -250,6 +250,13 @@ class PuckBle {
             }
           });
           await FlutterBluePlus.startScan(timeout: timeout, withServices: [Guid(_svc)], androidUsesFineLocation: false);
+          // belt and braces: whatever the phone's Bluetooth does, the scan is over a few seconds after its time
+          // (callers hold the link while they listen)
+          Timer(timeout + const Duration(seconds: 3), () async {
+            if (out.isClosed) return;
+            await stop();
+            if (!out.isClosed) await out.close();
+          });
         } catch (e) {
           if (!out.isClosed) {
             out.addError(_readable(e));
@@ -338,6 +345,7 @@ class PuckBle {
   final BluetoothDevice _dev;
   final BluetoothCharacteristic _cmdC, _rspC, _otaC, _datC;
   StreamSubscription<List<int>>? _notify, _data;
+  StreamSubscription<BluetoothConnectionState>? _state;
   final _buf = <int>[];
   Completer<Map<String, dynamic>>? _waiting;
   BytesBuilder? _sink; // where track bytes go while a "get" runs
@@ -381,6 +389,14 @@ class PuckBle {
         }
       } catch (_) {
         w.completeError(const PuckException('The puck sent something the app didn\'t understand.'));
+      }
+    });
+    // the link dropping fails whatever is waiting for an answer there and then, rather than at its timeout
+    // (minutes, for a big track)
+    _state = _dev.connectionState.listen((s) {
+      final w = _waiting;
+      if (s == BluetoothConnectionState.disconnected && w != null && !w.isCompleted) {
+        w.completeError(const PuckException('Lost the Bluetooth link to the puck. Is it still awake and close by?'));
       }
     });
     await _datC.setNotifyValue(true);
@@ -458,6 +474,7 @@ class PuckBle {
   Future<Map<String, dynamic>> _send(String line, Duration timeout) async {
     if (!_dev.isConnected) throw const PuckException('Not connected to the puck any more. Is it still awake and close by?');
     final w = _waiting = Completer<Map<String, dynamic>>();
+    w.future.ignore(); // if the write itself fails first, a late error on this one has nobody listening: that's fine
     _buf.clear();
     try {
       await _cmdC.write(utf8.encode(line), timeout: math.max(5, math.min(120, timeout.inSeconds)));
@@ -646,8 +663,10 @@ class PuckBle {
   Future<void> disconnect() async {
     await _notify?.cancel();
     await _data?.cancel();
+    await _state?.cancel();
     _notify = null;
     _data = null;
+    _state = null;
     try {
       await _dev.disconnect();
     } catch (_) {}
