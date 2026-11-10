@@ -90,7 +90,7 @@ class _SetupScreenState extends State<SetupScreen> {
       listenable: Listenable.merge([app, app.demo]),
       builder: (context, _) => Scaffold(
         appBar: AppBar(title: const Text('You')),
-        body: ListView(padding: const EdgeInsets.fromLTRB(12, 0, 12, 24), children: [
+        body: PageList(padding: const EdgeInsets.fromLTRB(12, 0, 12, 24), children: [
           // ------------------------------------------------ demo banner
           if (app.demoMode)
             Card(

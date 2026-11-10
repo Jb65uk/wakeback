@@ -36,10 +36,10 @@ jobs:
 
       - name: Version from the tag of this build
         run: |
+          # version.py (a PlatformIO pre-script) reads WB_FW_VERSION; without it a build calls itself dev-<commit>
           V="1.0.${{ github.run_number }}"
-          sed -i "s/-DWB_FW_VERSION=.*/-DWB_FW_VERSION=\\\\\"$V\\\\\"/" platformio.ini
           echo "FW_VERSION=$V" >> "$GITHUB_ENV"
-          grep WB_FW_VERSION platformio.ini
+          echo "WB_FW_VERSION=$V" >> "$GITHUB_ENV"
 
       - name: Build
         shell: bash

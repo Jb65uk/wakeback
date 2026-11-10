@@ -26,13 +26,43 @@ class _HomeScreenState extends State<HomeScreen> {
   int _page = recorder.active ? _record : _sails;
   final _viewer = GlobalKey<WakeWebViewState>();
 
+  // tracks arriving from a puck in the background: say so once, whichever tab is showing
+  int _pullsSeen = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _pullsSeen = app.watcher.pulls;
+    app.watcher.addListener(_onWatcher);
+  }
+
+  @override
+  void dispose() {
+    app.watcher.removeListener(_onWatcher);
+    super.dispose();
+  }
+
+  void _onWatcher() {
+    final w = app.watcher;
+    if (w.pulls == _pullsSeen || !mounted) return;
+    _pullsSeen = w.pulls;
+    final said = w.lastEvent;
+    if (said != null) toast(context, said);
+  }
+
   Future<void> _back() async {
-    if (_page == _replay && (await _viewer.currentState?.handleBack() ?? false)) return; // full screen / inner page
     if (_page != _sails) {
-      setState(() => _page = _sails);
+      await _go(_sails);
       return;
     }
     await SystemNavigator.pop();
+  }
+
+  /// Show a page. Replay gets the whole screen (the app's bars and Android's go; the viewer has its own
+  /// "← Sails" on the map, and the back button works); every other page gets them back.
+  Future<void> _go(int page) async {
+    await _viewer.currentState?.setFullscreen(page == _replay);
+    if (mounted) setState(() => _page = page);
   }
 
   /// A sail tapped in the Sails tab (or a record in Stats): replay it.
@@ -52,13 +82,16 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     if (!mounted) return;
-    setState(() => _page = _replay);
+    await _go(_replay);
     _viewer.currentState?.openSession(id);
   }
 
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context);
+    // Room for a rail down the side (a tablet, or a phone on its side)? Then the tabs go there and the bottom
+    // bar goes: on a wide, short screen the bar costs height the replay map wants.
+    final wide = MediaQuery.sizeOf(context).width >= 720;
     return ListenableBuilder(
       listenable: app,
       builder: (context, _) => ValueListenableBuilder<bool>(
@@ -72,12 +105,28 @@ class _HomeScreenState extends State<HomeScreen> {
             body: SafeArea(
               top: !full,
               bottom: false,
-              child: Column(children: [
+              child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                if (wide && !full)
+                  NavigationRail(
+                    backgroundColor: const Color(0xFF0F2230),
+                    labelType: NavigationRailLabelType.all,
+                    groupAlignment: -0.9,
+                    selectedIndex: _page == _replay ? 0 : _tabPages.indexOf(_page),
+                    onDestinationSelected: (i) => _go(_tabPages[i]),
+                    destinations: const [
+                      NavigationRailDestination(icon: Icon(Icons.sailing_outlined), selectedIcon: Icon(Icons.sailing), label: Text('Sails')),
+                      NavigationRailDestination(icon: _RecordIcon(selected: false), selectedIcon: _RecordIcon(selected: true), label: Text('Record')),
+                      NavigationRailDestination(icon: Icon(Icons.person_outline), selectedIcon: Icon(Icons.person), label: Text('You')),
+                    ],
+                  ),
+                // keyed, so turning the phone (rail in, rail out) keeps the pages as they were
+                Expanded(key: const ValueKey('pages'), child: Column(children: [
+                if (!full) const _PullBanner(),
                 if (app.demoMode && !full)
                   Material(
                     color: t.colorScheme.primary,
                     child: InkWell(
-                      onTap: () => setState(() => _page = _you),
+                      onTap: () => _go(_you),
                       child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
                         child: Row(children: [
@@ -94,7 +143,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   Material(
                     color: t.colorScheme.surface,
                     child: InkWell(
-                      onTap: () => setState(() => _page = _sails),
+                      onTap: () => _go(_sails),
                       child: SizedBox(
                         height: 40,
                         child: Row(children: [
@@ -116,19 +165,21 @@ class _HomeScreenState extends State<HomeScreen> {
                       key: _viewer,
                       url: '${app.dock.localUrl}/${app.demoMode ? '?demo=1' : ''}',
                       ownBack: false,
+                      onBack: _back,
                     ),
                     const SetupScreen(),
                   ]),
                 ),
+              ])),
               ]),
             ),
-            bottomNavigationBar: full
+            bottomNavigationBar: full || wide
                 ? null
                 : NavigationBar(
                     height: 60,
                     // in Replay, Sails stays lit: that's where you came from and where back goes
                     selectedIndex: _page == _replay ? 0 : _tabPages.indexOf(_page),
-                    onDestinationSelected: (i) => setState(() => _page = _tabPages[i]),
+                    onDestinationSelected: (i) => _go(_tabPages[i]),
                     destinations: const [
                       NavigationDestination(icon: Icon(Icons.sailing_outlined), selectedIcon: Icon(Icons.sailing), label: 'Sails'),
                       NavigationDestination(icon: _RecordIcon(selected: false), selectedIcon: _RecordIcon(selected: true), label: 'Record'),
@@ -156,4 +207,35 @@ class _RecordIcon extends StatelessWidget {
           child: Icon(selected ? Icons.radio_button_checked : Icons.radio_button_unchecked),
         ),
       );
+}
+
+/// A slim strip across the top while a puck's tracks are coming over in the background, so it's plain something
+/// is happening whichever tab is showing. Gone when it's done (a line at the bottom says what arrived).
+class _PullBanner extends StatelessWidget {
+  const _PullBanner();
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context);
+    return ListenableBuilder(
+      listenable: app.watcher,
+      builder: (context, _) {
+        final w = app.watcher;
+        if (w.pulling == null) return const SizedBox.shrink();
+        return Material(
+          color: t.colorScheme.surface,
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 6, 14, 4),
+              child: Row(children: [
+                Icon(Icons.bluetooth_connected, size: 16, color: t.colorScheme.primary),
+                const SizedBox(width: 8),
+                Expanded(child: Text('Getting tracks from puck ${w.pulling}…', style: t.textTheme.bodySmall)),
+              ]),
+            ),
+            LinearProgressIndicator(value: w.progress > 0 ? w.progress : null, minHeight: 2),
+          ]),
+        );
+      },
+    );
+  }
 }

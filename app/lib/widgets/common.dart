@@ -73,3 +73,29 @@ class Hint extends StatelessWidget {
     return Text(text, style: t.textTheme.bodySmall?.copyWith(color: t.colorScheme.onSurfaceVariant, height: 1.35));
   }
 }
+
+/// A scrolling page of cards. On a phone it's a plain list. On a tablet, or a phone on its side, the cards sit in
+/// a centred column no wider than [maxWidth], so lines of text stay readable instead of running the width of the
+/// screen, while a swipe anywhere still scrolls.
+class PageList extends StatelessWidget {
+  static const double maxWidth = 720;
+  final EdgeInsets padding;
+  final List<Widget>? children;
+  final int? itemCount;
+  final NullableIndexedWidgetBuilder? itemBuilder;
+
+  const PageList({super.key, this.padding = EdgeInsets.zero, required List<Widget> this.children})
+      : itemCount = null,
+        itemBuilder = null;
+
+  const PageList.builder({super.key, this.padding = EdgeInsets.zero, required int this.itemCount, required NullableIndexedWidgetBuilder this.itemBuilder}) : children = null;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(builder: (context, box) {
+        final spare = box.maxWidth - maxWidth - padding.horizontal;
+        final side = spare > 0 ? spare / 2 : 0.0;
+        final p = padding.copyWith(left: padding.left + side, right: padding.right + side);
+        final kids = children;
+        return kids != null ? ListView(padding: p, children: kids) : ListView.builder(padding: p, itemCount: itemCount, itemBuilder: itemBuilder!);
+      });
+}

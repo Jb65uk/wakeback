@@ -15,6 +15,10 @@
 //
 // The button and the LED patterns are in README.md (the one place they're written down).
 //
+// Battery (1200 mAh in the mk1) comes first after "never miss a sail": the CPU runs at 80 MHz, the GPS only as fast as
+// the track is logged, and when the puck has been left alone it rests (GPS in standby, IMU down to its accelerometer)
+// until it tilts. See "resting" below.
+//
 // Serial monitor at 115200: type h for the few commands that are handy on the bench (q pauses the status line).
 
 #include <Arduino.h>
@@ -60,7 +64,17 @@ static const float    START_M = 30;                          // moved this far f
 static const uint32_t START_MOVING_MS = 5000;                // ...and been above STILL_KN for this long: indoor GPS wander moves 30 m but never holds a speed
 static const float    MOVE_M = 20;                           // while recording, must move this far every...
 // ...this many minutes (S.stopMin, default 10, from the app), or the sail is over
-static const uint32_t PAD_GPS_NAP_MS = 60000;                // on the pad this long = indoors on the charger: GPS to standby until it's lifted
+static const uint32_t PAD_GPS_NAP_MS = 60000;                // on the pad this long = indoors on the charger: rest until it's lifted
+// A dinghy doesn't hold 30 knots (35 mph); a car does. Faster than that for 20 s means the puck is on the road:
+// no track is started (one that began with the drive is binned), and the drive doesn't keep the puck awake.
+static const float    ROAD_KN = 30;
+static const uint32_t ROAD_FOR_MS = 20000;
+static const uint32_t ROAD_CLEAR_MS = 5UL * 60 * 1000;       // back to normal after this long without road speed
+static const uint32_t ROAD_BIN_MS = 3UL * 60 * 1000;         // a track younger than this when the road speed came is the drive itself
+static const uint32_t REST_AFTER_MS = 3UL * 60 * 1000;       // off the pad, not recording, and nothing has tilted or gone anywhere for this long: rest
+static const float    REST_TILT_DEG = 3.0f;                  // tilted this far from how it lay = somebody is at the boat: wake up
+static const float    REST_BUMP_MS2 = 2.0f;                  // ...or a knock this much off 1 g (a trolley over a kerb)
+static const uint32_t REST_FIX_WAIT_MS = 10UL * 60 * 1000;   // no resting before the GPS has had its first fix, or this long to try for one
 static const uint32_t FLASH_RESERVE = 96 * 1024;             // stop writing when this little is left
 // points a second while moving (1 while still) is a setting (S.recHz, 1/2/5/10, from the app): 5 is plenty for a dinghy and
 // in the compact format about 18 h of sailing fits in 4.5 MB; 10 halves that, 2 doubles it
@@ -157,6 +171,16 @@ float battMv = 0;
 uint32_t lastActive = 0;             // last movement, button press or app command: the auto-off clock
 bool flashFull = false;
 bool transferring = false;           // a track or firmware image is moving over Bluetooth: LED steady
+// Resting: left alone (or on the pad), the GPS goes to standby and the IMU drops from sensor fusion to its bare
+// accelerometer. BLE stays up, so the app still finds it. Off the pad a tilt or a knock ends it, and the GPS is back
+// with a hot start a second or two later; on the pad, being lifted does. Never while a track is being recorded.
+bool resting = false, restRefSet = false, gpsEverFixed = false;
+float restRef[3] = {0, 0, 1}, quietRef[3] = {0, 0, 1};      // "up" as it lay when it went to rest / when it last moved
+uint32_t lastMotion = 0, lastRestSample = 0, lastImuEvent = 0;
+// What the battery really does: seconds awake off the pad since it last sat there full. Kept through sleep (not a
+// reset or a re-flash), and thrown away by a part-way top-up, so the app can say "22% used in 2 h 10 min".
+RTC_DATA_ATTR uint32_t awakeSinceFull = 0;
+RTC_DATA_ATTR uint8_t sinceFullKnown = 0;
 bool appPendingVerify = false;
 static void pollButton();
 // the pairing window: an app may give the puck a key without proving it holds one
@@ -165,13 +189,18 @@ static bool pairingOpen() { return !S.key.length() || (pairing && millis() - pai
 static void openPairing() { pairing = true; pairingSince = millis(); Serial.println("Pairing window open for 10 minutes: an app can set this puck up now."); }
 static void closePairing(const char *why) { if (pairing) { pairing = false; Serial.printf("Pairing window closed (%s).\n", why); } }
 
-// the clock: epoch ms = millis() + clockOffset, from the GPS
-int64_t clockOffset = 0; bool clockSet = false;
+// the clock: epoch ms = millis() + clockOffset. The GPS sets it; until it has, the phone's time (sent when the app
+// connects) will do, so a track started by hand indoors still gets a proper name.
+int64_t clockOffset = 0; bool clockSet = false, clockFromGps = false;
 static uint64_t nowMs() { return clockSet ? (uint64_t)((int64_t)millis() + clockOffset) : 0; }
-static void setClock(uint64_t epochMs) { clockOffset = (int64_t)epochMs - (int64_t)millis(); clockSet = true; }
+static void setClock(uint64_t epochMs, bool fromGps) {
+  if (clockFromGps && !fromGps) return;
+  clockOffset = (int64_t)epochMs - (int64_t)millis(); clockSet = true; clockFromGps = fromGps;
+}
 
 // recording
-bool recording = false;
+bool recording = false, recManual = false;
+bool onRoad = false; uint32_t fastSince = 0, lastFast = 0;   // see ROAD_KN
 File rec; String recName;
 uint32_t recStarted = 0, recLines = 0, lastPointMs = 0, lastFlush = 0;
 // where the boat was last at rest, to spot it moving off; and where it last was, to spot it stopping
@@ -252,6 +281,13 @@ static const char *chargeName() { return !onPad ? "not" : battFull ? "full" : "c
 // fixes a second: the logging rate while moving, but never below 5 so moving off is still spotted quickly.
 // 10 Hz costs the GPS ~10 mA more than 5 and at 5 Hz logging half of it was thrown away.
 static int navHz() { return S.recHz >= 5 ? S.recHz : 5; }
+// everything the puck asks of the GPS, in one place: at start-up, after a rest, and again if it ever falls silent
+static void gpsConfigure() {
+  gnss.setUART1Output(COM_TYPE_UBX);
+  gnss.setDynamicModel(DYN_MODEL_SEA);
+  gnss.setNavigationFrequency(navHz());
+  gnss.setAutoPVT(true);
+}
 static bool startGps() {
   static const uint32_t bauds[] = {38400, 115200, 9600, 57600, 230400};
   Serial1.setRxBufferSize(4096);
@@ -262,29 +298,26 @@ static bool startGps() {
     Serial1.end();
   }
   if (!gpsBaud) return false;
-  gnss.setUART1Output(COM_TYPE_UBX);
-  gnss.setDynamicModel(DYN_MODEL_SEA);
-  gnss.setNavigationFrequency(navHz());
-  gnss.setAutoPVT(true);
+  gpsConfigure();
   return true;
 }
 
-// On the pad the GPS is pointless (it's on a charger indoors) and it's the biggest draw after the radio: with
-// everything running the Qi pad could barely keep up and the battery didn't gain. So after a minute on the
-// pad the GPS goes to standby, and any byte on its UART wakes it the moment the puck is lifted off.
+// The GPS is the biggest draw after the radio, and pointless while the puck is on a charger indoors or sat on a
+// trolley: in standby it keeps what it knows about the sky, and any byte on its UART wakes it for a hot start.
 bool gpsNapping = false;
 static void gpsNap() {
   if (!gpsOk || gpsNapping) return;
   gnss.powerOffWithInterrupt(0, VAL_RXM_PMREQ_WAKEUPSOURCE_UARTRX);
-  gpsNapping = true; gps.fix = 0; gps.sats = 0; gps.sogKn = 0;
-  Serial.println("GPS resting while on the pad.");
+  gpsNapping = true; gps.fix = 0; gps.sats = 0; gps.sogKn = 0; gps.rateHz = 0;
 }
 static void gpsWake() {
   if (!gpsOk || !gpsNapping) return;
-  Serial1.write(0xFF); delay(100);           // any byte wakes it; its settings are kept in RAM
-  gnss.setNavigationFrequency(navHz());
+  Serial1.write(0xFF); delay(100);           // any byte wakes it
+  // It should come back as it was (the settings live in its battery-backed memory), but a sail hangs on it:
+  // say it all again, after a pause if it wasn't listening yet.
+  if (!gnss.setNavigationFrequency(navHz())) delay(400);
+  gpsConfigure();
   gpsNapping = false;
-  Serial.println("GPS awake.");
 }
 
 static void pollGps() {
@@ -299,14 +332,17 @@ static void pollGps() {
   if (gnss.getDateValid() && gnss.getTimeValid()) {
     const int64_t days = daysFromCivil(gnss.getYear(), gnss.getMonth(), gnss.getDay());
     gps.tMs = (uint64_t)((days * 86400 + gnss.getHour() * 3600 + gnss.getMinute() * 60 + gnss.getSecond()) * 1000LL + gnss.getMillisecond());
-    setClock(gps.tMs);
+    setClock(gps.tMs, true);
   }
+  if (gps.fix >= 3) gpsEverFixed = true;
   gps.pvtThisSecond++; gps.fresh = true;
   // the auto-off clock is kept going by onFix, once the speed has held: one jittery reading indoors must not keep the puck awake
 }
 
 // ---------- IMU ----------
 static bool enableImuReports() {
+  // resting: the accelerometer alone at 5 Hz says which way is up and feels a knock, for a fraction of the fusion's draw
+  if (resting) return bno.enableReport(SH2_ACCELEROMETER, 200000);
   bool ok = bno.enableReport(SH2_GAME_ROTATION_VECTOR, 20000);        // 50 Hz, gyro + accel: heel and pitch
   // with the magnetometer: heading, so the twist can be learnt. 10 Hz while learning, 1 Hz once it's known (~5 mA)
   bno.enableReport(SH2_ROTATION_VECTOR, S.twistLearned ? 1000000 : 100000);
@@ -340,11 +376,17 @@ static void boatAngles() {
   imu.pitch = wrap180(pitch - S.zeroPitch);
 }
 
+static float angleFrom(const float ref[3]) {     // degrees between "up" now and a remembered "up"
+  const float d = constrain(ref[0] * imu.upX + ref[1] * imu.upY + ref[2] * imu.upZ, -1.0f, 1.0f);
+  return acosf(d) * RAD_TO_DEG;
+}
+static void leaveRest(const char *why);
 static void pollImu() {
   if (!imuOk) return;
   if (bno.wasReset()) enableImuReports();
   sh2_SensorValue_t v;
   while (bno.getSensorEvent(&v)) {
+    lastImuEvent = millis();
     if (v.sensorId == SH2_GAME_ROTATION_VECTOR) {
       const float w = v.un.gameRotationVector.real, x = v.un.gameRotationVector.i,
                   y = v.un.gameRotationVector.j, z = v.un.gameRotationVector.k;
@@ -358,9 +400,28 @@ static void pollImu() {
       const float east = 1 - 2 * (y * y + z * z), north = 2 * (x * y + w * z);
       imu.headingX = fmodf(atan2f(east, north) * RAD_TO_DEG + 360, 360);
       imu.magStatus = v.status & 3;
+    } else if (v.sensorId == SH2_ACCELEROMETER) {
+      // sat still, what the accelerometer feels is the ground pushing up: the same "up" the fusion gives
+      const float ax = v.un.accelerometer.x, ay = v.un.accelerometer.y, az = v.un.accelerometer.z;
+      const float g = sqrtf(ax * ax + ay * ay + az * az);
+      if (g > 1) {
+        imu.upX = ax / g; imu.upY = ay / g; imu.upZ = az / g;
+        lastRestSample = millis();
+        if (resting && !restRefSet) { restRef[0] = imu.upX; restRef[1] = imu.upY; restRef[2] = imu.upZ; restRefSet = true; }
+        // on the pad it's being lifted that counts (everySecond); off it, a tilt or a knock means someone is at the boat
+        else if (resting && !onPad && (angleFrom(restRef) > REST_TILT_DEG || fabsf(g - 9.81f) > REST_BUMP_MS2)) leaveRest("it moved");
+      }
     }
   }
   boatAngles();
+}
+
+static void enterRest(const char *why) {
+  if (resting) return;
+  resting = true; restRefSet = false; lastRestSample = millis();
+  gpsNap();
+  if (imuOk) { bno.enableReport(SH2_GAME_ROTATION_VECTOR, 0); bno.enableReport(SH2_ROTATION_VECTOR, 0); enableImuReports(); }
+  Serial.printf("Resting (%s): GPS in standby until it %s.\n", why, onPad ? "is lifted off the pad" : "moves");
 }
 
 // the app and the serial monitor both calibrate, through these
@@ -420,9 +481,22 @@ static size_t preDrain(File &f) {                    // encode the ring into the
   return wrote;
 }
 
+static void leaveRest(const char *why) {
+  if (!resting) return;
+  resting = false;
+  if (imuOk) { bno.enableReport(SH2_ACCELEROMETER, 0); enableImuReports(); }
+  gpsWake();
+  // start afresh: nothing from before the rest belongs in the next track, and the boat hasn't been "still" yet.
+  // Where it was last at rest (haveRest) is kept, so moving off from here still starts a track.
+  preLen = 0; preHead = 0; stillSince = 0; movingSince = 0;
+  lastMotion = millis(); quietRef[0] = imu.upX; quietRef[1] = imu.upY; quietRef[2] = imu.upZ;
+  Serial.printf("Awake again (%s).\n", why);
+}
+
 static void startRecording(bool manual) {
   if (!fsOk || recording) return;
   if (fsFree < FLASH_RESERVE) { flashFull = true; return; }
+  leaveRest("recording");
   const uint64_t t = nowMs() ? nowMs() : gps.tMs;
   char name[48];
   if (t) {
@@ -439,7 +513,7 @@ static void startRecording(bool manual) {
   if (!manual) preBytes = preDrain(rec); else { preLen = 0; preHead = 0; }
   fsUnmeasured += 8 + preBytes;
   recName = String(name).substring(strlen(TRK_DIR) + 1);
-  recording = true; recStarted = millis(); recLines = 0; lastFlush = millis();
+  recording = true; recManual = manual; recStarted = millis(); recLines = 0; lastFlush = millis();
   countTracks();
   moveLat = gps.lat; moveLon = gps.lon; lastMoveMs = millis();
   Serial.printf("Recording %s (%s).\n", recName.c_str(), manual ? "button" : "the boat moved off");
@@ -477,12 +551,29 @@ static void onFix() {
 
   // movement from rest
   if (gps.fix < 3 || gps.hAccM > 15) return;
+
+  // on the road? (a track started by hand is left alone: whoever pressed the button meant it)
+  if (gps.sogKn > ROAD_KN) { lastFast = m; if (!fastSince) fastSince = m; } else fastSince = 0;
+  if (!onRoad && fastSince && m - fastSince > ROAD_FOR_MS) {
+    onRoad = true;
+    Serial.println("Faster than any dinghy for 20 s: on the road. No recording until it's been off the road for 5 minutes.");
+    if (recording && !recManual) {
+      // a track that began with the drive is binned; a sail that was still open when the car pulled away is kept
+      const bool theDrive = m - recStarted < ROAD_BIN_MS;
+      const String name = recName;
+      stopRecording("on the road");
+      if (theDrive && LittleFS.exists(trackPath(name))) { LittleFS.remove(trackPath(name)); countTracks(); Serial.println("That track was the drive: binned."); }
+    }
+  }
+  if (onRoad && m - lastFast > ROAD_CLEAR_MS) { onRoad = false; Serial.println("Off the road."); }
+  if (onRoad && !recording) { haveRest = false; stillSince = 0; movingSince = 0; return; }   // nor does the drive count as activity: the puck may sleep
+
   if (!moving) { if (!stillSince) stillSince = m; movingSince = 0; }
   else { stillSince = 0; if (!movingSince) movingSince = m; }
   // a speed that's held, not one jittery reading (on the bench 25 Oct it started recording on 0.5-2 kn of indoor
   // GPS noise). The same rule keeps the auto-off clock honest.
   const bool underWay = movingSince && m - movingSince > START_MOVING_MS;
-  if (underWay) lastActive = m;
+  if (underWay) lastActive = lastMotion = m;
   if (!recording) {
     if (stillSince && m - stillSince > STILL_FOR_MS) { haveRest = true; restLat = gps.lat; restLon = gps.lon; }
     // start: far enough from rest to beat the fix accuracy, and under way
@@ -499,13 +590,23 @@ static void onFix() {
 static void leds(bool on) { digitalWrite(PIN_LED, on); analogWrite(PIN_RING, on ? 255 : 0); }
 static void blinkN(int n, uint32_t ms = 80) { for (int i = 0; i < n; i++) { leds(true); delay(ms); leds(false); delay(ms); } }
 
+// a few quick blinks as feedback for a button hold, without stopping the loop (the GPS keeps being read)
+static uint32_t burstAt = 0, burstMs = 80; static int burstN = 0;
+static void burst(int n, uint32_t ms = 80) { burstN = n; burstMs = ms; burstAt = millis(); }
+
 static void led() {
   const uint32_t m = millis();
+  if (burstN) {
+    const uint32_t e = m - burstAt;
+    if (e < (uint32_t)burstN * 2 * burstMs) { leds((e / burstMs) % 2 == 0); return; }
+    burstN = 0;
+  }
   bool on;
   if (transferring) on = true;
   else if (flashFull) { const uint32_t p = m % 2000; on = p < 1000 && (p % 200) < 80; }
   else if (pairingOpen()) on = m % 500 < 120;
   else if (recording) { const uint32_t p = m % 1000; on = p < 80 || (p > 200 && p < 280); }
+  else if (resting) on = m % 4000 < 40;
   else if (gps.fix >= 3) on = m % 1000 < 100;
   else on = m % 2000 < 60;
   digitalWrite(PIN_LED, on);
@@ -534,8 +635,10 @@ static void goToSleep(const char *why) {
   Serial.flush();
   bleStop();
   blinkN(3);
-  if (gpsOk) gnss.powerOffWithInterrupt(0, VAL_RXM_PMREQ_WAKEUPSOURCE_UARTRX);
-  if (imuOk) { bno.enableReport(SH2_GAME_ROTATION_VECTOR, 0); bno.enableReport(SH2_ROTATION_VECTOR, 0); }
+  // already in standby (resting)? Then say nothing: any byte on its UART would wake it, and it would sit awake
+  // while the puck sleeps
+  if (gpsOk && !gpsNapping) gnss.powerOffWithInterrupt(0, VAL_RXM_PMREQ_WAKEUPSOURCE_UARTRX);
+  if (imuOk) { bno.enableReport(SH2_GAME_ROTATION_VECTOR, 0); bno.enableReport(SH2_ROTATION_VECTOR, 0); bno.enableReport(SH2_ACCELEROMETER, 0); }
   delay(50);
   analogWrite(PIN_RING, 0); pinMode(PIN_RING, INPUT);
   armWakeAndSleep();
@@ -545,8 +648,8 @@ static void goToSleep(const char *why) {
 static String statusJson() {
   String j; j.reserve(1400);
   char b[600];
-  snprintf(b, sizeof b, "{\"ok\":true,\"fw\":\"%s\",\"puck\":%d,\"uptime_s\":%lu,\"time_ms\":%llu,\"autorec\":%s,\"autooff\":%s,\"rec_hz\":%d,\"stop_min\":%d,\"sleep_min\":%d,\"locked\":%s,\"pairing\":%s,",
-           FW, S.puck, (unsigned long)(millis() / 1000), (unsigned long long)nowMs(), B(S.autoRec), B(S.autoOff), S.recHz, S.stopMin, S.sleepMin, B(S.key.length() > 0), B(pairingOpen()));
+  snprintf(b, sizeof b, "{\"ok\":true,\"fw\":\"%s\",\"puck\":%d,\"uptime_s\":%lu,\"time_ms\":%llu,\"autorec\":%s,\"autooff\":%s,\"rec_hz\":%d,\"stop_min\":%d,\"sleep_min\":%d,\"locked\":%s,\"pairing\":%s,\"resting\":%s,\"on_road\":%s,",
+           FW, S.puck, (unsigned long)(millis() / 1000), (unsigned long long)nowMs(), B(S.autoRec), B(S.autoOff), S.recHz, S.stopMin, S.sleepMin, B(S.key.length() > 0), B(pairingOpen()), B(resting), B(onRoad));
   j += b;
   snprintf(b, sizeof b, "\"gps\":{\"ok\":%s,\"fix\":%d,\"sats\":%d,\"lat\":%.7f,\"lon\":%.7f,\"sog\":%.2f,\"cog\":%.1f,\"hacc\":%.1f,\"hz\":%.0f},",
            B(gpsOk), gps.fix, gps.sats, gps.lat / 1e7, gps.lon / 1e7, gps.sogKn, gps.cogDeg, gps.hAccM, gps.rateHz);
@@ -555,8 +658,8 @@ static String statusJson() {
            B(imuOk), imu.heel, imu.pitch, isnan(imu.headingX) ? -1.0f : fmodf(imu.headingX - S.twist + 720, 360), S.twist, B(S.twistLearned),
            orientName(), imu.magStatus, S.zeroHeel, S.zeroPitch, B(S.flipHeel));
   j += b;
-  snprintf(b, sizeof b, "\"batt\":{\"mv\":%d,\"pct\":%d,\"on_pad\":%s,\"charging\":\"%s\"},\"rec\":{\"on\":%s,\"secs\":%lu,\"lines\":%lu,\"file\":\"%s\"},",
-           (int)battMv, batteryPct(battMv), B(onPad), chargeName(),
+  snprintf(b, sizeof b, "\"batt\":{\"mv\":%d,\"pct\":%d,\"on_pad\":%s,\"charging\":\"%s\",\"since_full_s\":%ld},\"rec\":{\"on\":%s,\"secs\":%lu,\"lines\":%lu,\"file\":\"%s\"},",
+           (int)battMv, batteryPct(battMv), B(onPad), chargeName(), sinceFullKnown ? (long)awakeSinceFull : -1L,
            B(recording), (unsigned long)(recording ? (millis() - recStarted) / 1000 : 0), (unsigned long)recLines, recording ? recName.c_str() : "");
   j += b;
   snprintf(b, sizeof b, "\"store\":{\"free_kb\":%u,\"total_kb\":%u,\"files\":%d,\"pending\":%d,\"full\":%s}}",
@@ -566,7 +669,7 @@ static String statusJson() {
 }
 // the tracks on the puck, raw .wbt names and sizes (the app decodes them); the one being recorded is marked open
 static String tracksJson() {
-  String j; j.reserve(200 + nTracks * 70);
+  String j; j.reserve(80 + nTracks * 100);
   j += "{\"ok\":true,\"tracks\":[";
   bool first = true;
   forEachTrack([&](const String &name, size_t size) {
@@ -655,6 +758,23 @@ static bool streamTrack(const String &name, size_t offset, size_t &total, uint32
   Serial.printf("Sent %s from %u: %s\n", name.c_str(), (unsigned)offset, ok ? "ok" : "link dropped");
   return ok;
 }
+// CRC-32 of a track's first len bytes: the app asks before it carries on with a pull that was cut off, to be sure
+// what it already holds is what's on the puck
+static bool trackCrc(const String &name, size_t len, uint32_t &crc) {
+  if (!safeName(name)) return false;
+  File f = LittleFS.open(trackPath(name), FILE_READ);
+  if (!f) return false;
+  if (len > f.size()) { f.close(); return false; }
+  crc = 0;
+  uint8_t buf[256]; size_t left = len;
+  while (left) {
+    const size_t n = f.read(buf, min(left, sizeof buf));
+    if (!n) break;
+    crc = esp_rom_crc32_le(crc, buf, n); left -= n;
+  }
+  f.close();
+  return left == 0;
+}
 // firmware over Bluetooth, in pieces
 static bool otaBegin(size_t bytes) { if (recording) stopRecording("firmware update"); transferring = true; led(); return Update.begin(bytes); }
 static bool otaWrite(const uint8_t *data, size_t len) { return Update.write((uint8_t *)data, len) == len; }
@@ -681,13 +801,23 @@ static void pollButton() {
       // holdStage 2: the pairing window opened while held
     }
   }
-  if (down && holdStage == 0 && m - tDown >= HOLD_SLEEP_MS) { holdStage = 1; blinkN(3); }
-  if (down && holdStage == 1 && m - tDown >= HOLD_PAIR_MS) { holdStage = 2; blinkN(5, 50); if (pairing) closePairing("button") ; else openPairing(); }
+  if (down && holdStage == 0 && m - tDown >= HOLD_SLEEP_MS) { holdStage = 1; burst(3); }
+  if (down && holdStage == 1 && m - tDown >= HOLD_PAIR_MS) { holdStage = 2; burst(5, 50); if (pairing) closePairing("button"); else openPairing(); }
 }
 
 // ---------- once a second ----------
 static void everySecond() {
   gps.rateHz = gps.pvtThisSecond; gps.pvtThisSecond = 0;
+  // An awake GPS reports several times a second, fix or no fix. Ten seconds of nothing means it has lost what it
+  // was told (or never heard it after a rest): tell it again, and once a minute after that until it answers.
+  static int gpsSilent = 0;
+  if (gpsOk && !gpsNapping && gps.rateHz == 0) {
+    if (++gpsSilent == 10 || (gpsSilent > 10 && gpsSilent % 60 == 0)) {
+      Serial.println("GPS has gone quiet: setting it up again.");
+      Serial1.write(0xFF); delay(100);
+      gpsConfigure();
+    }
+  } else gpsSilent = 0;
   battMv = readMilliVolts(PIN_BATT);
   // On the pad = 5 V from the Qi receiver. But once the battery is full the charger stops drawing and most Qi
   // pads drop into standby (LED blinking), so the 5 V goes away while the puck is still sitting there. Keep
@@ -706,10 +836,28 @@ static void everySecond() {
   if (padNow != onPad) {
     onPad = padNow; lastActive = millis(); padSince = millis();
     if (onPad) { if (recording) stopRecording("on the pad"); }
-    else { gpsWake(); haveRest = false; stillSince = 0; }
+    else { leaveRest("lifted off the pad"); lastMotion = millis(); haveRest = false; stillSince = 0; }
   }
-  if (onPad && !gpsNapping && !recording && millis() - padSince > PAD_GPS_NAP_MS) gpsNap();
   battFull = onPad && battMv >= 4150;
+  // "full" is remembered for the whole visit to the pad: once the charger stops, the cell settles back under 4.15 V
+  static bool fullThisVisit = false;
+  if (!onPad) { fullThisVisit = false; if (sinceFullKnown) awakeSinceFull++; }
+  else {
+    if (battFull) fullThisVisit = true;
+    if (fullThisVisit) { awakeSinceFull = 0; sinceFullKnown = 1; }
+    else sinceFullKnown = 0;                    // topped up part-way (so far): the count no longer means anything
+  }
+  // awake and not resting, the IMU reports 50 times a second: five seconds of nothing and it's asked again
+  if (imuOk && !resting && millis() - lastImuEvent > 5000) { enableImuReports(); lastImuEvent = millis(); }
+
+  // Has the puck been left alone? A tilt, a held speed (onFix), a track being recorded or the app on the line all say no.
+  if (!resting) {
+    if (imuOk && angleFrom(quietRef) > REST_TILT_DEG) { quietRef[0] = imu.upX; quietRef[1] = imu.upY; quietRef[2] = imu.upZ; lastMotion = millis(); }
+    if (recording || bleConnected) lastMotion = millis();
+    if (onPad) { if (!recording && millis() - padSince > PAD_GPS_NAP_MS) enterRest("on the pad"); }
+    // off the pad it needs the IMU to wake it again, and the GPS must have had its chance at a first fix
+    else if (imuOk && gpsOk && !recording && (gpsEverFixed || millis() > REST_FIX_WAIT_MS) && millis() - lastMotion > REST_AFTER_MS) enterRest("left alone");
+  } else if (!onPad && imuOk && millis() - lastRestSample > 5000) leaveRest("the IMU went quiet");   // can't feel a tilt: don't trust the rest
 
   // battery nearly flat: close the track properly and sleep before the protection board cuts the power mid-write
   static int lowFor = 0;
@@ -720,7 +868,7 @@ static void everySecond() {
   learnMounting();
   static int tick = 0; if (++tick % 10 == 0) { measureFs(); countTracks(); }
   if (flashFull && fsFree > FLASH_RESERVE * 2) flashFull = false;
-  if (bleConnected) lastActive = millis();      // the app is talking to us: not idle
+  if (bleConnected) lastActive = millis();      // the app is talking to us: not idle (a tilt alone doesn't count: a boat rocking on its trailer must still let the puck sleep)
   if (pendingCount() != blePendingAdvertised) bleAdvRefresh(S.puck, S.key, pendingCount());   // the advert says how many tracks are waiting
   if (S.autoOff && !onPad && !recording && !pairingOpen() && millis() - lastActive > (uint32_t)S.sleepMin * 60000UL) goToSleep("still too long");
   // new firmware that has run a couple of minutes with the sensors alive counts as good even with no app about
@@ -730,8 +878,8 @@ static void everySecond() {
 // ---------- serial ----------
 static void printStatus() {
   const char *fixTxt[] = {"no fix", "DR", "2D", "3D", "3D+DR", "time"};
-  Serial.printf("GPS %s", gpsOk ? (gps.fix < 6 ? fixTxt[gps.fix] : "?") : "NONE");
-  if (gpsOk) Serial.printf(" %u sats %.0f Hz +/-%.1f m | %.2f kn %03.0f", gps.sats, gps.rateHz, gps.hAccM, gps.sogKn, gps.cogDeg);
+  Serial.printf("GPS %s", !gpsOk ? "NONE" : gpsNapping ? "resting" : gps.fix < 6 ? fixTxt[gps.fix] : "?");
+  if (gpsOk && !gpsNapping) Serial.printf(" %u sats %.0f Hz +/-%.1f m | %.2f kn %03.0f", gps.sats, gps.rateHz, gps.hAccM, gps.sogKn, gps.cogDeg);
   if (imuOk) Serial.printf(" | heel %+5.1f pitch %+5.1f twist %.0f %s mag %d", imu.heel, imu.pitch, S.twist, orientName(), imu.magStatus);
   Serial.printf(" | batt %.2f V %d%% %s", battMv / 1000, batteryPct(battMv), !onPad ? "off pad" : chargeName());
   Serial.printf(" | ble %s%s", bleConnected ? (bleIsAuthed ? "app" : "connected") : "advertising", pairingOpen() ? " pairing" : "");
@@ -785,6 +933,9 @@ void setup() {
     while (digitalRead(PIN_BTN) == LOW && millis() - t < WAKE_HOLD_MS) delay(5);
     if (millis() - t < WAKE_HOLD_MS) armWakeAndSleep();     // a knock, not a press
   }
+  // 80 MHz is plenty for 10 Hz of GPS, 50 Hz of IMU and Bluetooth (the radio needs no more), and saves about 10 mA
+  // over the 240 MHz default, all day
+  setCpuFrequencyMhz(80);
   leds(true);
   analogReadResolution(12);
   Serial.begin(115200);
@@ -809,7 +960,7 @@ void setup() {
 
   bleStart(S.puck, S.key, pendingCount());      // Bluetooth is how the app talks to the puck: always on while awake
   leds(false);
-  lastActive = millis();
+  lastActive = lastMotion = millis();
   battMv = readMilliVolts(PIN_BATT); onPad = readMilliVolts(PIN_PAD) > 4000;
   report();
   if (!S.key.length()) Serial.println("Not set up yet: any WakeBack app can give this puck its key now (You > Pucks > Set up a puck).");
@@ -826,7 +977,9 @@ void loop() {
   if (gps.fresh) { gps.fresh = false; onFix(); }
   pollImu();
   pollButton();
-  blePoll();                                    // run any command the app sent over Bluetooth, on this task
+  // run any command the app sent over Bluetooth, on this task. Sending a track can take a minute with the IMU
+  // unread: that silence isn't the IMU's fault, so the rest watchdog starts counting again from here.
+  if (blePoll()) lastRestSample = lastImuEvent = millis();
   led();
   const uint32_t m = millis();
   if (m - lastSec >= 1000) { lastSec = m; everySecond(); }

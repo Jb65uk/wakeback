@@ -19,11 +19,18 @@ class PullReport {
 }
 
 class PuckPull {
+  /// Tracks that were cut off part-way (the puck went out of reach), by puck/name/size: the next pull carries on
+  /// from where each stopped. Held while the app is running.
+  static final _partial = <String, TrackBuffer>{};
+
   /// Pull every finished track from a connected, authenticated puck into [store]. [onStep] gets a line to show
   /// as it goes; [progress] gets 0..1 across all the tracks. Each track is deleted from the puck only after it's
   /// been written here. A track that's still being recorded is left alone.
   static Future<PullReport> all(PuckBle b, DockStore store, {void Function(String)? onStep, void Function(double)? progress}) async {
     final list = (await b.tracks()).where((t) => !t.open).toList();
+    String keyOf(PuckTrack t) => '${b.puck}/${t.name}/${t.bytes}';
+    final here = {for (final t in list) keyOf(t)};
+    _partial.removeWhere((k, _) => k.startsWith('${b.puck}/') && !here.contains(k)); // gone from the puck since
     if (list.isEmpty) return const PullReport(0, 0, []);
     final totalBytes = list.fold<int>(0, (s, t) => s + t.bytes);
     var doneBytes = 0, tracks = 0, points = 0;
@@ -31,10 +38,13 @@ class PuckPull {
     for (final t in list) {
       onStep?.call('Getting ${t.name} (${(t.bytes / 1024).round()} KB)…');
       Uint8List raw;
+      final buf = _partial.putIfAbsent(keyOf(t), TrackBuffer.new);
       try {
-        raw = await b.getTrack(t, progress: (got, total) => progress?.call((doneBytes + got) / totalBytes));
+        raw = await b.getTrack(t, into: buf, progress: (got, total) => progress?.call((doneBytes + got) / totalBytes));
+        _partial.remove(keyOf(t));
       } on PuckException catch (e) {
-        problems.add(e.message);
+        final pct = t.bytes > 0 ? (100 * buf.length / t.bytes).floor() : 0;
+        problems.add(pct > 0 ? '${e.message} ($pct% of ${t.name} is here; it carries on from there next time.)' : e.message);
         break; // the link is probably the problem: don't grind through the rest
       }
       doneBytes += t.bytes;

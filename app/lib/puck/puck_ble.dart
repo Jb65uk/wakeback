@@ -19,6 +19,7 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
+import 'puck_link.dart';
 import 'wbt.dart';
 
 class PuckException implements Exception {
@@ -60,6 +61,15 @@ class PuckStatus {
   final String fw;
   final int batteryPct, tracks, pending, recHz, stopMin, sleepMin, mag;
   final bool autoRec, autoOff, onPad, charging, batteryFull, recording, locked, pairing, twistLearned, flip;
+
+  /// Left alone, so its GPS is in standby until it moves (or is lifted off the pad).
+  final bool resting;
+
+  /// Going faster than any dinghy: it's in a car, and won't record until it's been off the road five minutes.
+  final bool onRoad;
+
+  /// Seconds awake off the pad since it last sat there full, or -1 when that isn't known (reset, or topped up part-way).
+  final int sinceFullS;
   final double heel, pitch, sogKn, twist, zeroHeel, zeroPitch;
   final int gpsFix, sats;
   final String orientation; // "deck", "thwart" or "unknown"
@@ -75,6 +85,9 @@ class PuckStatus {
         recording = _m(raw['rec'])['on'] == true,
         autoRec = raw['autorec'] != false,
         autoOff = raw['autooff'] != false,
+        resting = raw['resting'] == true,
+        onRoad = raw['on_road'] == true,
+        sinceFullS = _i(_m(raw['batt'])['since_full_s']) ?? -1,
         recHz = _i(raw['rec_hz']) ?? 5,
         stopMin = _i(raw['stop_min']) ?? 10,
         sleepMin = _i(raw['sleep_min']) ?? 30,
@@ -108,6 +121,16 @@ class PuckTrack {
   final int bytes;
   final bool open; // still being recorded: can't be pulled yet
   const PuckTrack(this.name, this.bytes, this.open);
+}
+
+/// One track's bytes as they arrive. The caller keeps it, so a pull cut off by a dropped link carries on from
+/// where it stopped the next time the puck is in reach instead of starting that track again.
+class TrackBuffer {
+  final _b = BytesBuilder(copy: true);
+  int get length => _b.length;
+  void add(List<int> bytes) => _b.add(bytes);
+  Uint8List bytes() => _b.toBytes();
+  void clear() => _b.clear();
 }
 
 class PuckBle {
@@ -188,8 +211,9 @@ class PuckBle {
     return PuckException('Bluetooth trouble: $d');
   }
 
-  /// Something else is on the link right now (the puck screen, or the background pull): callers wait their turn.
-  static bool busy = false;
+  /// The phone's Bluetooth, one user at a time: the puck screen, Set up a puck, the nearby list and the background
+  /// pull each hold it while they scan or talk, and the next one waits (or, for the background pull, skips a turn).
+  static final link = PuckLink();
 
   /// The pucks nearby, as they're seen (the same puck again when its signal changes). Stops after [timeout];
   /// cancelling the subscription stops it sooner. Every WakeBack puck in range is reported; [PuckSeen.mine]
@@ -230,6 +254,13 @@ class PuckBle {
             }
           });
           await FlutterBluePlus.startScan(timeout: timeout, withServices: [Guid(_svc)], androidUsesFineLocation: false);
+          // belt and braces: whatever the phone's Bluetooth does, the scan is over a few seconds after its time
+          // (callers hold the link while they listen)
+          Timer(timeout + const Duration(seconds: 3), () async {
+            if (out.isClosed) return;
+            await stop();
+            if (!out.isClosed) await out.close();
+          });
         } catch (e) {
           if (!out.isClosed) {
             out.addError(_readable(e));
@@ -318,6 +349,7 @@ class PuckBle {
   final BluetoothDevice _dev;
   final BluetoothCharacteristic _cmdC, _rspC, _otaC, _datC;
   StreamSubscription<List<int>>? _notify, _data;
+  StreamSubscription<BluetoothConnectionState>? _state;
   final _buf = <int>[];
   Completer<Map<String, dynamic>>? _waiting;
   BytesBuilder? _sink; // where track bytes go while a "get" runs
@@ -363,6 +395,14 @@ class PuckBle {
         w.completeError(const PuckException('The puck sent something the app didn\'t understand.'));
       }
     });
+    // the link dropping fails whatever is waiting for an answer there and then, rather than at its timeout
+    // (minutes, for a big track)
+    _state = _dev.connectionState.listen((s) {
+      final w = _waiting;
+      if (s == BluetoothConnectionState.disconnected && w != null && !w.isCompleted) {
+        w.completeError(const PuckException('Lost the Bluetooth link to the puck. Is it still awake and close by?'));
+      }
+    });
     await _datC.setNotifyValue(true);
     _data = _datC.onValueReceived.listen((chunk) {
       final s = _sink;
@@ -380,6 +420,7 @@ class PuckBle {
     pairing = h['pairing'] == true;
     if (!locked) {
       authed = true;
+      await _sendTime();
       return;
     }
     if (key == null || key.isEmpty) return;
@@ -389,12 +430,22 @@ class PuckBle {
     try {
       await command('auth ${_hex(mac)}');
       authed = true;
+      await _sendTime();
     } on PuckException catch (e) {
       if (e.message.contains('Not your puck')) {
         authed = false;
         return;
       }
       rethrow;
+    }
+  }
+
+  /// The phone's clock, for until the puck's GPS has its own (a track started by hand indoors gets a proper name).
+  Future<void> _sendTime() async {
+    try {
+      await command('time ${DateTime.now().millisecondsSinceEpoch}', timeout: const Duration(seconds: 5));
+    } on PuckException {
+      // firmware from before "time": no matter
     }
   }
 
@@ -407,12 +458,27 @@ class PuckBle {
     }
   }
 
+  Future<void> _turn = Future<void>.value();
+
   /// Send one command line and wait for its JSON reply. A reply with "ok": false becomes a [PuckException]
-  /// carrying the puck's own message.
+  /// carrying the puck's own message. Commands go one at a time in the order they were asked, so the screen's
+  /// live refresh and a button tap never trip over each other.
   Future<Map<String, dynamic>> command(String line, {Duration timeout = const Duration(seconds: 10)}) async {
+    final before = _turn;
+    final mine = Completer<void>();
+    _turn = mine.future;
+    await before;
+    try {
+      return await _send(line, timeout);
+    } finally {
+      mine.complete();
+    }
+  }
+
+  Future<Map<String, dynamic>> _send(String line, Duration timeout) async {
     if (!_dev.isConnected) throw const PuckException('Not connected to the puck any more. Is it still awake and close by?');
-    if (_waiting != null && !_waiting!.isCompleted) throw const PuckException('Still waiting for the puck\'s last answer.');
     final w = _waiting = Completer<Map<String, dynamic>>();
+    w.future.ignore(); // if the write itself fails first, a late error on this one has nobody listening: that's fine
     _buf.clear();
     try {
       await _cmdC.write(utf8.encode(line), timeout: math.max(5, math.min(120, timeout.inSeconds)));
@@ -449,7 +515,8 @@ class PuckBle {
       if (sleepMin != null) 'sleepmin': '$sleepMin',
     };
     final enc = form.entries.map((e) => '${Uri.encodeQueryComponent(e.key)}=${Uri.encodeQueryComponent(e.value)}').join('&');
-    await command('set $enc');
+    // a new key makes the puck erase the last owner's tracks before it answers: give it time
+    await command('set $enc', timeout: const Duration(seconds: 30));
     if (key != null && key.isNotEmpty) {
       authed = true;
       locked = true;
@@ -488,13 +555,27 @@ class PuckBle {
   }
 
   /// Pull one track's raw bytes. The puck streams them on the data characteristic, then answers with the byte
-  /// count and CRC-32; a short or corrupt transfer is asked for again from where it stopped, a few times.
-  /// [progress] gets bytes so far and the total.
-  Future<Uint8List> getTrack(PuckTrack t, {void Function(int got, int total)? progress}) async {
+  /// count and two CRC-32s (of what it just sent, and of the whole file); only a track that checks out is returned.
+  /// [into] holds what has arrived: pass the same one again after a dropped link and the pull carries on from
+  /// there (once the puck has confirmed, by CRC, that those bytes are still what it holds). [progress] gets bytes
+  /// so far and the total.
+  Future<Uint8List> getTrack(PuckTrack t, {TrackBuffer? into, void Function(int got, int total)? progress}) async {
     _needAuth();
-    var whole = BytesBuilder(copy: false);
-    var have = 0;
+    final buf = into ?? TrackBuffer();
+    if (buf.length > 0) {
+      var good = false;
+      if (buf.length <= t.bytes) {
+        try {
+          final j = await command('crc ${t.name} ${buf.length}', timeout: const Duration(seconds: 30));
+          good = (j['crc'] as num?)?.toInt() == Crc32.of(buf.bytes());
+        } on PuckException {
+          good = false; // firmware from before "crc", or the track has changed: start it again
+        }
+      }
+      if (!good) buf.clear();
+    }
     for (var attempt = 0; attempt < 6; attempt++) {
+      final have = buf.length;
       final part = BytesBuilder(copy: false);
       _sink = part;
       _onData = (n) => progress?.call(have + n, t.bytes);
@@ -502,6 +583,10 @@ class PuckBle {
       try {
         // generous: a 1.4 MB track at a slow 10 kB/s is well under this
         j = await command('get ${t.name} $have', timeout: Duration(seconds: 30 + (t.bytes - have) ~/ 5000));
+      } catch (_) {
+        // the link dropped part-way: what arrived came in order, so it's kept for the next go
+        buf.add(part.takeBytes());
+        rethrow;
       } finally {
         _sink = null;
         _onData = null;
@@ -510,22 +595,17 @@ class PuckBle {
       final total = (j['bytes'] as num?)?.toInt() ?? t.bytes;
       final want = total - have;
       if (got.length >= want) {
-        // all of the remainder arrived (CRC of the part and of the whole file both have to agree)
-        whole.add(got.length == want ? got : got.sublist(0, want));
-        final all = whole.takeBytes();
+        buf.add(got.length == want ? got : got.sublist(0, want));
+        final all = buf.bytes();
+        buf.clear();
         final partOk = got.length == want && Crc32.of(got) == ((j['crc'] as num?)?.toInt() ?? -1);
         final fileOk = Crc32.of(all) == ((j['crc_file'] as num?)?.toInt() ?? -1);
         if (partOk && fileOk) return all;
-        // something went missing in the middle somewhere: start again from the top
-        whole = BytesBuilder(copy: false);
-        have = 0;
-        continue;
+        continue; // something went missing somewhere: this track again, from the top
       }
-      // short: notifications dropped; what arrived is in order, so keep it and carry on from there (the
-      // whole-file CRC at the end catches a gap in the middle)
-      whole.add(got);
-      have += got.length;
-      progress?.call(have, total);
+      // short: the tail didn't arrive; keep what did and ask for the rest
+      buf.add(got);
+      progress?.call(buf.length, total);
     }
     throw PuckException('Track ${t.name} didn\'t come over cleanly. Keep the phone next to the puck and try again.');
   }
@@ -587,8 +667,10 @@ class PuckBle {
   Future<void> disconnect() async {
     await _notify?.cancel();
     await _data?.cancel();
+    await _state?.cancel();
     _notify = null;
     _data = null;
+    _state = null;
     try {
       await _dev.disconnect();
     } catch (_) {}

@@ -2,6 +2,7 @@
 // Keep it in step with firmware/puck/README.md (button and LED table) when the puck changes.
 import 'package:flutter/material.dart';
 
+import '../widgets/common.dart';
 
 /// Which section to open the guide on (from a "How does this work?" link elsewhere).
 enum GuideTopic { start, puck, button, sailing, phone, sails, maps, fixes }
@@ -31,7 +32,7 @@ class _GuideScreenState extends State<GuideScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Guide')),
-      body: ListView(padding: const EdgeInsets.fromLTRB(12, 4, 12, 32), children: [
+      body: PageList(padding: const EdgeInsets.fromLTRB(12, 4, 12, 32), children: [
         _Section(
           key: _keys[GuideTopic.start],
           icon: Icons.flag_outlined,
@@ -53,7 +54,7 @@ class _GuideScreenState extends State<GuideScreen> {
             ('Wake the puck', 'Put it on the pad, or press its button once (the light blinks). That\'s all: the phone talks to it over Bluetooth, so there\'s nothing to hold and no WiFi anywhere. Keep the phone next to it.'),
             ('You → Pucks → Set up a puck', 'Give the puck a number, tap Connect to the puck. Not sure which puck is which? Find pucks nearby lists every puck it can hear. The app hands the puck a key tied to your account: from then on only your phone can talk to it, and everything it records is yours.'),
             ('Someone else\'s puck, or yours on a new phone', 'A puck that already has a key only takes a new one while its pairing window is open: hold its button 6 seconds until the light gives five quick blinks, then Set up a puck. A new key wipes the tracks still on it.'),
-            ('Tracks, settings and firmware', 'Tap the puck under You → Pucks. With the puck awake it shows its battery, GPS, live speed and heel, whether it\'s calibrated, and the buttons do the everyday things over Bluetooth: Get its tracks, Boat is level, which way it\'s mounted, record, sleep. Settings: points a second, record on its own, how long still before a sail ends, whether and when it switches itself off. Update appears there when new puck firmware is out — one tap, the app sends it over Bluetooth.'),
+            ('Tracks, settings and firmware', 'Tap the puck under You → Pucks. With the puck awake it shows its battery, GPS, live speed and heel, whether it\'s calibrated, and the buttons do the everyday things over Bluetooth: Get its tracks, Boat is level, which way it\'s mounted, record, sleep. The numbers stay live while the screen is open. Under Settings: points a second, record on its own, how long still before a sail ends, whether and when it switches itself off. Update appears there when new puck firmware is out — one tap, the app sends it over Bluetooth.'),
           ],
         ),
         _Section(
@@ -70,6 +71,7 @@ class _GuideScreenState extends State<GuideScreen> {
           table2: const [
             ('Slow blink', 'Awake, no GPS fix yet'),
             ('One blink a second', 'GPS fix, waiting for the boat to move'),
+            ('One short blink every 4 s', 'Resting: left alone, GPS off. Wakes when the boat moves'),
             ('Double blink', 'Recording'),
             ('Fast blink', 'Pairing window open (or the puck has no key yet)'),
             ('Steady on', 'Sending a track or taking a firmware update'),
@@ -83,8 +85,8 @@ class _GuideScreenState extends State<GuideScreen> {
           title: 'A sailing day',
           open: widget.open == GuideTopic.sailing,
           steps: const [
-            ('Before', 'Take the puck off the pad and clip it in. Nothing to press. It wakes when you pick it up and is ready once the light blinks once a second (a GPS fix — give it a minute outdoors the first time).'),
-            ('On the water', 'It starts recording by itself as the boat moves off and keeps going through the day. Stopped for lunch? After 10 minutes still it closes that track; the next move-off starts another. All of a day lands in one session.'),
+            ('Before', 'Take the puck off the pad and clip it in. Coming off the pad it\'s already awake; if it\'s been asleep in the bag, press its button once. It\'s ready once the light blinks once a second (a GPS fix — give it a minute outdoors the first time).'),
+            ('On the water', 'It starts recording by itself as the boat moves off and keeps going through the day. Stopped for lunch? After 10 minutes still it closes that track, then rests to save the battery (one short blink every 4 seconds). The moment the boat is touched it\'s awake again, and the next move-off starts another track. All of a day lands in one session. Left longer than its "Sleep after" time it switches off, and then it needs its button.'),
             ('Ashore', 'Open WakeBack with the phone next to the puck. Every minute or so the app listens for your pucks; one with tracks waiting hands them over by itself (the light goes steady) and they land in Sessions. In a hurry? Tap the puck under You → Pucks → Get its tracks. No signal needed for any of this.'),
             ('At home', 'Puck on the pad. It charges, and anything still on it comes over whenever WakeBack is open on screen nearby. It sleeps by itself after half an hour still off the pad.'),
           ],
@@ -107,6 +109,7 @@ class _GuideScreenState extends State<GuideScreen> {
           open: widget.open == GuideTopic.sails,
           steps: const [
             ('Sessions', 'One per day and venue. Tap one to replay: every boat on the map, speed and heel, races picked out automatically (accept or adjust them). Lay marks and start lines; they\'re kept.'),
+            ('Replay', 'Replay takes the whole screen; ← Sails on the map (or the back button) brings you out. Play, the clock and the speed are always there; More has the chart, loop and fit. Boat cards shows each boat\'s live numbers (tap a boat for all of them) and Map only hides them again. A tablet opens on the cards; a phone shows the map upright and the cards when you turn it on its side. Stats & tools has each boat\'s figures, races, marks and wind.'),
             ('Friends or private', 'Each sail is visible to your friends unless you switch it to private on the session. Private sails stay off everyone\'s league, including the admin\'s.'),
             ('Stats and League', 'Miles, hours, top speed, best averages, badges; the league ranks you and your friends by class. Tap a sail → Share for a picture of the track to send on WhatsApp.'),
             ('Sync', 'Happens by itself when you\'re signed in and have signal. The cloud icon on Sails shows where it\'s up to; tap it for details.'),
@@ -129,7 +132,9 @@ class _GuideScreenState extends State<GuideScreen> {
           steps: [
             ('The app can\'t find the puck', 'It has to be awake: on the pad, or press its button once. Bluetooth on, on the phone, and WakeBack allowed to use "Nearby devices". Stand next to it. Asleep pucks don\'t answer — and after half an hour still off the pad it goes to sleep.'),
             ('"Isn\'t yours on this phone"', 'The puck answers only to the phone that set it up. On a new phone, or after someone else set it up: hold its button 6 seconds (five quick blinks) and Set up again here.'),
+            ('It recorded the drive home', 'It shouldn\'t: above 30 knots (35 mph) for 20 seconds it knows it\'s in a car, bins the track it started and won\'t record until it\'s been off the road five minutes. A slow drive through town can still slip under that. Hold the button 2 seconds to send it to sleep before it goes in the bag, and delete the track from Sessions.'),
             ('Tracks on the puck but not coming over', 'The puck only hands over finished tracks: if it\'s still recording (double blink), tap the button once to stop. Then You → Pucks → Check for tracks now, or the puck → Get its tracks.'),
+            ('Battery doesn\'t last the day', 'A charge should cover a day\'s sailing; the puck\'s screen shows what yours has really done since it was last full. Charge it the night before, and log 5 points a second rather than 10. If it has switched itself off by the afternoon race, make "Sleep after" longer: a resting puck uses much less than a recording one.'),
             ('Battery not charging on the pad', 'Make sure the puck sits centred on the pad (the light should breathe). Sitting there all day is fine; it rests its GPS and radio on the pad.'),
             ('Wrong venue or date on a sail', 'Open the session → the menu → Move. New venues are named "New venue near…" until you give them a name.'),
             ('App update', 'You → About → Check. Updates install over the top; nothing is lost.'),

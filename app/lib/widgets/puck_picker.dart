@@ -9,18 +9,20 @@ import 'common.dart';
 
 /// Scan and let the user pick a puck. Returns the one tapped, or null if they closed the sheet.
 /// [exclude]: puck numbers to leave off the list (ones already set up), shown greyed instead.
-Future<PuckSeen?> pickPuckNearby(BuildContext context, {Set<int> exclude = const {}, String title = 'Pucks nearby'}) {
+/// [holdsLink]: the caller already holds the Bluetooth link (Set up a puck, mid-run), so the sheet doesn't wait for it.
+Future<PuckSeen?> pickPuckNearby(BuildContext context, {Set<int> exclude = const {}, String title = 'Pucks nearby', bool holdsLink = false}) {
   return showModalBottomSheet<PuckSeen>(
     context: context,
     showDragHandle: true,
-    builder: (_) => _PuckPickerSheet(exclude: exclude, title: title),
+    builder: (_) => _PuckPickerSheet(exclude: exclude, title: title, holdsLink: holdsLink),
   );
 }
 
 class _PuckPickerSheet extends StatefulWidget {
   final Set<int> exclude;
   final String title;
-  const _PuckPickerSheet({required this.exclude, required this.title});
+  final bool holdsLink;
+  const _PuckPickerSheet({required this.exclude, required this.title, required this.holdsLink});
   @override
   State<_PuckPickerSheet> createState() => _PuckPickerSheetState();
 }
@@ -28,8 +30,9 @@ class _PuckPickerSheet extends StatefulWidget {
 class _PuckPickerSheetState extends State<_PuckPickerSheet> {
   final _seen = <int, PuckSeen>{};
   StreamSubscription<PuckSeen>? _sub;
-  bool _scanning = false;
+  bool _scanning = false, _waiting = false, _gone = false;
   String? _error;
+  void Function()? _release; // the Bluetooth link, held while the sheet is open
 
   @override
   void initState() {
@@ -39,17 +42,31 @@ class _PuckPickerSheetState extends State<_PuckPickerSheet> {
 
   @override
   void dispose() {
+    _gone = true;
     _sub?.cancel();
+    _release?.call();
     super.dispose();
   }
 
-  void _scan() {
-    _sub?.cancel();
+  Future<void> _scan() async {
+    await _sub?.cancel();
+    if (_gone) return;
     setState(() {
       _scanning = true;
       _error = null;
       _seen.clear();
     });
+    if (!widget.holdsLink && _release == null) {
+      // a background track pull has the radio: let it finish rather than cut across it
+      if (PuckBle.link.isHeld) setState(() => _waiting = true);
+      final release = await PuckBle.link.acquire();
+      if (_gone) {
+        release();
+        return;
+      }
+      _release = release;
+      setState(() => _waiting = false);
+    }
     _sub = PuckBle.scan(timeout: const Duration(seconds: 10)).listen(
       (p) {
         if (mounted) setState(() => _seen[p.puck] = p);
@@ -92,7 +109,13 @@ class _PuckPickerSheetState extends State<_PuckPickerSheet> {
           else if (pucks.isEmpty)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 16),
-              child: Text(_scanning ? 'Listening…' : 'No pucks heard. Wake one up and tap the arrow to look again.', style: t.textTheme.bodyMedium),
+              child: Text(
+                  _waiting
+                      ? 'Tracks are coming over in the background. Listening as soon as they\'re done…'
+                      : _scanning
+                          ? 'Listening…'
+                          : 'No pucks heard. Wake one up and tap the arrow to look again.',
+                  style: t.textTheme.bodyMedium),
             )
           else
             for (final p in pucks)
