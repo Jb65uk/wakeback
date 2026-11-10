@@ -216,6 +216,7 @@ select{background:var(--panel-2);border:1px solid var(--line);border-radius:6px;
 #scrub{width:100%;accent-color:var(--signal)}
 #togglePanel,#more{display:none}
 #barMain,#barMore{display:contents}
+#barMore .spacer{display:none}   /* one row on a wide screen: the first group's spacer does the pushing */
 body.inapp #fs{display:none}   /* in the app, Replay always has the whole screen */
 .mapback{box-shadow:0 1px 5px rgba(0,0,0,.5);background:var(--panel);font-weight:600}
 #sheetBar{display:none}
@@ -288,6 +289,7 @@ body.big #trailOnlyWrap{display:none}
   #barMain .btn{padding:8px 10px}
   #barMore{display:none;margin-top:8px}
   #replay.more #barMore{display:flex}
+  #barMore .spacer{display:block}
   #more{display:inline-flex}
   /* boat cards at phone size: one slim row per boat, three numbers each; tap a boat for the rest */
   body.big #raceTitle,body.big #wxBig{display:none}   /* the wind is on the map; the race is the lit chip */
@@ -323,6 +325,9 @@ body.big #trailOnlyWrap{display:none}
   body.big #cards .card .vals,body.big #cards .card.open .vals{grid-column:1;grid-row:auto;margin-top:4px}
   #replay{padding:8px 10px;gap:6px}
   #chart,body.big #chart{height:44px}
+  #barMain{gap:6px;flex-wrap:nowrap}
+  #barMain .btn{padding:8px;white-space:nowrap}
+  #clock{font-size:20px}
 }
 @media (prefers-reduced-motion:reduce){#panel{transition:none}}
 </style>
