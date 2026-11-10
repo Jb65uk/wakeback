@@ -1,7 +1,7 @@
 // Bluetooth LE: the only way anything talks to the puck. One service, four characteristics:
 //
 //   command  (write)        a line: "hello" | "auth <hmac-hex>" | "status" | "set k=v&k=v" (puck, key, autorec, autooff, rate=1|2|5|10, stopmin=2..60, sleepmin=5..240) | "level" | "orient 1|2" |
-//                           "flip" | "twist <deg>" | "calreset" | "rec start|stop" | "tracks" | "get <name> [offset]" | "done <name>" | "erase" | "sleep" | "reboot" |
+//                           "flip" | "twist <deg>" | "calreset" | "rec start|stop" | "tracks" | "get <name> [offset]" | "crc <name> <bytes>" | "done <name>" | "erase" | "time <epoch ms>" | "sleep" | "reboot" |
 //                           "ota begin <bytes>" | "ota status" | "ota end"
 //   reply    (notify/read)  the answer, JSON, ending in "\n". A long reply (status is ~1 KB) goes in MTU-sized chunks;
 //                           the app joins them until it sees the newline.
@@ -50,6 +50,8 @@ static void stopRecording(const char *why);
 static bool deleteTrack(const String &name);
 static void eraseTracks(const char *why);
 static bool streamTrack(const String &name, size_t offset, size_t &total, uint32_t &crc, uint32_t &crcFile);   // sends the bytes with bleData()
+static bool trackCrc(const String &name, size_t len, uint32_t &crc);
+static void setClock(uint64_t epochMs, bool fromGps);
 static void goToSleep(const char *why);
 static bool otaBegin(size_t bytes);
 static bool otaWrite(const uint8_t *data, size_t len);
@@ -62,7 +64,6 @@ static NimBLEServer *bleServer = nullptr;
 static NimBLECharacteristic *bleRsp = nullptr, *bleDat = nullptr;
 static bool bleConnected = false, bleIsAuthed = false;
 static uint16_t bleConn = 0;
-static uint32_t bleLastActivity = 0;
 static uint8_t bleNonce[16];
 static size_t otaExpected = 0, otaGot = 0;
 
@@ -128,7 +129,6 @@ static void bleDrop(const char *why) {              // refuse and hang up
 }
 
 static void bleCommand(const String &line) {
-  bleLastActivity = millis();
   String cmd = line; cmd.trim();
   const int sp = cmd.indexOf(' ');
   const String op = sp < 0 ? cmd : cmd.substring(0, sp);
@@ -181,6 +181,17 @@ static void bleCommand(const String &line) {
       bleReply(String("{\"ok\":true,\"name\":\"") + name + "\",\"bytes\":" + (unsigned)total + ",\"offset\":" + (unsigned)offset + ",\"crc\":" + crc + ",\"crc_file\":" + crcFile + "}");
     else bleReply(jsonMsg(false, "Couldn't send that track."));
   }
+  else if (op == "crc") {                           // "crc <name> <bytes>": the CRC-32 of the track's first so-many bytes
+    const int sp2 = arg.indexOf(' ');
+    uint32_t crc = 0;
+    if (sp2 > 0 && trackCrc(arg.substring(0, sp2), (size_t)arg.substring(sp2 + 1).toInt(), crc)) bleReply(String("{\"ok\":true,\"crc\":") + crc + "}");
+    else bleReply(jsonMsg(false, "No such track, or it's shorter than that."));
+  }
+  else if (op == "time") {                          // the phone's clock, for until the GPS has its own
+    const uint64_t t = strtoull(arg.c_str(), nullptr, 10);
+    if (t > 1600000000000ULL) { setClock(t, false); bleReply(jsonMsg(true, "Thanks.")); }
+    else bleReply(jsonMsg(false, "time <epoch ms>"));
+  }
   else if (op == "done") bleReply(deleteTrack(arg) ? jsonMsg(true, "Deleted.") : jsonMsg(false, "No such track."));
   else if (op == "erase") { eraseTracks("app"); bleReply(jsonMsg(true, "All tracks erased.")); }
   else if (op == "sleep") { bleReply(jsonMsg(true, "Sleeping.")); delay(300); goToSleep("app"); }
@@ -216,14 +227,13 @@ static void blePoll() {                           // called from loop()
 class BleOtaCb : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &) override {
     if (!bleIsAuthed) return;
-    bleLastActivity = millis();
     const std::string &v = c->getValue();
     if (otaExpected && otaWrite((const uint8_t *)v.data(), v.size())) otaGot += v.size();
   }
 };
 class BleServerCb : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *s, NimBLEConnInfo &info) override {
-    bleConnected = true; bleIsAuthed = false; bleConn = info.getConnHandle(); bleLastActivity = millis();
+    bleConnected = true; bleIsAuthed = false; bleConn = info.getConnHandle();
     esp_fill_random(bleNonce, sizeof bleNonce);
     s->updateConnParams(bleConn, 6, 12, 0, 400);  // 7.5-15 ms between packets: tracks and firmware move quickly
     bleNote("connected");

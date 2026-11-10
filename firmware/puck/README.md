@@ -9,12 +9,13 @@ What it does on its own:
 - **5 Hz while moving (1, 2, 5 or 10 from the app), 1 Hz while still.** Points are stored in a compact binary form (`src/track.h`: a full record every 64 points, small deltas between, about 12 bytes a point) so about **18 hours** of actual sailing fits in the 4.5 MB track store at 5 Hz (9 h at 10, 45 h at 2). The app pulls the raw `.wbt` files over Bluetooth and decodes them itself (`app/lib/puck/wbt.dart`). A short track (under 10 points) is binned.
 - **Belongs to one person.** When it's set up, the app gives it a key the server issued to the owner's account. From then on an app has to prove it holds that key (HMAC of a fresh nonce, the key never goes over the air) before the puck will say anything beyond "hello". Hold the button 6 s to open a 10-minute pairing window for a new owner; giving it a different key erases the tracks on it. The advert carries two bytes of a hash of the key, so the app only lists your own pucks.
 - **Calibrates itself**: which way up it's mounted (on deck or under the thwart) from gravity while it sits still; the twist from the bow from the compass against the GPS course while you sail straight (saved once it agrees for a minute); level is one button in the app with the boat sat level.
+- **Rests when it's left alone.** Off the pad, not recording, and nothing has tilted or gone anywhere for 3 minutes: the GPS goes to standby and the IMU drops to its bare accelerometer (Bluetooth stays up, the LED gives one short blink every 4 s). A 3° tilt or a knock — someone stepping aboard, the trolley moving — wakes it and the GPS is back with a hot start in a second or two; where it was resting is remembered, so sailing off from there still starts a track. It never rests while a track is being recorded, nor before the GPS has had its first fix. On the pad it rests the same way after a minute, until it's lifted. That, the CPU at 80 MHz and the GPS running only as fast as the track is logged are what stretch the 1200 mAh cell.
 - **Sleeps** after 30 minutes (a setting, or off) without the boat under way, off the pad (hold the button 2 s to sleep now); a press, or being put on the pad, wakes it. GPS goes to backup mode so it gets a fix quickly on waking. Sent to sleep while it's on the pad it stays asleep until the button. On the pad the GPS rests after a minute so the pad's few hundred mA go into the battery.
 - **Firmware updates** from the app over Bluetooth. A new image runs on probation and is rolled back unless the app authenticates with it (or it runs two minutes with the sensors alive).
 
 ## Flashing it the first time
 
-Either open this folder in VS Code with PlatformIO and **Upload** over USB, or take `puck-full.bin` from the latest `puck-N` release on GitHub and write it at address `0x0` with any ESP32 flasher (for example https://espressif.github.io/esptool-js/ in Chrome: connect, address `0x0`, Program). Later updates come from the app.
+Either open this folder in VS Code with PlatformIO and **Upload** over USB (a build from your PC calls itself `dev-<commit>`; releases are `1.0.N`), or take `puck-full.bin` from the latest `puck-N` release on GitHub and write it at address `0x0` with any ESP32 flasher (for example https://espressif.github.io/esptool-js/ in Chrome: connect, address `0x0`, Program). Later updates come from the app.
 
 ## The button and the LED
 
@@ -31,6 +32,7 @@ This table is the one place these are written down.
 |---|---|
 | slow blink | no GPS fix yet |
 | one blink a second | fix, waiting for the boat to move |
+| one short blink every 4 s | resting (left alone): wakes when the boat moves |
 | double blink | recording |
 | fast blink | pairing window open (or the puck has no key yet) |
 | steady on | sending a track or taking a firmware update |
@@ -44,7 +46,7 @@ Always on while the puck is awake, advertising as `WakeBack puck N`. The app (Yo
 
 ## Serial monitor (115200)
 
-A status line every 5 s, and: `h` help, `s` status now, `q` pause/resume the status line, `i` start-up report (with what to check if the GPS or IMU wasn't found), `r` start/stop recording, `l` list tracks, `erase` (the whole word) erase all tracks, `p` pairing window on/off, `forget` (the whole word) drop the key so any app can set it up, `x` sleep. Everything else (puck number, level, heel sign, twist) is set from the app.
+A status line every 5 s, and: `h` help, `s` status now, `q` pause/resume the status line, `i` start-up report (with what to check if the GPS or IMU wasn't found), `r` start/stop recording, `l` list tracks, `erase` (the whole word) erase all tracks, `p` pairing window on/off, `forget` (the whole word) drop the key so any app can set it up, `x` sleep. The status line says `GPS resting` while it rests. Everything else (puck number, level, heel sign, twist) is set from the app.
 
 ## Partitions
 
