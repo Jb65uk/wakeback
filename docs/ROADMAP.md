@@ -177,4 +177,7 @@ After a read-through of the whole puck path. Rule for the firmware from here: ne
   (`PageList`). Tests for the .wbt decoder, the CRC and the lock (`app/test/puck_test.dart`).
 - Decided against: erasing after replying on a key change (the old owner's tracks must be gone before the new
   owner is told "saved"; the app waits 30 s instead).
-
+- **Road rule** (same PR): > 30 kn held 20 s = in a car. No auto-record, the track that began with the drive is
+  binned (one older than 3 min is closed and kept), no activity credit so the puck can sleep; clears 5 min after
+  the last road speed. Button-started tracks exempt. Raised when wake-on-motion for v2 came up: that needs this
+  plus a venue list before it's usable (a bag or a car would wake it otherwise).

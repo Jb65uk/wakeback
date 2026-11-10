@@ -65,6 +65,12 @@ static const uint32_t START_MOVING_MS = 5000;                // ...and been abov
 static const float    MOVE_M = 20;                           // while recording, must move this far every...
 // ...this many minutes (S.stopMin, default 10, from the app), or the sail is over
 static const uint32_t PAD_GPS_NAP_MS = 60000;                // on the pad this long = indoors on the charger: rest until it's lifted
+// A dinghy doesn't hold 30 knots (35 mph); a car does. Faster than that for 20 s means the puck is on the road:
+// no track is started (one that began with the drive is binned), and the drive doesn't keep the puck awake.
+static const float    ROAD_KN = 30;
+static const uint32_t ROAD_FOR_MS = 20000;
+static const uint32_t ROAD_CLEAR_MS = 5UL * 60 * 1000;       // back to normal after this long without road speed
+static const uint32_t ROAD_BIN_MS = 3UL * 60 * 1000;         // a track younger than this when the road speed came is the drive itself
 static const uint32_t REST_AFTER_MS = 3UL * 60 * 1000;       // off the pad, not recording, and nothing has tilted or gone anywhere for this long: rest
 static const float    REST_TILT_DEG = 3.0f;                  // tilted this far from how it lay = somebody is at the boat: wake up
 static const float    REST_BUMP_MS2 = 2.0f;                  // ...or a knock this much off 1 g (a trolley over a kerb)
@@ -193,7 +199,8 @@ static void setClock(uint64_t epochMs, bool fromGps) {
 }
 
 // recording
-bool recording = false;
+bool recording = false, recManual = false;
+bool onRoad = false; uint32_t fastSince = 0, lastFast = 0;   // see ROAD_KN
 File rec; String recName;
 uint32_t recStarted = 0, recLines = 0, lastPointMs = 0, lastFlush = 0;
 // where the boat was last at rest, to spot it moving off; and where it last was, to spot it stopping
@@ -506,7 +513,7 @@ static void startRecording(bool manual) {
   if (!manual) preBytes = preDrain(rec); else { preLen = 0; preHead = 0; }
   fsUnmeasured += 8 + preBytes;
   recName = String(name).substring(strlen(TRK_DIR) + 1);
-  recording = true; recStarted = millis(); recLines = 0; lastFlush = millis();
+  recording = true; recManual = manual; recStarted = millis(); recLines = 0; lastFlush = millis();
   countTracks();
   moveLat = gps.lat; moveLon = gps.lon; lastMoveMs = millis();
   Serial.printf("Recording %s (%s).\n", recName.c_str(), manual ? "button" : "the boat moved off");
@@ -544,6 +551,23 @@ static void onFix() {
 
   // movement from rest
   if (gps.fix < 3 || gps.hAccM > 15) return;
+
+  // on the road? (a track started by hand is left alone: whoever pressed the button meant it)
+  if (gps.sogKn > ROAD_KN) { lastFast = m; if (!fastSince) fastSince = m; } else fastSince = 0;
+  if (!onRoad && fastSince && m - fastSince > ROAD_FOR_MS) {
+    onRoad = true;
+    Serial.println("Faster than any dinghy for 20 s: on the road. No recording until it's been off the road for 5 minutes.");
+    if (recording && !recManual) {
+      // a track that began with the drive is binned; a sail that was still open when the car pulled away is kept
+      const bool theDrive = m - recStarted < ROAD_BIN_MS;
+      const String name = recName;
+      stopRecording("on the road");
+      if (theDrive && LittleFS.exists(trackPath(name))) { LittleFS.remove(trackPath(name)); countTracks(); Serial.println("That track was the drive: binned."); }
+    }
+  }
+  if (onRoad && m - lastFast > ROAD_CLEAR_MS) { onRoad = false; Serial.println("Off the road."); }
+  if (onRoad && !recording) { haveRest = false; stillSince = 0; movingSince = 0; return; }   // nor does the drive count as activity: the puck may sleep
+
   if (!moving) { if (!stillSince) stillSince = m; movingSince = 0; }
   else { stillSince = 0; if (!movingSince) movingSince = m; }
   // a speed that's held, not one jittery reading (on the bench 25 Oct it started recording on 0.5-2 kn of indoor
@@ -624,8 +648,8 @@ static void goToSleep(const char *why) {
 static String statusJson() {
   String j; j.reserve(1400);
   char b[600];
-  snprintf(b, sizeof b, "{\"ok\":true,\"fw\":\"%s\",\"puck\":%d,\"uptime_s\":%lu,\"time_ms\":%llu,\"autorec\":%s,\"autooff\":%s,\"rec_hz\":%d,\"stop_min\":%d,\"sleep_min\":%d,\"locked\":%s,\"pairing\":%s,\"resting\":%s,",
-           FW, S.puck, (unsigned long)(millis() / 1000), (unsigned long long)nowMs(), B(S.autoRec), B(S.autoOff), S.recHz, S.stopMin, S.sleepMin, B(S.key.length() > 0), B(pairingOpen()), B(resting));
+  snprintf(b, sizeof b, "{\"ok\":true,\"fw\":\"%s\",\"puck\":%d,\"uptime_s\":%lu,\"time_ms\":%llu,\"autorec\":%s,\"autooff\":%s,\"rec_hz\":%d,\"stop_min\":%d,\"sleep_min\":%d,\"locked\":%s,\"pairing\":%s,\"resting\":%s,\"on_road\":%s,",
+           FW, S.puck, (unsigned long)(millis() / 1000), (unsigned long long)nowMs(), B(S.autoRec), B(S.autoOff), S.recHz, S.stopMin, S.sleepMin, B(S.key.length() > 0), B(pairingOpen()), B(resting), B(onRoad));
   j += b;
   snprintf(b, sizeof b, "\"gps\":{\"ok\":%s,\"fix\":%d,\"sats\":%d,\"lat\":%.7f,\"lon\":%.7f,\"sog\":%.2f,\"cog\":%.1f,\"hacc\":%.1f,\"hz\":%.0f},",
            B(gpsOk), gps.fix, gps.sats, gps.lat / 1e7, gps.lon / 1e7, gps.sogKn, gps.cogDeg, gps.hAccM, gps.rateHz);

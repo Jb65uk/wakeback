@@ -65,6 +65,9 @@ class PuckStatus {
   /// Left alone, so its GPS is in standby until it moves (or is lifted off the pad).
   final bool resting;
 
+  /// Going faster than any dinghy: it's in a car, and won't record until it's been off the road five minutes.
+  final bool onRoad;
+
   /// Seconds awake off the pad since it last sat there full, or -1 when that isn't known (reset, or topped up part-way).
   final int sinceFullS;
   final double heel, pitch, sogKn, twist, zeroHeel, zeroPitch;
@@ -83,6 +86,7 @@ class PuckStatus {
         autoRec = raw['autorec'] != false,
         autoOff = raw['autooff'] != false,
         resting = raw['resting'] == true,
+        onRoad = raw['on_road'] == true,
         sinceFullS = _i(_m(raw['batt'])['since_full_s']) ?? -1,
         recHz = _i(raw['rec_hz']) ?? 5,
         stopMin = _i(raw['stop_min']) ?? 10,

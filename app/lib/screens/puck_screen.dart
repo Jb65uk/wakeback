@@ -380,6 +380,7 @@ class _PuckScreenState extends State<PuckScreen> {
                           if (st.batteryPct >= 0) 'battery ${st.batteryPct}%${st.charging ? ', charging' : st.batteryFull ? ', full' : ''}',
                           if (st.onPad && !st.charging && !st.batteryFull) 'on the pad',
                           if (st.recording) 'recording',
+                          if (st.onRoad) 'on the road: not recording',
                           if (st.resting) (st.onPad ? 'resting on the pad' : 'resting until it moves') else if (st.gpsFix >= 3) 'GPS ${st.sats} sats' else 'no GPS fix yet',
                           '$pending track${pending == 1 ? '' : 's'} waiting',
                         ].join(' · '),
