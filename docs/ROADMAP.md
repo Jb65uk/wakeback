@@ -148,3 +148,33 @@ the same job). Sharing still goes phone → server as before.
   dead key until someone re-pairs it.
 - Still to prove on the bench: first auth, a 1 MB track over BLE (expect 20–40 kB/s), the watcher picking a puck up
   on the pad, a BLE firmware update onto this build.
+
+## 10 Nov — battery first, and a tidy (firmware + app 0.19.0)
+
+After a read-through of the whole puck path. Rule for the firmware from here: never miss a sail, then battery.
+
+- **Resting** (`firmware/puck/src/main.cpp`): off the pad, not recording, nothing tilted or under way for 3 minutes
+  (and the GPS has had a first fix): GPS to standby, IMU from fusion down to the bare accelerometer at 5 Hz, BLE
+  stays up. A 3° tilt or a 0.2 g knock ends it; GPS hot-starts; the rest position is kept so sailing off still
+  starts a track, the pre-roll ring is cleared so nothing stale gets in. Never while recording. A tilt wake does
+  not reset the auto-off clock (a boat rocking on a trailer must still let the puck sleep). On the pad it rests
+  the same way after a minute. LED: one short blink every 4 s. Status has `resting`.
+- **CPU at 80 MHz** (was 240), GPS navigation rate = logging rate, compass report 1 Hz once the twist is learned.
+- **Measured, not guessed**: `since_full_s` in status (seconds awake off the pad since it last sat full; RTC
+  memory, dropped by a part-way top-up). The puck screen turns that into "22% used in 2 h 10 min, about 10 h a
+  charge". Nobody has put a meter on the puck yet: the mA figures in the chat were estimates.
+- **Not yet**: true wake-on-motion from deep sleep needs the BNO085's INT pin wired to a GPIO (v2 board); then
+  the puck never needs its button.
+- Phone clock (`time <ms>` after auth) until the GPS has its own; `crc <name> <bytes>` so the app can carry on a
+  pull that was cut off; button-hold blinks no longer block the loop; local builds call themselves
+  `dev-<commit>` (`version.py`); `bleLastActivity` gone.
+- **App 0.19.0**: `PuckLink` (a real lock: the puck screen and Set up a puck wait for a background pull, the
+  watcher skips a turn) replaces the `busy` flag; commands on one connection queue instead of colliding; the puck
+  screen refreshes every 2 s while it's in front; settings folded into one section; partial tracks kept across
+  connections (`TrackBuffer`); a strip across the top and a line at the bottom when tracks come over in the
+  background; Your pucks card now updates itself (it was a const child and never rebuilt). Tablet and landscape:
+  a navigation rail instead of the bottom bar from 720 dp, and page content in a centred 720 dp column
+  (`PageList`). Tests for the .wbt decoder, the CRC and the lock (`app/test/puck_test.dart`).
+- Decided against: erasing after replying on a key change (the old owner's tracks must be gone before the new
+  owner is told "saved"; the app waits 30 s instead).
+

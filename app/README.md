@@ -19,7 +19,8 @@ app/
   lib/dock/pocket_dock.dart   the dock's HTTP API on loopback + serves the viewer pages (demo pucks use it; real ones talk Bluetooth)
   lib/puck/puck_ble.dart      Bluetooth to a puck: scan (own pucks by owner hash), hello/auth (HMAC), commands, tracks, firmware
   lib/puck/wbt.dart           the puck's compact .wbt track format decoded to CSV (port of firmware/puck/src/track.h)
-  lib/puck/puck_pull.dart     pull every finished track off a puck into Sessions, then clear it off the puck
+  lib/puck/puck_link.dart     one user of the phone's Bluetooth at a time (screens wait for a background pull; the watcher skips a turn)
+  lib/puck/puck_pull.dart     pull every finished track off a puck into Sessions, then clear it off the puck; a pull cut off part-way carries on next time
   lib/puck/puck_watcher.dart  does that by itself every 90 s while the app is open
   lib/dock/stats.dart         miles / hours / speeds / wind / heel per track, totals and the league (= server/stats.py)
   lib/dock/badges.dart        personal bests ("new record") and badges, from your tracks

@@ -200,7 +200,7 @@ class _SyncScreenState extends State<SyncScreen> {
             )
           : RefreshIndicator(
               onRefresh: _check,
-              child: ListView(padding: const EdgeInsets.fromLTRB(12, 0, 12, 24), children: [
+              child: PageList(padding: const EdgeInsets.fromLTRB(12, 0, 12, 24), children: [
                 Card(
                   child: Padding(
                     padding: const EdgeInsets.all(14),

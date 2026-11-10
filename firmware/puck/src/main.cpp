@@ -171,6 +171,10 @@ bool transferring = false;           // a track or firmware image is moving over
 bool resting = false, restRefSet = false, gpsEverFixed = false;
 float restRef[3] = {0, 0, 1}, quietRef[3] = {0, 0, 1};      // "up" as it lay when it went to rest / when it last moved
 uint32_t lastMotion = 0, lastRestSample = 0;
+// What the battery really does: seconds awake off the pad since it last sat there full. Kept through sleep (not a
+// reset or a re-flash), and thrown away by a part-way top-up, so the app can say "22% used in 2 h 10 min".
+RTC_DATA_ATTR uint32_t awakeSinceFull = 0;
+RTC_DATA_ATTR uint8_t sinceFullKnown = 0;
 bool appPendingVerify = false;
 static void pollButton();
 // the pairing window: an app may give the puck a key without proving it holds one
@@ -620,8 +624,8 @@ static String statusJson() {
            B(imuOk), imu.heel, imu.pitch, isnan(imu.headingX) ? -1.0f : fmodf(imu.headingX - S.twist + 720, 360), S.twist, B(S.twistLearned),
            orientName(), imu.magStatus, S.zeroHeel, S.zeroPitch, B(S.flipHeel));
   j += b;
-  snprintf(b, sizeof b, "\"batt\":{\"mv\":%d,\"pct\":%d,\"on_pad\":%s,\"charging\":\"%s\"},\"rec\":{\"on\":%s,\"secs\":%lu,\"lines\":%lu,\"file\":\"%s\"},",
-           (int)battMv, batteryPct(battMv), B(onPad), chargeName(),
+  snprintf(b, sizeof b, "\"batt\":{\"mv\":%d,\"pct\":%d,\"on_pad\":%s,\"charging\":\"%s\",\"since_full_s\":%ld},\"rec\":{\"on\":%s,\"secs\":%lu,\"lines\":%lu,\"file\":\"%s\"},",
+           (int)battMv, batteryPct(battMv), B(onPad), chargeName(), sinceFullKnown ? (long)awakeSinceFull : -1L,
            B(recording), (unsigned long)(recording ? (millis() - recStarted) / 1000 : 0), (unsigned long)recLines, recording ? recName.c_str() : "");
   j += b;
   snprintf(b, sizeof b, "\"store\":{\"free_kb\":%u,\"total_kb\":%u,\"files\":%d,\"pending\":%d,\"full\":%s}}",
@@ -791,6 +795,9 @@ static void everySecond() {
     else { leaveRest("lifted off the pad"); lastMotion = millis(); haveRest = false; stillSince = 0; }
   }
   battFull = onPad && battMv >= 4150;
+  if (battFull) { awakeSinceFull = 0; sinceFullKnown = 1; }
+  else if (onPad) sinceFullKnown = 0;           // topped up part-way: the count no longer means anything
+  else if (sinceFullKnown) awakeSinceFull++;
 
   // Has the puck been left alone? A tilt, a held speed (onFix), a track being recorded or the app on the line all say no.
   if (!resting) {

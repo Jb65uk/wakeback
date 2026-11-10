@@ -1,5 +1,6 @@
-// One puck, from the app: what it's doing, the everyday buttons (level, which way up, get its tracks, record,
-// sleep) and a firmware update — all over Bluetooth, so the puck only has to be awake and within reach.
+// One puck, from the app: what it's doing (kept live while the screen is open), the everyday buttons (get its
+// tracks, level, which way up, record, sleep), its settings and a firmware update — all over Bluetooth, so the
+// puck only has to be awake and within reach. The screen holds the phone's Bluetooth link while it's open.
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -25,6 +26,9 @@ class _PuckScreenState extends State<PuckScreen> {
   bool _statusLive = false; // the status card shows a live puck (false: the last thing it said before the link dropped)
   String? _step, _error;
   bool _busy = false;
+  void Function()? _release; // the Bluetooth link, held while this screen is up
+  bool _gone = false, _polling = false;
+  Timer? _live;
   PuckFirmware? _latest;
   String? _latestError;
   double? _progress; // a track pull or a firmware push, 0..1
@@ -33,16 +37,62 @@ class _PuckScreenState extends State<PuckScreen> {
   @override
   void initState() {
     super.initState();
-    PuckBle.busy = true; // the background watcher keeps off the link while this screen is up
     _checkLatest();
-    _connect();
+    _start();
+  }
+
+  /// Take the Bluetooth link (waiting for a background track pull to finish, if one is running), connect, and
+  /// then keep the numbers live.
+  Future<void> _start() async {
+    if (PuckBle.link.isHeld) {
+      _busy = true;
+      _step = 'Tracks are coming over in the background. One moment…';
+    }
+    final release = await PuckBle.link.acquire();
+    if (_gone) {
+      release();
+      return;
+    }
+    _release = release;
+    await _connect();
+    if (_gone) return;
+    _live = Timer.periodic(const Duration(seconds: 2), (_) => _tick());
+  }
+
+  /// Read the puck again, quietly, while nothing else is going on and this screen is the one in front.
+  Future<void> _tick() async {
+    final b = _ble;
+    if (_busy || _polling || !mounted || b == null || !b.isConnected || !b.authed) return;
+    final life = WidgetsBinding.instance.lifecycleState;
+    if (life != null && life != AppLifecycleState.resumed) return;
+    if (!(ModalRoute.of(context)?.isCurrent ?? true)) return; // a dialog or the guide is on top
+    _polling = true;
+    try {
+      final st = await b.status();
+      if (mounted && identical(_ble, b) && !_busy) {
+        setState(() {
+          _status = st;
+          _statusLive = true;
+        });
+      }
+    } catch (_) {
+      // a dropped link shows up through the connection listener; a one-off miss just waits for the next tick
+    } finally {
+      _polling = false;
+    }
   }
 
   @override
   void dispose() {
+    _gone = true;
+    _live?.cancel();
     _link?.cancel();
-    _ble?.disconnect();
-    PuckBle.busy = false;
+    // let go of the link only once the connection is really down, so whoever is next doesn't meet a half-closed one
+    final b = _ble, release = _release;
+    () async {
+      await b?.disconnect();
+      release?.call();
+    }();
     super.dispose();
   }
 
@@ -309,7 +359,7 @@ class _PuckScreenState extends State<PuckScreen> {
           onPressed: () => Navigator.push(context, MaterialPageRoute<void>(builder: (_) => const GuideScreen(open: GuideTopic.button))),
         ),
       ]),
-      body: ListView(padding: const EdgeInsets.fromLTRB(12, 4, 12, 24), children: [
+      body: PageList(padding: const EdgeInsets.fromLTRB(12, 4, 12, 24), children: [
         Card(
           child: Padding(
             padding: const EdgeInsets.all(14),
@@ -326,7 +376,7 @@ class _PuckScreenState extends State<PuckScreen> {
                           if (st.batteryPct >= 0) 'battery ${st.batteryPct}%${st.charging ? ', charging' : st.batteryFull ? ', full' : ''}',
                           if (st.onPad && !st.charging && !st.batteryFull) 'on the pad',
                           if (st.recording) 'recording',
-                          if (st.gpsFix >= 3) 'GPS ${st.sats} sats' else 'no GPS fix',
+                          if (st.resting) (st.onPad ? 'resting on the pad' : 'resting until it moves') else if (st.gpsFix >= 3) 'GPS ${st.sats} sats' else 'no GPS fix yet',
                           '$pending track${pending == 1 ? '' : 's'} waiting',
                         ].join(' · '),
                         style: dim,
@@ -357,6 +407,10 @@ class _PuckScreenState extends State<PuckScreen> {
                   _num(context, 'Heel', '${st.heel.toStringAsFixed(0)}°'),
                   _num(context, 'Pitch', '${st.pitch.toStringAsFixed(0)}°'),
                 ]),
+                if (_batteryLine(st) != null) ...[
+                  const SizedBox(height: 8),
+                  Hint(_batteryLine(st)!),
+                ],
               ],
               if (_step != null) ...[
                 const SizedBox(height: 12),
@@ -499,6 +553,36 @@ class _PuckScreenState extends State<PuckScreen> {
         const SectionLabel('Recording and power'),
         Card(
           child: Column(children: [
+            ListTile(
+              leading: Icon(recording ? Icons.stop_circle_outlined : Icons.fiber_manual_record, color: recording ? null : Colors.redAccent),
+              title: Text(recording ? 'Stop recording' : 'Start recording'),
+              subtitle: Text(recording ? 'Closes the track it\'s on now; only a finished track can be fetched.' : 'By hand. It starts by itself when the boat moves off anyway.'),
+              enabled: !_busy,
+              onTap: _busy ? null : () => _do(recording ? 'Stopping…' : 'Starting…', (b) => b.command(recording ? 'rec stop' : 'rec start')),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.bedtime_outlined),
+              title: const Text('Sleep'),
+              subtitle: const Text('Saves the battery. It wakes when you press its button or put it on the pad.'),
+              enabled: !_busy,
+              onTap: _busy ? null : _sleep,
+            ),
+          ]),
+        ),
+        const SectionLabel('Settings'),
+        Card(
+          clipBehavior: Clip.antiAlias,
+          child: ExpansionTile(
+            leading: const Icon(Icons.tune),
+            title: const Text('How it records and sleeps'),
+            subtitle: Text(st == null
+                ? 'Connect to the puck to see and change them'
+                : '${st.recHz} a second · ${st.autoRec ? 'records on its own' : 'button only'} · ${st.autoOff ? 'sleeps after ${st.sleepMin} min' : 'stays awake'}'),
+            shape: const Border(),
+            collapsedShape: const Border(),
+            childrenPadding: EdgeInsets.zero,
+            children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -552,23 +636,13 @@ class _PuckScreenState extends State<PuckScreen> {
                 st?.sleepMin ?? 30,
                 (m) => _do('Setting it…', (b) => b.settings(sleepMin: m).then((_) => {'msg': 'Sleeps after $m minutes still.'})),
               ),
-            const Divider(height: 1),
-            ListTile(
-              leading: Icon(recording ? Icons.stop_circle_outlined : Icons.fiber_manual_record, color: recording ? null : Colors.redAccent),
-              title: Text(recording ? 'Stop recording' : 'Start recording'),
-              subtitle: Text(recording ? 'Closes the track it\'s on now; only a finished track can be fetched.' : 'By hand. It starts by itself when the boat moves off anyway.'),
-              enabled: !_busy,
-              onTap: _busy ? null : () => _do(recording ? 'Stopping…' : 'Starting…', (b) => b.command(recording ? 'rec stop' : 'rec start')),
-            ),
-            const Divider(height: 1),
-            ListTile(
-              leading: const Icon(Icons.bedtime_outlined),
-              title: const Text('Sleep'),
-              subtitle: const Text('Saves the battery. It wakes when you press its button or put it on the pad.'),
-              enabled: !_busy,
-              onTap: _busy ? null : _sleep,
-            ),
-          ]),
+              const Padding(
+                padding: EdgeInsets.fromLTRB(16, 4, 16, 12),
+                child: Hint('Left alone for three minutes it rests by itself: GPS off until the boat moves, which uses a good deal less power. So a longer '
+                    '"Sleep after" keeps it ready through lunch without flattening it. Once asleep, only its button or the pad wakes it.'),
+              ),
+            ],
+          ),
         ),
         const SectionLabel('Firmware'),
         Card(
@@ -577,11 +651,13 @@ class _PuckScreenState extends State<PuckScreen> {
               leading: Icon(canUpdate ? Icons.system_update : Icons.verified_outlined, color: canUpdate ? t.colorScheme.primary : null),
               title: Text(_latest == null
                   ? (_latestError ?? 'Checking for puck firmware…')
-                  : canUpdate
-                      ? 'Update available: ${_latest!.version}'
-                      : 'Up to date (${_latest!.version} is the latest)'),
+                  : !canUpdate
+                      ? 'Up to date (${_latest!.version} is the latest)'
+                      : fw.startsWith('dev')
+                          ? 'Release ${_latest!.version} (this puck runs a build from your PC)'
+                          : 'Update available: ${_latest!.version}'),
               subtitle: _latest != null && _latest!.notes.isNotEmpty ? Text(_latest!.notes, maxLines: 4, overflow: TextOverflow.ellipsis) : null,
-              trailing: canUpdate ? FilledButton(onPressed: _busy ? null : _update, child: const Text('Update')) : null,
+              trailing: canUpdate ? FilledButton(onPressed: _busy ? null : _update, child: Text(fw.startsWith('dev') ? 'Install' : 'Update')) : null,
             ),
             const Divider(height: 1),
             const Padding(
@@ -659,6 +735,16 @@ class _PuckScreenState extends State<PuckScreen> {
         Hint(hint),
       ]),
     );
+  }
+
+  /// What the battery has actually done since it last sat full on the pad, and what that works out to per charge.
+  /// Null until there's enough to go on (half an hour awake and a tenth of the battery used).
+  static String? _batteryLine(PuckStatus st) {
+    final used = 100 - st.batteryPct;
+    if (st.sinceFullS < 1800 || st.batteryPct < 0 || used < 10) return null;
+    final h = st.sinceFullS ~/ 3600, m = (st.sinceFullS % 3600) ~/ 60;
+    final perCharge = (st.sinceFullS / 3600 * 100 / used).round();
+    return 'Since its last full charge: ${h > 0 ? '$h h ' : ''}$m min awake, $used% used. About $perCharge hours a charge at this rate.';
   }
 
   static String _rateHint(int hz) => switch (hz) {

@@ -109,8 +109,10 @@ class _PuckSetupScreenState extends State<PuckSetupScreen> {
       _keyFailed = false;
     });
     PuckBle? ble;
-    PuckBle.busy = true;
+    if (PuckBle.link.isHeld) _say('Tracks are coming over in the background: waiting for those to finish…');
+    final release = await PuckBle.link.acquire();
     try {
+      if (!mounted) return;
       // 1. reach the puck
       ble = await _overBluetooth(num);
       if (!mounted) return;
@@ -191,7 +193,7 @@ class _PuckSetupScreenState extends State<PuckSetupScreen> {
       await ble?.disconnect();
       if (mounted) setState(() => _error = friendly(e));
     } finally {
-      PuckBle.busy = false;
+      release();
     }
   }
 
@@ -224,7 +226,7 @@ class _PuckSetupScreenState extends State<PuckSetupScreen> {
         _say('Heard puck ${heard.keys.first} (it becomes puck $num).');
       } else if (heard.length > 1) {
         _say('Heard ${heard.length} pucks. Which one is this?');
-        target = await pickPuckNearby(context, title: 'Which puck is this?');
+        target = await pickPuckNearby(context, title: 'Which puck is this?', holdsLink: true);
         if (!mounted) return null;
         if (target == null) throw const PuckException('No puck picked. Tap Try again and choose the puck to set up.');
       } else {
@@ -254,7 +256,7 @@ class _PuckSetupScreenState extends State<PuckSetupScreen> {
           onPressed: () => Navigator.push(context, MaterialPageRoute<void>(builder: (_) => const GuideScreen(open: GuideTopic.puck))),
         ),
       ]),
-      body: ListView(
+      body: PageList(
         padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
         children: switch (_stage) {
           _Stage.form => _form(context),

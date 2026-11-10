@@ -449,7 +449,7 @@ class _SessionListState extends State<_SessionList> with WidgetsBindingObserver 
     final head = (records.isEmpty ? 0 : 1) + (update == null ? 0 : 1);
     return RefreshIndicator(
       onRefresh: _pulled,
-      child: ListView.builder(
+      child: PageList.builder(
         padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
         itemCount: list.length + 1 + head,
         itemBuilder: (context, idx) {
@@ -691,7 +691,7 @@ class _StatsTabState extends State<_StatsTab> {
     final st = _st;
     return RefreshIndicator(
       onRefresh: _load,
-      child: ListView(padding: const EdgeInsets.fromLTRB(12, 12, 12, 24), children: [
+      child: PageList(padding: const EdgeInsets.fromLTRB(12, 12, 12, 24), children: [
         Center(child: _PeriodPicker(_period, _setPeriod)),
         // more than one boat sailed: see them together or one at a time
         if (_boats.length > 1 || _boat.isNotEmpty) ...[
@@ -1085,7 +1085,7 @@ class _LeagueTabState extends State<_LeagueTab> {
     }
     return RefreshIndicator(
       onRefresh: _load,
-      child: ListView(padding: const EdgeInsets.fromLTRB(12, 12, 12, 24), children: [
+      child: PageList(padding: const EdgeInsets.fromLTRB(12, 12, 12, 24), children: [
         Center(
           child: _PeriodPicker(_period, (p) {
             setState(() {

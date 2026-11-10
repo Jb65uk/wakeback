@@ -133,7 +133,7 @@ static void bleCommand(const String &line) {
   const int sp = cmd.indexOf(' ');
   const String op = sp < 0 ? cmd : cmd.substring(0, sp);
   String arg = sp < 0 ? "" : cmd.substring(sp + 1); arg.trim();
-  bleNote(op.c_str());
+  if (op != "status") bleNote(op.c_str());          // the app's screen asks for status every couple of seconds: not worth a line each
 
   if (op == "hello") {                              // who are you, and here's a nonce to prove you hold my key
     esp_fill_random(bleNonce, sizeof bleNonce);

@@ -12,10 +12,15 @@ import 'puck_setup_screen.dart';
 class PucksCard extends StatelessWidget {
   const PucksCard({super.key});
 
+  // The You page holds this as a const child, so its own rebuilds pass it by: it listens for itself, to the app
+  // (a puck set up or forgotten) and to the watcher (tracks coming over).
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => ListenableBuilder(listenable: Listenable.merge([app, app.watcher]), builder: (context, _) => _card(context));
+
+  Widget _card(BuildContext context) {
     final t = Theme.of(context);
     final pucks = app.myPucks;
+    final pulling = app.watcher.pulling;
     return Card(
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         ListTile(
@@ -26,6 +31,7 @@ class PucksCard extends StatelessWidget {
               : app.watcher.lastEvent ?? 'Tracks come over by themselves whenever a puck is awake near the phone with WakeBack open.'),
           isThreeLine: true,
         ),
+        if (pulling != null) LinearProgressIndicator(value: app.watcher.progress > 0 ? app.watcher.progress : null),
         for (final p in pucks)
           ListTile(
             dense: true,
@@ -61,7 +67,7 @@ class PucksCard extends StatelessWidget {
             ),
             if (pucks.isNotEmpty)
               OutlinedButton.icon(
-                onPressed: () => app.watcher.tick(),
+                onPressed: pulling != null ? null : () => app.watcher.tick(byHand: true),
                 icon: const Icon(Icons.download_outlined, size: 18),
                 label: const Text('Check for tracks now'),
               ),

@@ -112,7 +112,7 @@ class _RecordScreenState extends State<RecordScreen> {
       listenable: Listenable.merge([recorder, app]),
       builder: (context, _) {
         final r = recorder, l = r.log, st = r.state;
-        return ListView(
+        return PageList(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
           children: [
             Row(children: [
