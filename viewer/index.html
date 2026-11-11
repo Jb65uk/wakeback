@@ -300,6 +300,7 @@ body.big #trailOnlyWrap{display:none}
   body.big #cards .card .top{grid-column:1;min-width:0}
   body.big #cards .card .csub{grid-column:1;font-size:12px;margin-top:1px}
   body.big #cards .card .vals{grid-column:2;grid-row:1/span 2;display:flex;gap:14px;margin-top:0}
+  body.big #cards .card .vals>div{min-width:56px}   /* so a number gaining a digit doesn't shove its neighbours along */
   body.big #cards .card .vals>div:nth-child(n+4){display:none}
   body.big #cards .card.open .vals{grid-column:1/-1;grid-row:auto;flex-wrap:wrap;gap:8px 16px;margin-top:6px}
   body.big #cards .card.open .vals>div:nth-child(n+4){display:block}
@@ -1108,14 +1109,26 @@ function fmtClock(t) {
 const FIELDS = [['sog', 'Speed'], ['vmg', 'VMG'], ['twa', 'Wind angle'], ['heel', 'Heel'], ['pitch', 'Pitch'], ['hdg', 'Heading'], ['max', 'Max speed'], ['avg', 'Avg speed'], ['up', 'Upwind avg'], ['down', 'Downwind avg'], ['dist', 'Distance'], ['tacks', 'Tacks'], ['gybes', 'Gybes'], ['loss', 'Avg tack loss'], ['gloss', 'Avg gybe loss'], ['start', 'Start'], ['finish', 'Finish'], ['mloss', 'Avg mark loss'], ['tack', 'Tack']];
 let fields = new Set(['sog', 'heel', 'max']);
 try { const f = JSON.parse(localStorage.getItem('wakeback-fields')); if (Array.isArray(f) && f.length) fields = new Set(f); } catch {}
+// While it plays, the live numbers (speed, VMG, heel, pitch) are averaged over the last couple of seconds of sailing
+// (longer the faster it's replayed) and redrawn three times a second: raw 5 Hz readings rewritten on every frame, at
+// 10x, are a blur nobody can read. Paused or dragging the slider they're the exact reading, at once.
+let valsAt = 0;
+function steady(b, arr, i) {
+  if (!playing || i == null) return arr[i];
+  const win = Math.min(30000, Math.max(2000, 500 * +$('#rate').value));
+  const i0 = Math.max(b.i0, idxAt(b, b.t[i] - win));
+  let sum = 0, n = 0;
+  for (let k = i0; k <= i; k++) { sum += arr[k]; n++; }
+  return n ? sum / n : arr[i];
+}
 function fmtField(b, f, i) {
   const deg = (v, pos, neg) => Math.abs(v).toFixed(0) + '°<small>' + (Math.abs(v) < 0.5 ? '' : v > 0 ? pos : neg) + '</small>';
   switch (f) {
-    case 'sog': return i == null ? '–' : b.sog[i].toFixed(1) + '<small>kn</small>';
-    case 'heel': return !b.heel ? '<small>no data</small>' : i == null ? '–' : deg(b.heel[i], 'stbd', 'port');
-    case 'pitch': return !b.pitch ? '<small>no data</small>' : i == null ? '–' : deg(b.pitch[i], 'bow up', 'bow dn');
+    case 'sog': return i == null ? '–' : steady(b, b.sog, i).toFixed(1) + '<small>kn</small>';
+    case 'heel': return !b.heel ? '<small>no data</small>' : i == null ? '–' : deg(steady(b, b.heel, i), 'stbd', 'port');
+    case 'pitch': return !b.pitch ? '<small>no data</small>' : i == null ? '–' : deg(steady(b, b.pitch, i), 'bow up', 'bow dn');
     case 'hdg': return i == null ? '–' : Math.round(b.hdg[i]).toString().padStart(3, '0') + '°';
-    case 'vmg': return !b.vmg ? '<small>set wind</small>' : i == null ? '–' : b.vmg[i].toFixed(1) + '<small>kn</small>';
+    case 'vmg': return !b.vmg ? '<small>set wind</small>' : i == null ? '–' : steady(b, b.vmg, i).toFixed(1) + '<small>kn</small>';
     case 'twa': return !b.twa ? '<small>set wind</small>' : i == null ? '–' : `<span style="color:${SIDE_COL[tackOf(b.twa[i])]}">${Math.abs(b.twa[i]).toFixed(0)}°</span><small>${SIDE_LBL[tackOf(b.twa[i])].toLowerCase()}</small>`;
     case 'tack': return !b.twa ? '<small>set wind</small>' : i == null ? '–' : `<span style="color:${SIDE_COL[tackOf(b.twa[i])]}">${SIDE_LBL[tackOf(b.twa[i])]}</span>`;
     case 'start': return !b.sf || !b.sf.start ? '<small>no start line</small>' : startText(b.sf.start);
@@ -1132,17 +1145,21 @@ function fmtField(b, f, i) {
     case 'dist': return b.stats.dist.toFixed(2) + '<small>nm</small>';
   }
 }
+function put(el, html) { if (el && el._was !== html) { el.innerHTML = html; el._was = html; } }   // only touch the page when the text changes
 function setCardVals(b, i) {
-  for (const f of fields) { const el = document.querySelector(`[data-cv="${b.id}:${f}"]`); if (el) el.innerHTML = fmtField(b, f, i); }
+  for (const f of fields) put(document.querySelector(`[data-cv="${b.id}:${f}"]`), fmtField(b, f, i));
 }
 function render() {
+  // the numbers: every time when paused, three times a second while it plays (the boats and the chart move every frame)
+  const now = performance.now(), nums = !playing || now - valsAt >= 330;
+  if (nums) valsAt = now;
   for (const b of boats) {
-    const live = document.querySelector(`[data-live="${b.id}"]`);
-    if (!b.visible || !b.marker || !b.inRace) { if (live) live.innerHTML = '–'; setCardVals(b, null); continue; }
+    const live = nums ? document.querySelector(`[data-live="${b.id}"]`) : null;
+    if (!b.visible || !b.marker || !b.inRace) { if (nums) { put(live, '–'); setCardVals(b, null); } continue; }
     const bt = T - shift(b);
     if (bt < b.wStart) {
       b.marker.setOpacity(0); b.trail.setLatLngs([]);
-      if (live) live.innerHTML = '–'; setCardVals(b, null); continue;
+      if (nums) { put(live, '–'); setCardVals(b, null); } continue;
     }
     b.marker.setOpacity((bt > b.wEnd ? 0.55 : 1) * (focusId && focusId !== b.id ? 0.35 : 1));
     const c = Math.min(bt, b.wEnd);
@@ -1154,8 +1171,7 @@ function render() {
     const i0 = Math.max(b.i0, idxAt(b, c - TRAIL_MS)), st = Math.max(1, Math.ceil((i - i0) / 300));
     const tr = []; for (let k = i0; k <= i; k += st) tr.push([b.lat[k], b.lon[k]]); tr.push(pos);
     b.trail.setLatLngs(tr);
-    if (live) live.innerHTML = bt > b.wEnd ? 'fin' : b.sog[i].toFixed(1) + '<small>kn</small>';
-    setCardVals(b, i);
+    if (nums) { put(live, bt > b.wEnd ? 'fin' : steady(b, b.sog, i).toFixed(1) + '<small>kn</small>'); setCardVals(b, i); }
   }
   $('#clock').textContent = fmtClock(T);
   if (meta.weather) windCtl.update();
@@ -1173,6 +1189,7 @@ function loop(now) {
 function setPlaying(p) {
   playing = p; $('#play').textContent = p ? 'Pause' : 'Play';
   if (p) { if (T >= tMax) T = tMin; lastFrame = 0; requestAnimationFrame(loop); }
+  else render();   // paused: the exact readings for this moment
 }
 
 // ---------- speed chart ----------
